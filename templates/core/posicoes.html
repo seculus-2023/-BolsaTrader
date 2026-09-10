@@ -127,6 +127,7 @@
                 <th>Variação desde a reserva</th>
                 <th>Meta lucro / perda</th>
                 <th>Tendência</th>
+                <th>Ação</th>
             </tr>
         </thead>
         <tbody>
@@ -149,6 +150,17 @@
                     {% if p.meta_perda_pct %}{{ p.meta_perda_pct }}%{% else %}padrão{% endif %}
                 </td>
                 <td>{% if p.tendencia %}<span class="badge-tendencia badge-{{ p.tendencia|lower|slugify }}">{{ p.tendencia }}</span>{% else %}&mdash;{% endif %}</td>
+                <td>
+                    <div style="display: flex; gap: .4rem;">
+                        {% for operacao_id in p.reserva_operacao_ids %}
+                        <form method="post" action="{% url 'core:operacao_excluir' operacao_id %}" onsubmit="return confirm('Excluir esta reserva de {{ p.ativo.ticker }}? Essa ação não pode ser desfeita.');">
+                            {% csrf_token %}
+                            <input type="hidden" name="next" value="{% url 'core:posicoes' %}">
+                            <button type="submit" class="btn-futurista btn-secundario btn-icone" style="color: var(--neon-red); border-color: rgba(255, 56, 96, .4);" title="Excluir" aria-label="Excluir">🗑️</button>
+                        </form>
+                        {% endfor %}
+                    </div>
+                </td>
             </tr>
             {% endfor %}
         </tbody>
@@ -173,6 +185,7 @@
                 <th>Variação desde a reserva</th>
                 <th>Meta lucro / perda</th>
                 <th>Tendência</th>
+                <th>Ação</th>
             </tr>
         </thead>
         <tbody>
@@ -196,6 +209,17 @@
                     {% if p.meta_perda_pct %}{{ p.meta_perda_pct }}%{% else %}padrão{% endif %}
                 </td>
                 <td>{% if p.tendencia %}<span class="badge-tendencia badge-{{ p.tendencia|lower|slugify }}">{{ p.tendencia }}</span>{% else %}&mdash;{% endif %}</td>
+                <td>
+                    <div style="display: flex; gap: .4rem;">
+                        {% for operacao_id in p.reserva_operacao_ids %}
+                        <form method="post" action="{% url 'core:operacao_excluir' operacao_id %}" onsubmit="return confirm('Excluir esta reserva de {{ p.ativo.ticker }}? Essa ação não pode ser desfeita.');">
+                            {% csrf_token %}
+                            <input type="hidden" name="next" value="{% url 'core:posicoes' %}">
+                            <button type="submit" class="btn-futurista btn-secundario btn-icone" style="color: var(--neon-red); border-color: rgba(255, 56, 96, .4);" title="Excluir" aria-label="Excluir">🗑️</button>
+                        </form>
+                        {% endfor %}
+                    </div>
+                </td>
             </tr>
             {% endfor %}
         </tbody>

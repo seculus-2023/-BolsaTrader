@@ -259,6 +259,7 @@ class Posicao:
     data_abertura: date | None = None
     quantidade_reservada: int = 0
     reserva_do_robo: bool = False
+    reserva_operacao_ids: list[int] = field(default_factory=list)
 
     @property
     def situacao(self) -> str:
@@ -356,6 +357,7 @@ def calcular_posicoes(usuario) -> list[Posicao]:
         "quantidade_reservada": 0,
         "custo_reservado": Decimal("0"),
         "reserva_do_robo": False,
+        "reserva_operacao_ids": [],
     })
 
     for op in operacoes:
@@ -372,6 +374,7 @@ def calcular_posicoes(usuario) -> list[Posicao]:
         else:  # RESERVAR: intenção de compra futura (no máximo 1 unidade), não altera a posição real
             item["quantidade_reservada"] += op.quantidade
             item["custo_reservado"] += op.valor_total
+            item["reserva_operacao_ids"].append(op.id)
             if "robô consultor" in (op.observacao or "").lower():
                 item["reserva_do_robo"] = True
 
@@ -412,6 +415,7 @@ def calcular_posicoes(usuario) -> list[Posicao]:
             data_abertura=item["data_abertura"],
             quantidade_reservada=item["quantidade_reservada"],
             reserva_do_robo=item["reserva_do_robo"],
+            reserva_operacao_ids=item["reserva_operacao_ids"],
         )
 
         ultima_cotacao = ativo.ultima_cotacao()

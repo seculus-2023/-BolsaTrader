@@ -406,13 +406,18 @@ def operacao_editar_reserva(request, operacao_id):
 @login_required
 @require_POST
 def operacao_excluir(request, operacao_id):
-    """Exclui definitivamente uma operação (compra ou reserva) do usuário logado."""
+    """
+    Exclui definitivamente uma operação (compra ou reserva) do usuário
+    logado. Volta para "Minhas Operações" por padrão, ou para a página de
+    origem se o formulário mandar um campo oculto "next" (ex: excluir uma
+    reserva direto da tela Posições em Carteira).
+    """
     operacao = get_object_or_404(Operacao, id=operacao_id, usuario=request.user)
     ticker = operacao.ativo.ticker
     tipo_label = operacao.get_tipo_display()
     operacao.delete()
     messages.success(request, f"{tipo_label} de {ticker} excluída com sucesso.")
-    return redirect("core:operacao_lista")
+    return redirect(request.POST.get("next") or "core:operacao_lista")
 
 
 @login_required

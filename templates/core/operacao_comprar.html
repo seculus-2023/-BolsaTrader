@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block titulo %}Comprar {{ operacao.ativo.ticker }} - BolsaTrader{% endblock %}
+{% block conteudo %}
+<h1>Efetivar compra de {{ operacao.ativo.ticker }}</h1>
+
+<div class="card-glass" style="max-width: 640px;">
+    <h3 style="margin-top: 0;">Reserva</h3>
+    <p style="color: var(--text-dim);">
+        Preço pretendido na reserva: R$ {{ operacao.preco_unitario }}, feita em {{ operacao.data_operacao|date:"d/m/Y" }}.
+        Ajuste abaixo a quantidade, o preço e a data da compra real - eles podem ser diferentes do planejado na reserva.
+    </p>
+
+    <form method="post" class="form-futurista">
+        {% csrf_token %}
+        {% for field in form %}
+            <label for="{{ field.id_for_label }}">{{ field.label }}</label>
+            {{ field }}
+            {{ field.errors }}
+        {% endfor %}
+        <button type="submit" class="btn-futurista" style="margin-top: 1.6rem;">Confirmar compra</button>
+        <a href="{% url 'core:operacao_lista' %}" class="btn-futurista btn-secundario">Cancelar</a>
+    </form>
+</div>
+{% endblock %}

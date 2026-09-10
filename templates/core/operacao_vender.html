@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block titulo %}{% if operacao.saldo == 0 %}Editar venda{% else %}Vender{% endif %} {{ operacao.ativo.ticker }} - BolsaTrader{% endblock %}
+{% block conteudo %}
+<h1>{% if operacao.saldo == 0 %}Editar venda de{% else %}Vender{% endif %} {{ operacao.ativo.ticker }}</h1>
+
+<div class="card-glass" style="max-width: 640px;">
+    <h3 style="margin-top: 0;">Lote comprado</h3>
+    <p style="color: var(--text-dim);">
+        {{ operacao.quantidade }} unidade(s) a R$ {{ operacao.preco_unitario }}, em {{ operacao.data_operacao|date:"d/m/Y" }}.
+        {% if operacao.quantidade_vendida %}
+            Já vendido: {{ operacao.quantidade_vendida }} unidade(s).
+        {% endif %}
+        {% if operacao.saldo == 0 %}
+            Lote totalmente vendido - ajuste os dados abaixo se precisar corrigir a quantidade, o preço ou a data da venda.
+        {% else %}
+            Saldo disponível para vender: <strong>{{ operacao.saldo }}</strong>.
+        {% endif %}
+    </p>
+
+    <form method="post" class="form-futurista">
+        {% csrf_token %}
+        {% for field in form %}
+            <label for="{{ field.id_for_label }}">{{ field.label }}</label>
+            {{ field }}
+            {{ field.errors }}
+        {% endfor %}
+        <button type="submit" class="btn-futurista" style="margin-top: 1.6rem;">{% if operacao.saldo == 0 %}Salvar alterações{% else %}Salvar venda{% endif %}</button>
+        <a href="{% url 'core:operacao_lista' %}" class="btn-futurista btn-secundario">Cancelar</a>
+    </form>
+</div>
+{% endblock %}

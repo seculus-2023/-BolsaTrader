@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block titulo %}Entrar - BolsaTrader{% endblock %}
+{% block conteudo %}
+<div class="tela-auth">
+    <div class="auth-box card-glass">
+        <div class="logo">⚡ BOLSATRADER</div>
+        <p class="subtitulo">Acompanhe suas compras e vendas de ações da B3</p>
+
+        {% if messages %}
+        <div class="mensagens">
+            {% for message in messages %}
+            <div class="mensagem {{ message.tags }}">{{ message }}</div>
+            {% endfor %}
+        </div>
+        {% endif %}
+
+        <form method="post" class="form-futurista">
+            {% csrf_token %}
+            <label for="id_username">Usuário</label>
+            <input type="text" name="username" id="id_username" required autofocus>
+            <label for="id_password">Senha</label>
+            <input type="password" name="password" id="id_password" required>
+            <button type="submit" class="btn-futurista" style="margin-top: 1.4rem; width: 100%;">Entrar</button>
+        </form>
+
+        <a class="link-secundario" href="{% url 'accounts:cadastro' %}">Ainda não tem conta? Cadastre-se</a>
+    </div>
+</div>
+{% endblock %}

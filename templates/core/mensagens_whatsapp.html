@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block titulo %}Mensagens do WhatsApp - BolsaTrader{% endblock %}
+{% block conteudo %}
+<h1>Mensagens do WhatsApp</h1>
+<p style="color: var(--text-dim);">
+    Mensagens recebidas pelo número de contato do BolsaTrader no WhatsApp.
+</p>
+
+<div class="card-glass">
+    {% if mensagens %}
+    <div class="tabela-scroll">
+    <table class="tabela-futurista">
+        <thead>
+            <tr><th>Remetente</th><th>Mensagem</th><th>Recebido em</th></tr>
+        </thead>
+        <tbody>
+            {% for m in mensagens %}
+            <tr>
+                <td>{{ m.remetente }}</td>
+                <td style="white-space: pre-wrap;">{{ m.texto }}</td>
+                <td>{{ m.recebido_em|date:"d/m/Y H:i" }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    </div>
+    {% else %}
+    <p style="color: var(--text-dim);">Nenhuma mensagem recebida ainda.</p>
+    {% endif %}
+</div>
+{% endblock %}

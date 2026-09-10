@@ -1,0 +1,145 @@
+{% extends "base.html" %}
+{% load static l10n %}
+{% block titulo %}Histórico e Gráficos - BolsaTrader{% endblock %}
+{% block conteudo %}
+<h1>Histórico e Gráficos</h1>
+<p style="color: var(--text-dim);">
+    Histórico de cotações diárias e gráfico de acompanhamento de cada ativo que você já comprou ou vendeu.
+</p>
+<a href="{% url 'core:atualizar_cotacoes' %}" class="btn-futurista btn-atualizar-cotacoes" data-overlay-texto="Atualizando cotações...">Atualizar cotações agora</a>
+<a href="{% url 'core:analise_mercado' %}" class="btn-futurista btn-secundario">Ver análise de mercado</a>
+{% if ultima_atualizacao_cotacoes %}
+<p class="badge-atualizacao">⏱ Última atualização das cotações: {{ ultima_atualizacao_cotacoes|date:"d/m/Y H:i" }}</p>
+{% endif %}
+
+{% if tickers_disponiveis %}
+<div class="card-glass" style="margin-top: 1.5rem;">
+    <form method="get" class="form-futurista" style="display: flex; gap: .8rem; align-items: flex-end; flex-wrap: wrap;">
+        <div>
+            <label for="id_ativo" style="margin-top: 0;">Ativo</label>
+            <select id="id_ativo" name="ativo" class="form-control-futurista">
+                <option value="">Todos os ativos</option>
+                {% for ticker in tickers_disponiveis %}
+                <option value="{{ ticker }}" {% if ticker == ativo_selecionado %}selected{% endif %}>{{ ticker }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <button type="submit" class="btn-futurista">Filtrar</button>
+        {% if ativo_selecionado %}
+        <a href="{% url 'core:historico_graficos' %}" class="btn-futurista btn-secundario">Ver todos</a>
+        {% endif %}
+    </form>
+</div>
+{% endif %}
+
+<h2 style="margin-top: 2rem;">Compradas ({{ itens|length }})</h2>
+{% for item in itens %}
+<div class="card-glass" style="margin-top: 1.5rem;">
+    <h3 style="margin-top: 0;">{{ item.ativo.ticker }} {% if item.ativo.nome %}<small style="color: var(--text-dim); font-family: 'Rajdhani', sans-serif;">— {{ item.ativo.nome }}</small>{% endif %}</h3>
+
+    {% if item.grafico %}
+    <div class="grafico-wrap">
+        {% localize off %}
+        <svg viewBox="0 0 {{ item.grafico.largura }} {{ item.grafico.altura }}"
+             class="grafico-cotacoes" preserveAspectRatio="none"
+             data-pontos-id="{{ item.grafico.id_svg }}"
+             role="img" aria-label="Evolução do preço de fechamento de {{ item.ativo.ticker }} nos últimos {{ item.historico|length }} pregões">
+            <line x1="{{ item.grafico.x_inicio }}" y1="{{ item.grafico.y_topo }}"
+                  x2="{{ item.grafico.x_fim }}" y2="{{ item.grafico.y_topo }}" class="grafico-grid" />
+            <line x1="{{ item.grafico.x_inicio }}" y1="{{ item.grafico.y_base }}"
+                  x2="{{ item.grafico.x_fim }}" y2="{{ item.grafico.y_base }}" class="grafico-grid" />
+            <path d="{{ item.grafico.path_d }}" fill="none" class="grafico-linha {% if item.grafico.tendencia_alta %}linha-alta{% else %}linha-baixa{% endif %}" />
+            {% for p in item.grafico.pontos %}
+                {% if forloop.first or forloop.last %}
+                <circle cx="{{ p.x }}" cy="{{ p.y }}" r="4" class="grafico-marcador {% if item.grafico.tendencia_alta %}linha-alta{% else %}linha-baixa{% endif %}" />
+                {% endif %}
+            {% endfor %}
+        </svg>
+        {% endlocalize %}
+        {{ item.grafico.pontos|json_script:item.grafico.id_svg }}
+        <div class="grafico-eixos">
+            <span>{{ item.grafico.faixa_min_label }}</span>
+            <span>{{ item.grafico.faixa_max_label }}</span>
+        </div>
+    </div>
+    {% endif %}
+
+    {% if item.historico %}
+    <div class="tabela-scroll" style="margin-top: 1.2rem;">
+    <table class="tabela-futurista">
+        <thead>
+            <tr><th>Data</th><th>Fechamento</th><th>Variação no dia</th></tr>
+        </thead>
+        <tbody>
+            {% for c in item.historico %}
+            <tr>
+                <td>{{ c.data|date:"d/m/Y" }}</td>
+                <td>R$ {{ c.preco_fechamento }}</td>
+                <td class="{% if c.variacao_dia_pct > 0 %}valor-positivo{% elif c.variacao_dia_pct < 0 %}valor-negativo{% else %}valor-neutro{% endif %}">
+                    {% if c.variacao_dia_pct is not None %}{{ c.variacao_dia_pct }}%{% else %}&mdash;{% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    </div>
+    {% else %}
+    <p style="color: var(--text-dim);">Ainda não há histórico de cotações para este ativo. Clique em "Atualizar cotações agora".</p>
+    {% endif %}
+</div>
+{% empty %}
+<div class="card-glass" style="margin-top: 1.5rem;"><p style="color: var(--text-dim);">Você ainda não possui compras para acompanhar.</p></div>
+{% endfor %}
+
+<h2 style="margin-top: 2rem;">Reservadas ({{ itens_reservadas|length }})</h2>
+{% for item in itens_reservadas %}
+<div class="card-glass" style="margin-top: 1.5rem;">
+    <h3 style="margin-top: 0;">
+        {{ item.ativo.ticker }} {% if item.ativo.nome %}<small style="color: var(--text-dim); font-family: 'Rajdhani', sans-serif;">— {{ item.ativo.nome }}</small>{% endif %}
+        {% if "robô consultor" in item.operacao.observacao|lower %}
+            <span class="badge-robo" title="{{ item.operacao.observacao }}">🤖 Robô</span>
+        {% endif %}
+    </h3>
+    <p style="color: var(--text-dim); margin-top: -.4rem;">
+        Reservado em {{ item.operacao.data_operacao|date:"d/m/Y" }} a R$ {{ item.operacao.preco_unitario }}
+        {% if item.operacao.variacao_pct_reserva is not None %}
+        &mdash; variação desde a reserva:
+        <span class="{% if item.operacao.variacao_pct_reserva > 0 %}valor-positivo{% elif item.operacao.variacao_pct_reserva < 0 %}valor-negativo{% else %}valor-neutro{% endif %}">{{ item.operacao.variacao_pct_reserva }}%</span>
+        {% endif %}
+    </p>
+
+    {% if item.grafico %}
+    <div class="grafico-wrap">
+        {% localize off %}
+        <svg viewBox="0 0 {{ item.grafico.largura }} {{ item.grafico.altura }}"
+             class="grafico-cotacoes" preserveAspectRatio="none"
+             data-pontos-id="{{ item.grafico.id_svg }}"
+             role="img" aria-label="Evolução do preço de fechamento de {{ item.ativo.ticker }} desde a reserva em {{ item.operacao.data_operacao|date:'d/m/Y' }}">
+            <line x1="{{ item.grafico.x_inicio }}" y1="{{ item.grafico.y_topo }}"
+                  x2="{{ item.grafico.x_fim }}" y2="{{ item.grafico.y_topo }}" class="grafico-grid" />
+            <line x1="{{ item.grafico.x_inicio }}" y1="{{ item.grafico.y_base }}"
+                  x2="{{ item.grafico.x_fim }}" y2="{{ item.grafico.y_base }}" class="grafico-grid" />
+            <path d="{{ item.grafico.path_d }}" fill="none" class="grafico-linha {% if item.grafico.tendencia_alta %}linha-alta{% else %}linha-baixa{% endif %}" />
+            {% for p in item.grafico.pontos %}
+                {% if forloop.first or forloop.last %}
+                <circle cx="{{ p.x }}" cy="{{ p.y }}" r="4" class="grafico-marcador {% if item.grafico.tendencia_alta %}linha-alta{% else %}linha-baixa{% endif %}" />
+                {% endif %}
+            {% endfor %}
+        </svg>
+        {% endlocalize %}
+        {{ item.grafico.pontos|json_script:item.grafico.id_svg }}
+        <div class="grafico-eixos">
+            <span>{{ item.grafico.faixa_min_label }}</span>
+            <span>{{ item.grafico.faixa_max_label }}</span>
+        </div>
+    </div>
+    {% else %}
+    <p style="color: var(--text-dim);">Ainda não há cotações suficientes desde a reserva para montar o gráfico. Clique em "Atualizar cotações agora".</p>
+    {% endif %}
+</div>
+{% empty %}
+<div class="card-glass" style="margin-top: 1.5rem;"><p style="color: var(--text-dim);">Nenhuma reserva no momento.</p></div>
+{% endfor %}
+
+<script src="{% static 'js/grafico.js' %}" defer></script>
+{% endblock %}

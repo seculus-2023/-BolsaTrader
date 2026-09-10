@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% block titulo %}Menu - BolsaTrader{% endblock %}
+{% block conteudo %}
+<h1>Menu Principal</h1>
+<p style="color: var(--text-dim); margin-bottom: 1.8rem;">Escolha uma área do sistema</p>
+
+<div class="menu-grid">
+    <a class="menu-card" href="{% url 'core:dashboard' %}">
+        <div class="icone">📊</div>
+        <h3>Painel</h3>
+        <p>Resumo geral da carteira, lucro/perda consolidado e alertas recentes.</p>
+    </a>
+    <a class="menu-card" href="{% url 'core:operacao_nova' %}">
+        <div class="icone">💱</div>
+        <h3>Compra / Venda</h3>
+        <p>Registrar uma nova operação de compra ou venda de ações.</p>
+    </a>
+    <a class="menu-card" href="{% url 'core:operacao_lista' %}">
+        <div class="icone">🧾</div>
+        <h3>Minhas Operações</h3>
+        <p>Histórico completo de compras e vendas realizadas.</p>
+    </a>
+    <a class="menu-card" href="{% url 'core:posicoes' %}">
+        <div class="icone">📈</div>
+        <h3>Posições em Carteira</h3>
+        <p>Ações compradas, preço médio e percentual de lucro ou perda.</p>
+    </a>
+    <a class="menu-card" href="{% url 'core:analise_mercado' %}">
+        <div class="icone">🛰️</div>
+        <h3>Análise de Mercado</h3>
+        <p>Sinais de possível alta ou baixa dos ativos, calculados a partir da média móvel do histórico de cotações.</p>
+    </a>
+    <a class="menu-card" href="{% url 'core:historico_graficos' %}">
+        <div class="icone">📉</div>
+        <h3>Histórico e Gráfico</h3>
+        <p>Histórico de cotações diárias e gráfico de acompanhamento de cada ativo comprado ou vendido.</p>
+    </a>
+    <a class="menu-card" href="{% url 'core:alertas' %}">
+        <div class="icone">🔔</div>
+        <h3>Avisos e Lembretes</h3>
+        <p>Notificações de metas de lucro/perda atingidas e tendências.</p>
+    </a>
+    <a class="menu-card" href="{% url 'core:mensagens_whatsapp' %}">
+        <div class="icone">💬</div>
+        <h3>Mensagens do WhatsApp</h3>
+        <p>Mensagens recebidas pelo número de contato do BolsaTrader no WhatsApp.</p>
+    </a>
+    <a class="menu-card" href="{% url 'core:detalhes_cotacoes' %}">
+        <div class="icone">🧮</div>
+        <h3>Detalhes de Cotações</h3>
+        <p>Preço, máxima/mínima do dia, abertura, volume, valor de mercado e faixa de 52 semanas de cada ativo.</p>
+    </a>
+    <a class="menu-card" href="{% url 'core:acoes_b3' %}">
+        <div class="icone">🏛️</div>
+        <h3>Ações da B3</h3>
+        <p>Catálogo com todas as ações negociadas na B3 - atualize a lista com um clique.</p>
+    </a>
+    <a class="menu-card" href="{% url 'core:noticias' %}">
+        <div class="icone">📰</div>
+        <h3>Notícias do Mercado</h3>
+        <p>Manchetes das fontes de notícias e análises configuradas - fontes editáveis, não fixas no código.</p>
+    </a>
+    <a class="menu-card" href="{% url 'core:tradingview' %}">
+        <div class="icone">📺</div>
+        <h3>TradingView</h3>
+        <p>Gráfico avançado do TradingView embutido no sistema, com busca de qualquer ativo e atalhos para os seus.</p>
+    </a>
+</div>
+{% endblock %}

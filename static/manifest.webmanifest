@@ -1,0 +1,46 @@
+{
+  "name": "BolsaTrader - Compra e Venda de Ações",
+  "short_name": "BolsaTrader",
+  "description": "Acompanhe suas compras e vendas de ações da B3: posições, lucro/perda, cotações diárias e sinais de tendência de mercado.",
+  "id": "/",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "display_override": ["window-controls-overlay", "standalone"],
+  "orientation": "portrait-primary",
+  "background_color": "#050912",
+  "theme_color": "#050912",
+  "lang": "pt-BR",
+  "dir": "ltr",
+  "categories": ["finance", "business"],
+  "icons": [
+    { "src": "/static/icons/favicon-16.png", "sizes": "16x16", "type": "image/png", "purpose": "any" },
+    { "src": "/static/icons/favicon-32.png", "sizes": "32x32", "type": "image/png", "purpose": "any" },
+    { "src": "/static/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/static/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/static/icons/icon-512-maskable.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    {
+      "name": "Nova compra/venda",
+      "short_name": "Nova operação",
+      "description": "Registrar uma nova compra ou venda de ações",
+      "url": "/operacoes/nova/",
+      "icons": [{ "src": "/static/icons/icon-192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "Posições em carteira",
+      "short_name": "Posições",
+      "description": "Ver lucro/perda das posições atuais",
+      "url": "/posicoes/",
+      "icons": [{ "src": "/static/icons/icon-192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "Alertas",
+      "short_name": "Alertas",
+      "description": "Ver avisos e lembretes",
+      "url": "/alertas/",
+      "icons": [{ "src": "/static/icons/icon-192.png", "sizes": "192x192" }]
+    }
+  ]
+}

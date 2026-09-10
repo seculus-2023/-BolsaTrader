@@ -1,0 +1,910 @@
+/* =========================================================
+   BolsaTrader - Tema visual futurista (dark / neon / glass)
+   ========================================================= */
+
+@import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700;900&family=Rajdhani:wght@400;500;600;700&display=swap');
+
+:root {
+    --bg-0: #050912;
+    --bg-1: #0a0f1e;
+    --bg-2: #0d1526;
+    --neon-cyan: #00f0ff;
+    --neon-purple: #a855f7;
+    --neon-magenta: #ff2bd6;
+    --neon-green: #39ff8f;
+    --neon-red: #ff3860;
+    --neon-yellow: #ffd54a;
+    --glass-border: rgba(0, 240, 255, 0.25);
+    --glass-bg: rgba(13, 21, 38, 0.55);
+    --text-main: #e7f6ff;
+    --text-dim: #7f93b3;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+    height: 100%;
+}
+
+body {
+    margin: 0;
+    min-height: 100vh;
+    font-family: 'Rajdhani', sans-serif;
+    color: var(--text-main);
+    background: var(--bg-1);
+    position: relative;
+    overflow-x: hidden;
+}
+
+/* Camada de fundo (gradientes futuristas) fixa na tela, independente da altura da página */
+body::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    z-index: -3;
+    background:
+        radial-gradient(circle at 15% 20%, rgba(168, 85, 247, 0.18), transparent 40%),
+        radial-gradient(circle at 85% 10%, rgba(0, 240, 255, 0.16), transparent 45%),
+        radial-gradient(circle at 50% 90%, rgba(255, 43, 214, 0.12), transparent 50%),
+        linear-gradient(180deg, var(--bg-0) 0%, var(--bg-1) 45%, var(--bg-2) 100%);
+}
+
+/* grade holográfica animada no fundo */
+body::after {
+    content: "";
+    position: fixed;
+    inset: 0;
+    z-index: -2;
+    background-image:
+        linear-gradient(rgba(0, 240, 255, 0.06) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(0, 240, 255, 0.06) 1px, transparent 1px);
+    background-size: 42px 42px;
+    mask-image: radial-gradient(ellipse at center, black 0%, transparent 75%);
+    animation: grid-move 30s linear infinite;
+}
+
+@keyframes grid-move {
+    0% { background-position: 0 0, 0 0; }
+    100% { background-position: 400px 400px, 400px 400px; }
+}
+
+h1, h2, h3, h4, .brand-font {
+    font-family: 'Orbitron', sans-serif;
+    letter-spacing: 0.03em;
+}
+
+a { color: var(--neon-cyan); text-decoration: none; }
+a:hover { color: var(--neon-magenta); }
+
+.navbar-futurista {
+    background: rgba(5, 9, 18, 0.75);
+    backdrop-filter: blur(14px);
+    border-bottom: 1px solid var(--glass-border);
+    padding: 0.9rem 1.5rem;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+}
+
+.navbar-futurista .brand {
+    font-family: 'Orbitron', sans-serif;
+    font-weight: 900;
+    font-size: 1.35rem;
+    background: linear-gradient(90deg, var(--neon-cyan), var(--neon-purple), var(--neon-magenta));
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    text-shadow: 0 0 25px rgba(0, 240, 255, 0.35);
+}
+
+.navbar-futurista nav {
+    display: flex;
+    gap: 0.4rem;
+    flex-wrap: wrap;
+}
+
+.navbar-futurista nav a, .navbar-futurista .nav-user a, .navbar-futurista .nav-user .link-botao {
+    color: var(--text-dim);
+    padding: 0.4rem 0.8rem;
+    border-radius: 8px;
+    font-weight: 600;
+    border: 1px solid transparent;
+    transition: all 0.2s ease;
+    position: relative;
+}
+
+.navbar-futurista nav a:hover, .navbar-futurista nav a.active,
+.navbar-futurista .nav-user .link-botao:hover {
+    color: var(--neon-cyan);
+    border-color: var(--glass-border);
+    background: rgba(0, 240, 255, 0.06);
+    box-shadow: 0 0 14px rgba(0, 240, 255, 0.25);
+}
+
+.link-botao {
+    background: transparent;
+    border: none;
+    font: inherit;
+    cursor: pointer;
+}
+
+.badge-alerta {
+    background: var(--neon-magenta);
+    color: #0a0f1e;
+    font-weight: 700;
+    border-radius: 999px;
+    padding: 0.05rem 0.45rem;
+    font-size: 0.72rem;
+    margin-left: 0.3rem;
+}
+
+.nav-toggle {
+    display: none;
+    background: transparent;
+    border: 1px solid var(--glass-border);
+    color: var(--text-main);
+    border-radius: 8px;
+    width: 2.3rem;
+    height: 2.3rem;
+    font-size: 1.15rem;
+    line-height: 1;
+    cursor: pointer;
+    align-items: center;
+    justify-content: center;
+}
+
+/* Navegação colapsável (hambúrguer) em telas estreitas */
+@media (max-width: 860px) {
+    .nav-toggle { display: flex; order: 1; }
+    .navbar-futurista .brand { order: 0; }
+    .navbar-futurista .nav-user { order: 2; flex-wrap: wrap; }
+
+    .navbar-futurista nav {
+        order: 3;
+        display: none;
+        width: 100%;
+        flex-direction: column;
+        gap: 0.3rem;
+    }
+
+    .navbar-futurista nav.nav-aberta { display: flex; }
+    .navbar-futurista nav a { display: block; }
+}
+
+.container-futurista {
+    max-width: 1180px;
+    margin: 0 auto;
+    padding: 2rem 1.25rem 4rem;
+}
+
+.card-glass {
+    background: var(--glass-bg);
+    border: 1px solid var(--glass-border);
+    border-radius: 16px;
+    padding: 1.5rem;
+    backdrop-filter: blur(10px);
+    box-shadow: 0 0 35px rgba(0, 240, 255, 0.06), inset 0 1px 0 rgba(255, 255, 255, 0.03);
+    margin-bottom: 1.5rem;
+}
+
+.card-glass h2, .card-glass h3 { margin-top: 0; }
+
+.painel-com-lateral {
+    display: grid;
+    grid-template-columns: 1fr 320px;
+    gap: 1.5rem;
+    align-items: start;
+}
+
+.coluna-lateral .card-glass { position: sticky; top: 1.5rem; }
+
+@media (max-width: 900px) {
+    .painel-com-lateral { grid-template-columns: 1fr; }
+}
+
+.grid-stats {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 1rem;
+    margin-bottom: 1.5rem;
+}
+
+.stat-tile {
+    background: var(--glass-bg);
+    border: 1px solid var(--glass-border);
+    border-radius: 14px;
+    padding: 1.1rem 1.3rem;
+    backdrop-filter: blur(10px);
+}
+
+.stat-tile .label {
+    color: var(--text-dim);
+    font-size: 0.85rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+}
+
+.stat-tile .value {
+    font-family: 'Orbitron', sans-serif;
+    font-size: 1.6rem;
+    margin-top: 0.3rem;
+}
+
+.valor-positivo { color: var(--neon-green); text-shadow: 0 0 12px rgba(57, 255, 143, 0.4); }
+.valor-negativo { color: var(--neon-red); text-shadow: 0 0 12px rgba(255, 56, 96, 0.4); }
+.valor-neutro { color: var(--neon-yellow); }
+
+.tabela-scroll {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    border-radius: 12px;
+}
+
+table.tabela-futurista {
+    width: 100%;
+    border-collapse: collapse;
+    overflow: hidden;
+    border-radius: 12px;
+}
+
+.tabela-scroll table.tabela-futurista {
+    white-space: nowrap;
+}
+
+table.tabela-futurista th, table.tabela-futurista td {
+    padding: 0.75rem 0.9rem;
+    text-align: left;
+    border-bottom: 1px solid rgba(0, 240, 255, 0.12);
+}
+
+table.tabela-futurista th {
+    color: var(--neon-cyan);
+    text-transform: uppercase;
+    font-size: 0.78rem;
+    letter-spacing: 0.06em;
+    background: rgba(0, 240, 255, 0.05);
+}
+
+table.tabela-futurista tr:hover td {
+    background: rgba(0, 240, 255, 0.04);
+}
+
+/*
+ * Linha destacada quando a meta de lucro foi atingida - sinaliza "considere
+ * vender". Usa dourado/âmbar (não o verde de "valor-positivo") para não se
+ * confundir com o simples fato de estar no lucro - aqui é um chamado à ação.
+ */
+table.tabela-futurista tr.linha-meta-atingida td {
+    background: rgba(255, 213, 74, 0.12);
+    box-shadow: inset 4px 0 0 var(--neon-yellow);
+}
+
+table.tabela-futurista tr.linha-meta-atingida:hover td {
+    background: rgba(255, 213, 74, 0.2);
+}
+
+.badge-venda {
+    display: inline-block;
+    margin-left: 0.5rem;
+    padding: 0.15rem 0.55rem;
+    border-radius: 999px;
+    background: rgba(255, 213, 74, 0.22);
+    color: var(--neon-yellow);
+    border: 1px solid rgba(255, 213, 74, 0.6);
+    font-size: 0.72rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    text-shadow: 0 0 8px rgba(255, 213, 74, 0.55);
+    animation: pulso-venda 1.8s ease-in-out infinite;
+    white-space: nowrap;
+}
+
+@keyframes pulso-venda {
+    0%, 100% { box-shadow: 0 0 0 rgba(255, 213, 74, 0); }
+    50% { box-shadow: 0 0 12px rgba(255, 213, 74, 0.65); }
+}
+
+/*
+ * Linha destacada quando uma reserva (intenção de compra) já caiu até a meta
+ * de baixa - sinaliza "considere comprar". Usa roxo para diferenciar tanto do
+ * âmbar (meta de venda) quanto do vermelho de perda (aqui a queda é boa notícia).
+ */
+table.tabela-futurista tr.linha-meta-compra td {
+    background: rgba(168, 85, 247, 0.12);
+    box-shadow: inset 4px 0 0 var(--neon-purple);
+}
+
+table.tabela-futurista tr.linha-meta-compra:hover td {
+    background: rgba(168, 85, 247, 0.2);
+}
+
+.badge-compra {
+    display: inline-block;
+    margin-left: 0.5rem;
+    padding: 0.15rem 0.55rem;
+    border-radius: 999px;
+    background: rgba(168, 85, 247, 0.22);
+    color: var(--neon-purple);
+    border: 1px solid rgba(168, 85, 247, 0.6);
+    font-size: 0.72rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    text-shadow: 0 0 8px rgba(168, 85, 247, 0.55);
+    animation: pulso-compra 1.8s ease-in-out infinite;
+    white-space: nowrap;
+}
+
+@keyframes pulso-compra {
+    0%, 100% { box-shadow: 0 0 0 rgba(168, 85, 247, 0); }
+    50% { box-shadow: 0 0 12px rgba(168, 85, 247, 0.65); }
+}
+
+/*
+ * Reserva cadastrada automaticamente pelo robô consultor (ver
+ * core.services._reservar_automaticamente) - usa ciano, cor diferente do
+ * roxo de "meta de compra atingida" e do resto da paleta, pra ficar claro
+ * que essa reserva não foi cadastrada manualmente pelo usuário.
+ */
+table.tabela-futurista tr.linha-robo td {
+    background: rgba(80, 232, 248, 0.1);
+    box-shadow: inset 4px 0 0 #50e8f8;
+}
+
+table.tabela-futurista tr.linha-robo:hover td {
+    background: rgba(80, 232, 248, 0.18);
+}
+
+.badge-robo {
+    display: inline-block;
+    margin-left: 0.5rem;
+    padding: 0.15rem 0.55rem;
+    border-radius: 999px;
+    background: rgba(80, 232, 248, 0.18);
+    color: #50e8f8;
+    border: 1px solid rgba(80, 232, 248, 0.55);
+    font-size: 0.72rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    white-space: nowrap;
+}
+
+/*
+ * Notícia recém-encontrada na última atualização (ver core.views.noticias) -
+ * destaque só na primeira visita depois de clicar em "Atualizar notícias
+ * agora", pra chamar atenção pro que é novo sem confundir com lucro/perda.
+ */
+.item-noticia-nova {
+    background: rgba(57, 255, 143, 0.08);
+    box-shadow: inset 4px 0 0 var(--neon-green);
+    padding-left: 0.7rem !important;
+    border-radius: 4px;
+}
+
+.badge-noticia-nova {
+    display: inline-block;
+    margin-left: 0.5rem;
+    padding: 0.15rem 0.55rem;
+    border-radius: 999px;
+    background: rgba(57, 255, 143, 0.22);
+    color: var(--neon-green);
+    border: 1px solid rgba(57, 255, 143, 0.6);
+    font-size: 0.72rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    text-shadow: 0 0 8px rgba(57, 255, 143, 0.55);
+    white-space: nowrap;
+}
+
+/* Abas de navegação genéricas (ver core/noticias.html e core/operacao_lista.html)
+   - mostra um grupo de conteúdo por vez em vez de empilhar tudo em sequência
+   corrida. */
+.abas-navegacao {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+    border-bottom: 1px solid rgba(0, 240, 255, 0.15);
+    padding-bottom: 0.8rem;
+    margin-bottom: 1rem;
+}
+
+.aba-navegacao {
+    background: transparent;
+    border: 1px solid var(--glass-border);
+    border-radius: 999px;
+    color: var(--text-dim);
+    padding: 0.45rem 1rem;
+    font-size: 0.88rem;
+    font-family: inherit;
+    cursor: pointer;
+    transition: background 0.15s ease-out, color 0.15s ease-out, border-color 0.15s ease-out;
+}
+
+.aba-navegacao:hover {
+    border-color: var(--neon-cyan);
+    color: var(--text-main);
+}
+
+.aba-navegacao.ativa {
+    background: linear-gradient(90deg, rgba(0, 240, 255, 0.18), rgba(168, 85, 247, 0.18));
+    border-color: var(--neon-cyan);
+    color: var(--text-main);
+    font-weight: 700;
+}
+
+.painel-abas[hidden] {
+    display: none;
+}
+
+/* Gráfico de acompanhamento (linha) do histórico de cotações */
+.grafico-wrap {
+    position: relative;
+    margin-top: 0.75rem;
+}
+
+.grafico-cotacoes {
+    display: block;
+    width: 100%;
+    height: 150px;
+}
+
+.grafico-grid {
+    stroke: rgba(127, 147, 179, 0.25);
+    stroke-width: 1;
+    vector-effect: non-scaling-stroke;
+}
+
+.grafico-linha {
+    stroke-width: 2;
+    stroke-linejoin: round;
+    stroke-linecap: round;
+    vector-effect: non-scaling-stroke;
+}
+
+.grafico-linha.linha-alta { stroke: var(--neon-green); }
+.grafico-linha.linha-baixa { stroke: var(--neon-red); }
+
+.grafico-marcador {
+    stroke: var(--bg-1);
+    stroke-width: 2;
+}
+
+.grafico-marcador.linha-alta { fill: var(--neon-green); }
+.grafico-marcador.linha-baixa { fill: var(--neon-red); }
+
+.grafico-crosshair {
+    stroke: var(--text-dim);
+    stroke-width: 1;
+    vector-effect: non-scaling-stroke;
+    opacity: 0;
+    pointer-events: none;
+}
+
+.grafico-tooltip {
+    position: absolute;
+    pointer-events: none;
+    background: var(--glass-bg);
+    border: 1px solid var(--glass-border);
+    border-radius: 8px;
+    padding: 0.4rem 0.65rem;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    color: var(--text-main);
+    white-space: nowrap;
+    backdrop-filter: blur(6px);
+    opacity: 0;
+    transform: translate(-50%, -100%);
+    transition: opacity 0.08s ease-out;
+    z-index: 5;
+}
+
+.grafico-eixos {
+    display: flex;
+    justify-content: space-between;
+    font-size: 0.72rem;
+    color: var(--text-dim);
+    margin-top: 0.2rem;
+}
+
+/* Gráfico comparativo (linha): valor investido x valor atual */
+.legenda-comparativo {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1.2rem;
+    font-size: 0.82rem;
+    color: var(--text-dim);
+    margin: 0.6rem 0 0.8rem;
+}
+
+.legenda-comparativo .swatch {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    border-radius: 3px;
+    margin-right: 0.4rem;
+    vertical-align: middle;
+}
+
+.swatch-investido { background: var(--text-dim); }
+.swatch-ganho { background: var(--neon-green); }
+.swatch-perda { background: var(--neon-red); }
+
+.grafico-comparativo { display: block; }
+
+.grafico-eixo-texto {
+    fill: var(--text-dim);
+    font-size: 9px;
+    font-family: 'Rajdhani', sans-serif;
+}
+
+.linha-comparativo {
+    stroke-width: 2;
+    stroke-linejoin: round;
+    stroke-linecap: round;
+    vector-effect: non-scaling-stroke;
+}
+
+.linha-investido { stroke: var(--text-dim); stroke-dasharray: 4 3; opacity: 0.75; }
+.linha-ganho { stroke: var(--neon-green); }
+.linha-perda { stroke: var(--neon-red); }
+
+.marcador-comparativo {
+    stroke: var(--bg-1);
+    stroke-width: 2;
+}
+
+.marcador-investido { fill: var(--text-dim); }
+.marcador-ganho { fill: var(--neon-green); }
+.marcador-perda { fill: var(--neon-red); }
+
+.badge-tendencia {
+    padding: 0.2rem 0.6rem;
+    border-radius: 999px;
+    font-size: 0.75rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.badge-alta { background: rgba(57, 255, 143, 0.15); color: var(--neon-green); border: 1px solid rgba(57, 255, 143, 0.4); }
+.badge-baixa { background: rgba(255, 56, 96, 0.15); color: var(--neon-red); border: 1px solid rgba(255, 56, 96, 0.4); }
+.badge-neutro { background: rgba(255, 213, 74, 0.12); color: var(--neon-yellow); border: 1px solid rgba(255, 213, 74, 0.35); }
+.badge-dados-insuficientes { background: rgba(127, 147, 179, 0.15); color: var(--text-dim); border: 1px solid rgba(127, 147, 179, 0.3); }
+
+.badge-atualizacao {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    margin-top: 0.7rem;
+    padding: 0.35rem 0.9rem;
+    border-radius: 999px;
+    background: rgba(80, 232, 248, 0.12);
+    border: 1px solid rgba(80, 232, 248, 0.4);
+    color: #50e8f8;
+    font-size: 0.85rem;
+    font-weight: 600;
+}
+
+.badge-horario-b3 {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    margin-top: 0.7rem;
+    margin-left: 0.6rem;
+    padding: 0.35rem 0.9rem;
+    border-radius: 999px;
+    font-size: 0.85rem;
+    font-weight: 600;
+}
+
+.badge-horario-b3.aberto {
+    background: rgba(57, 255, 143, 0.12);
+    border: 1px solid rgba(57, 255, 143, 0.4);
+    color: var(--neon-green);
+}
+
+.badge-horario-b3.fechado {
+    background: rgba(127, 147, 179, 0.12);
+    border: 1px solid rgba(127, 147, 179, 0.35);
+    color: var(--text-dim);
+}
+
+.btn-futurista {
+    display: inline-block;
+    background: linear-gradient(90deg, rgba(0, 240, 255, 0.18), rgba(168, 85, 247, 0.18));
+    border: 1px solid var(--glass-border);
+    color: var(--text-main);
+    padding: 0.6rem 1.3rem;
+    border-radius: 10px;
+    font-weight: 700;
+    letter-spacing: 0.03em;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.btn-futurista:hover {
+    box-shadow: 0 0 22px rgba(0, 240, 255, 0.45);
+    color: #fff;
+    transform: translateY(-1px);
+}
+
+.btn-secundario {
+    background: rgba(127, 147, 179, 0.08);
+    border: 1px solid rgba(127, 147, 179, 0.3);
+    color: var(--text-dim);
+}
+
+/* Botão-ícone: ações compactas nas grids (Vender, Comprar, Alterar, Excluir) -
+   emoji no lugar de texto, com padding igual nos 4 lados pra ficar quadrado. */
+.btn-icone {
+    padding: 0.4rem;
+    width: 2.2rem;
+    height: 2.2rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.05rem;
+    line-height: 1;
+}
+
+form.form-futurista label {
+    display: block;
+    margin: 0.9rem 0 0.35rem;
+    font-weight: 600;
+    color: var(--text-dim);
+    font-size: 0.9rem;
+}
+
+.form-control-futurista, form.form-futurista input, form.form-futurista select, form.form-futurista textarea {
+    width: 100%;
+    padding: 0.65rem 0.85rem;
+    background: rgba(5, 9, 18, 0.6);
+    border: 1px solid var(--glass-border);
+    border-radius: 10px;
+    color: var(--text-main);
+    font-family: 'Rajdhani', sans-serif;
+    font-size: 1rem;
+}
+
+.form-control-futurista:focus, form.form-futurista input:focus, form.form-futurista select:focus, form.form-futurista textarea:focus {
+    outline: none;
+    border-color: var(--neon-cyan);
+    box-shadow: 0 0 14px rgba(0, 240, 255, 0.35);
+}
+
+.errorlist {
+    color: var(--neon-red);
+    list-style: none;
+    padding: 0;
+    margin: 0.3rem 0 0;
+    font-size: 0.85rem;
+}
+
+.mensagens { margin-bottom: 1.25rem; }
+
+.mensagem {
+    padding: 0.7rem 1rem;
+    border-radius: 10px;
+    margin-bottom: 0.6rem;
+    border: 1px solid;
+    font-weight: 600;
+}
+
+.mensagem.success { background: rgba(57, 255, 143, 0.1); border-color: rgba(57, 255, 143, 0.4); color: var(--neon-green); }
+.mensagem.error { background: rgba(255, 56, 96, 0.1); border-color: rgba(255, 56, 96, 0.4); color: var(--neon-red); }
+.mensagem.warning { background: rgba(255, 213, 74, 0.1); border-color: rgba(255, 213, 74, 0.4); color: var(--neon-yellow); }
+.mensagem.info { background: rgba(0, 240, 255, 0.08); border-color: rgba(0, 240, 255, 0.3); color: var(--neon-cyan); }
+
+/* Tela de login/cadastro */
+.tela-auth {
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 2rem;
+}
+
+.auth-box {
+    width: 100%;
+    max-width: 420px;
+    text-align: center;
+}
+
+.auth-box .logo {
+    font-family: 'Orbitron', sans-serif;
+    font-weight: 900;
+    font-size: 2rem;
+    margin-bottom: 0.2rem;
+    background: linear-gradient(90deg, var(--neon-cyan), var(--neon-purple), var(--neon-magenta));
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+}
+
+.auth-box .subtitulo {
+    color: var(--text-dim);
+    margin-bottom: 1.8rem;
+    letter-spacing: 0.04em;
+}
+
+.auth-box form { text-align: left; }
+
+.link-secundario {
+    display: block;
+    margin-top: 1.2rem;
+    color: var(--text-dim);
+    font-size: 0.9rem;
+}
+
+.menu-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+    gap: 1.2rem;
+}
+
+.menu-card {
+    background: var(--glass-bg);
+    border: 1px solid var(--glass-border);
+    border-radius: 16px;
+    padding: 1.6rem;
+    text-align: left;
+    transition: all 0.2s ease;
+    display: block;
+}
+
+.menu-card:hover {
+    transform: translateY(-4px);
+    box-shadow: 0 0 28px rgba(0, 240, 255, 0.3);
+    border-color: var(--neon-cyan);
+}
+
+.menu-card .icone { font-size: 1.8rem; }
+.menu-card h3 { color: var(--text-main); margin: 0.6rem 0 0.3rem; }
+.menu-card p { color: var(--text-dim); margin: 0; font-size: 0.9rem; }
+
+/* Grid de detalhes de cotação (um card por ativo) */
+.grid-cotacoes {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 1.2rem;
+    margin-top: 1.5rem;
+}
+
+.cotacao-cabecalho {
+    display: flex;
+    align-items: center;
+    gap: 0.7rem;
+}
+
+.cotacao-cabecalho h3 { margin: 0; }
+
+.cotacao-logo {
+    width: 36px;
+    height: 36px;
+    object-fit: contain;
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.06);
+    padding: 0.2rem;
+}
+
+.cotacao-preco {
+    font-family: 'Orbitron', sans-serif;
+    font-size: 1.5rem;
+    margin: 0.8rem 0;
+}
+
+.cotacao-grid-campos {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.7rem 1rem;
+    padding-top: 0.7rem;
+    border-top: 1px solid rgba(0, 240, 255, 0.1);
+}
+
+.cotacao-grid-campos div { display: flex; flex-direction: column; gap: 0.15rem; }
+.cotacao-grid-campos span { color: var(--text-dim); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.05em; }
+.cotacao-grid-campos strong { font-weight: 700; }
+
+.cotacao-rodape {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+    margin-top: 0.9rem;
+    padding-top: 0.7rem;
+    border-top: 1px solid rgba(0, 240, 255, 0.1);
+    color: var(--text-dim);
+    font-size: 0.72rem;
+}
+
+.rodape-futurista {
+    text-align: center;
+    color: var(--text-dim);
+    padding: 2rem 1rem;
+    font-size: 0.8rem;
+    letter-spacing: 0.04em;
+}
+
+.whatsapp-flutuante {
+    position: fixed;
+    right: 1.4rem;
+    bottom: 1.4rem;
+    width: 54px;
+    height: 54px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #25d366;
+    color: #050912;
+    box-shadow: 0 0 22px rgba(37, 211, 102, 0.55), 0 4px 14px rgba(0, 0, 0, 0.35);
+    transition: transform 0.15s ease-out, box-shadow 0.15s ease-out;
+    z-index: 20;
+}
+
+.whatsapp-flutuante:hover {
+    transform: scale(1.08);
+    box-shadow: 0 0 30px rgba(37, 211, 102, 0.75), 0 4px 14px rgba(0, 0, 0, 0.35);
+}
+
+/*
+ * Botão "Instalar app" flutuante, mostrado só para visitantes não logados
+ * (ex: tela de login) - quem já está logado tem o botão equivalente no
+ * cabeçalho. Sem isso, só dava pra instalar o PWA depois de já ter entrado
+ * na conta, mesmo o navegador disparando o evento de instalação antes disso.
+ */
+.btn-instalar-flutuante {
+    position: fixed;
+    left: 1.4rem;
+    bottom: 1.4rem;
+    z-index: 20;
+}
+
+@media (max-width: 480px) {
+    .container-futurista { padding: 1.5rem 1rem 3rem; }
+    .navbar-futurista { padding: 0.75rem 1rem; }
+    .card-glass { padding: 1.1rem; }
+    .whatsapp-flutuante { right: 1rem; bottom: 1rem; width: 48px; height: 48px; }
+    .btn-instalar-flutuante { left: 1rem; bottom: 1rem; }
+}
+
+/* Overlay de "atualizando cotações" - some enquanto a página navega pro
+   destino do botão "Atualizar cotações agora" (ação síncrona, com round-trip
+   ao servidor e às vezes à API brapi.dev pra cada ativo). */
+.overlay-atualizando[hidden] {
+    display: none;
+}
+
+.overlay-atualizando {
+    position: fixed;
+    inset: 0;
+    background: rgba(5, 9, 18, 0.85);
+    backdrop-filter: blur(2px);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 1.1rem;
+    z-index: 9999;
+    color: var(--text-main);
+    font-family: 'Rajdhani', sans-serif;
+    font-size: 1.05rem;
+    font-weight: 600;
+}
+
+.spinner-atualizando {
+    width: 48px;
+    height: 48px;
+    border: 4px solid rgba(0, 240, 255, 0.2);
+    border-top-color: var(--neon-cyan);
+    border-radius: 50%;
+    animation: girar-atualizando 0.8s linear infinite;
+}
+
+@keyframes girar-atualizando {
+    to { transform: rotate(360deg); }
+}

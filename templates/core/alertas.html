@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block titulo %}Alertas - BolsaTrader{% endblock %}
+{% block conteudo %}
+<h1>Avisos e Lembretes</h1>
+<p style="color: var(--text-dim);">
+    Notificações geradas quando uma posição atinge a meta de lucro/perda, quando é identificado um sinal de
+    tendência de mercado, ou quando o robô consultor identifica um sinal técnico de compra/venda (RSI + MACD +
+    tendência) - só um apoio à decisão, <strong>não é recomendação de investimento</strong> nem executa nenhuma
+    ordem de verdade.
+</p>
+
+<div class="card-glass">
+    {% if alertas %}
+    <ul style="list-style: none; padding: 0;">
+        {% for a in alertas %}
+        <li style="display: flex; flex-wrap: wrap; gap: .6rem; justify-content: space-between; align-items: center; padding: .8rem 0; border-bottom: 1px solid rgba(0,240,255,.1); {% if a.lido %}opacity: .55;{% endif %}">
+            <div>
+                <span class="badge-tendencia {% if a.tipo == 'LUCRO' or a.tipo == 'SINAL_COMPRA' %}badge-alta{% elif a.tipo == 'PERDA' or a.tipo == 'SINAL_VENDA' %}badge-baixa{% else %}badge-neutro{% endif %}">
+                    {{ a.get_tipo_display }}
+                </span>
+                <span style="margin-left: .6rem;">{{ a.mensagem }}</span>
+                <br>
+                <small style="color: var(--text-dim);">{{ a.criado_em|date:"d/m/Y H:i" }}{% if a.ativo %} &middot; {{ a.ativo.ticker }}{% endif %}</small>
+            </div>
+            {% if not a.lido %}
+            <a href="{% url 'core:alerta_marcar_lido' a.id %}" class="btn-futurista btn-secundario" style="padding: .35rem .8rem; font-size: .8rem;">Marcar como lido</a>
+            {% endif %}
+        </li>
+        {% endfor %}
+    </ul>
+    {% else %}
+    <p style="color: var(--text-dim);">Nenhum alerta gerado até o momento.</p>
+    {% endif %}
+</div>
+{% endblock %}

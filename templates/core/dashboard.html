@@ -1,0 +1,153 @@
+{% extends "base.html" %}
+{% block titulo %}Painel - BolsaTrader{% endblock %}
+{% block conteudo %}
+<h1>Painel de Controle</h1>
+
+<div class="painel-com-lateral">
+<div class="coluna-principal">
+
+<div class="grid-stats">
+    <div class="stat-tile">
+        <div class="label">Ativos em carteira</div>
+        <div class="value">{{ total_ativos }}</div>
+    </div>
+    <div class="stat-tile">
+        <div class="label">Valor investido</div>
+        <div class="value">R$ {{ valor_investido_total|floatformat:2 }}</div>
+    </div>
+    <div class="stat-tile">
+        <div class="label">Valor atual</div>
+        <div class="value">R$ {{ valor_atual_total|floatformat:2 }}</div>
+    </div>
+    <div class="stat-tile">
+        <div class="label">Lucro / Perda</div>
+        <div class="value {% if lucro_perda_total > 0 %}valor-positivo{% elif lucro_perda_total < 0 %}valor-negativo{% else %}valor-neutro{% endif %}">
+            R$ {{ lucro_perda_total|floatformat:2 }}
+            {% if lucro_perda_pct_total is not None %}({{ lucro_perda_pct_total|floatformat:2 }}%){% endif %}
+        </div>
+    </div>
+</div>
+
+<div class="card-glass">
+    <h2>Ações rápidas</h2>
+    <div style="display: flex; flex-wrap: nowrap; gap: .6rem; overflow-x: auto; padding-bottom: .3rem;">
+        <a href="{% url 'core:operacao_nova' %}" class="btn-futurista" style="white-space: nowrap;">+ Nova compra/venda</a>
+        <a href="{% url 'core:posicoes' %}" class="btn-futurista btn-secundario" style="white-space: nowrap;">Ver posições</a>
+        <a href="{% url 'core:atualizar_cotacoes' %}" class="btn-futurista btn-secundario btn-atualizar-cotacoes" data-overlay-texto="Atualizando cotações..." style="white-space: nowrap;">Atualizar cotações agora</a>
+        <a href="{% url 'core:analise_mercado' %}" class="btn-futurista btn-secundario" style="white-space: nowrap;">Ver análise de mercado</a>
+        <a href="{% url 'core:historico_graficos' %}" class="btn-futurista btn-secundario" style="white-space: nowrap;">Ver histórico e gráficos</a>
+        <a href="{% url 'core:noticias' %}" class="btn-futurista btn-secundario" style="white-space: nowrap;">Notícias do Mercado</a>
+    </div>
+    <div style="display: flex; flex-wrap: wrap; gap: .6rem;">
+        {% if ultima_atualizacao_cotacoes %}
+        <p class="badge-atualizacao" style="margin: 0;">⏱ Última atualização das cotações: {{ ultima_atualizacao_cotacoes|date:"d/m/Y H:i" }}</p>
+        {% endif %}
+        <p class="badge-horario-b3 {% if b3_mercado_aberto %}aberto{% else %}fechado{% endif %}" style="margin: 0;">
+            {% if b3_mercado_aberto %}🟢{% else %}⚪{% endif %} B3: {{ b3_horario_abertura }} - {{ b3_horario_fechamento }} &middot; {% if b3_mercado_aberto %}Mercado aberto{% else %}Mercado fechado{% endif %}
+        </p>
+    </div>
+</div>
+
+<div class="card-glass">
+    <h2>Posições em carteira</h2>
+    {% if posicoes %}
+    <div class="tabela-scroll">
+    <table class="tabela-futurista">
+        <thead>
+            <tr>
+                <th>Ativo</th>
+                <th>Qtd.</th>
+                <th>Preço médio</th>
+                <th>Cotação atual</th>
+                <th>Lucro/Perda</th>
+                <th>Tendência</th>
+                <th>Dias em carteira</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for p in posicoes %}
+            <tr{% if p.meta_compra_atingida or p.reserva_do_robo or p.meta_lucro_atingida %} class="{% if p.meta_compra_atingida %}linha-meta-compra {% endif %}{% if p.reserva_do_robo %}linha-robo {% endif %}{% if p.meta_lucro_atingida %}linha-meta-atingida{% endif %}"{% endif %}>
+                <td>
+                    <strong>{{ p.ativo.ticker }}</strong>{% if p.ativo.nome %}<br><small style="color: var(--text-dim);">{{ p.ativo.nome }}</small>{% endif %}
+                    {% if p.apenas_reservado %}
+                        <br><span class="badge-tendencia badge-neutro">🔖 Reservado</span>
+                    {% elif p.quantidade_reservada %}
+                        <br><span class="badge-tendencia badge-neutro">🔖 +{{ p.quantidade_reservada }} reservada{{ p.quantidade_reservada|pluralize }}</span>
+                    {% endif %}
+                    {% if p.reserva_do_robo %}
+                        <br><span class="badge-robo" title="Reserva automática do robô consultor">🤖 Robô</span>
+                    {% endif %}
+                </td>
+                <td>{% if p.apenas_reservado %}&mdash;{% else %}{{ p.quantidade }}{% endif %}</td>
+                <td>R$ {{ p.preco_medio }}</td>
+                <td>{% if p.preco_atual %}R$ {{ p.preco_atual }}{% else %}<span style="color: var(--text-dim);">sem cotação</span>{% endif %}</td>
+                <td class="{% if p.situacao == 'LUCRO' %}valor-positivo{% elif p.situacao == 'PERDA' %}valor-negativo{% else %}valor-neutro{% endif %}">
+                    {% if p.lucro_perda_pct is not None %}{{ p.lucro_perda_pct }}% (R$ {{ p.lucro_perda_valor }}){% else %}&mdash;{% endif %}
+                </td>
+                <td>
+                    {% if p.tendencia %}
+                    <span class="badge-tendencia badge-{{ p.tendencia|lower|slugify }}">{{ p.tendencia }}</span>
+                    {% else %}&mdash;{% endif %}
+                </td>
+                <td>
+                    {% if p.dias_desde_compra is not None %}
+                        {% if p.dias_desde_compra == 0 %}hoje{% elif p.dias_desde_compra == 1 %}1 dia{% else %}{{ p.dias_desde_compra }} dias{% endif %}
+                    {% else %}&mdash;{% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    </div>
+    {% else %}
+    <p style="color: var(--text-dim);">Você ainda não registrou nenhuma operação. <a href="{% url 'core:operacao_nova' %}">Registrar a primeira compra</a>.</p>
+    {% endif %}
+</div>
+
+<div class="card-glass">
+    <h2>Alertas recentes</h2>
+    {% if alertas_recentes %}
+    <ul style="list-style: none; padding: 0;">
+        {% for a in alertas_recentes %}
+        <li style="padding: .5rem 0; border-bottom: 1px solid rgba(0,240,255,.1);">
+            <span class="badge-tendencia badge-{% if a.tipo == 'LUCRO' or a.tipo == 'SINAL_COMPRA' %}alta{% elif a.tipo == 'PERDA' or a.tipo == 'SINAL_VENDA' %}baixa{% else %}neutro{% endif %}">{{ a.get_tipo_display }}</span>
+            {{ a.mensagem }}
+            <small style="color: var(--text-dim);">— {{ a.criado_em|date:"d/m/Y H:i" }}</small>
+        </li>
+        {% endfor %}
+    </ul>
+    <a href="{% url 'core:alertas' %}" class="link-secundario">Ver todos os alertas →</a>
+    {% else %}
+    <p style="color: var(--text-dim);">Nenhum alerta no momento.</p>
+    {% endif %}
+</div>
+
+</div>
+
+<aside class="coluna-lateral">
+    <div class="card-glass">
+        <h2>Atividade da comunidade</h2>
+        <p style="color: var(--text-dim); font-size: .85rem; margin-top: -.5rem;">
+            Quem está comprando e vendendo agora. Os detalhes de cada operação (ativo, quantidade, preço) continuam privados.
+        </p>
+        {% if atividade_recente %}
+        <ul style="list-style: none; padding: 0; margin: 0;">
+            {% for a in atividade_recente %}
+            <li style="padding: .55rem 0; border-bottom: 1px solid rgba(0,240,255,.1); display: flex; justify-content: space-between; gap: .5rem; align-items: baseline;">
+                <span>
+                    <strong>{{ a.nome }}</strong>
+                    <span class="{% if a.tipo == 'COMPRA' %}valor-positivo{% else %}valor-neutro{% endif %}">
+                        {% if a.tipo == 'COMPRA' %}comprou{% else %}reservou{% endif %}
+                    </span> ações
+                </span>
+                <small style="color: var(--text-dim); white-space: nowrap;">{{ a.quando|timesince }} atrás</small>
+            </li>
+            {% endfor %}
+        </ul>
+        {% else %}
+        <p style="color: var(--text-dim);">Nenhuma operação registrada ainda por ninguém.</p>
+        {% endif %}
+    </div>
+</aside>
+</div>
+{% endblock %}

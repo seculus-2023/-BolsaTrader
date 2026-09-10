@@ -1,0 +1,31 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Você está offline - BolsaTrader</title>
+    <link rel="manifest" href="{% static 'manifest.webmanifest' %}">
+    <meta name="theme-color" content="#050912">
+    <link rel="icon" type="image/png" sizes="32x32" href="{% static 'icons/favicon-32.png' %}">
+    <link rel="icon" type="image/png" sizes="16x16" href="{% static 'icons/favicon-16.png' %}">
+    <link rel="apple-touch-icon" href="{% static 'icons/apple-touch-icon.png' %}">
+    <link rel="stylesheet" href="{% static 'css/futurista.css' %}">
+</head>
+<body>
+    <div class="tela-auth">
+        <div class="auth-box card-glass">
+            <div class="logo">⚡ BOLSATRADER</div>
+            <h2 style="margin-top: 1rem;">Você está offline</h2>
+            <p class="subtitulo">
+                Não foi possível conectar à internet. As cotações e os dados da sua carteira exigem
+                conexão, para garantir que você sempre veja informações atualizadas e corretas.
+            </p>
+            <button onclick="window.location.reload()" class="btn-futurista" style="width: 100%; margin-top: 1rem;">
+                Tentar novamente
+            </button>
+            <a class="link-secundario" href="/">Voltar ao início</a>
+        </div>
+    </div>
+</body>
+</html>

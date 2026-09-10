@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block titulo %}Alterar reserva de {{ operacao.ativo.ticker }} - BolsaTrader{% endblock %}
+{% block conteudo %}
+<h1>Alterar reserva de {{ operacao.ativo.ticker }}</h1>
+
+<div class="card-glass" style="max-width: 640px;">
+    <h3 style="margin-top: 0;">Reserva</h3>
+    <p style="color: var(--text-dim);">
+        Registrada em {{ operacao.data_operacao|date:"d/m/Y" }}: preço pretendido de R$ {{ operacao.preco_unitario }}.
+    </p>
+
+    <form method="post" class="form-futurista">
+        {% csrf_token %}
+        {% for field in form %}
+            <label for="{{ field.id_for_label }}">{{ field.label }}</label>
+            {{ field }}
+            {{ field.errors }}
+        {% endfor %}
+        <button type="submit" class="btn-futurista" style="margin-top: 1.6rem;">Salvar alterações</button>
+        <a href="{% url 'core:operacao_lista' %}" class="btn-futurista btn-secundario">Cancelar</a>
+    </form>
+</div>
+{% endblock %}

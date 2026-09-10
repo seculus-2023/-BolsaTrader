@@ -1,0 +1,47 @@
+# BolsaTrader - orquestração dos containers (aplicação Django + PostgreSQL)
+#
+# Uso:
+#   1) copie .env.example para .env e ajuste os valores;
+#   2) docker compose up --build
+#   3) acesse http://localhost:8000
+#
+# As variáveis abaixo (${DB_NAME}, ${DB_USER}, ...) são lidas automaticamente
+# do arquivo ".env" na mesma pasta deste arquivo.
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${DB_NAME:-bolsatrader}
+      POSTGRES_USER: ${DB_USER:-bolsatrader_user}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-troque_esta_senha}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-bolsatrader_user} -d ${DB_NAME:-bolsatrader}"]
+      interval: 5s
+      timeout: 5s
+      retries: 15
+
+  web:
+    build: .
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      # Dentro da rede do Docker Compose, o banco de dados é acessado pelo
+      # nome do serviço ("db"), não por localhost/127.0.0.1.
+      DB_HOST: db
+      DB_PORT: 5432
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    volumes:
+      - staticfiles_data:/app/staticfiles
+
+volumes:
+  postgres_data:
+  staticfiles_data:

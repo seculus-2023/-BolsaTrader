@@ -1,0 +1,13 @@
+Django==5.2.*
+psycopg2-binary==2.9.*
+python-decouple==3.8
+python-dotenv==1.0.*
+requests==2.32.*
+beautifulsoup4==4.15.*
+# Servidor WSGI de produção: gunicorn em Linux, waitress em Windows (gunicorn
+# não roda no Windows - depende do módulo fcntl, só existe em sistemas Unix).
+gunicorn==23.0.*
+waitress==3.0.*
+whitenoise==6.8.*
+openpyxl==3.1.*
+reportlab==4.2.*

@@ -1,0 +1,180 @@
+{% extends "base.html" %}
+{% load humanize %}
+{% block titulo %}Detalhes de Cotações - BolsaTrader{% endblock %}
+{% block conteudo %}
+<h1>Detalhes de Cotações</h1>
+<p style="color: var(--text-dim);">
+    Retrato mais recente da cotação de cada ativo que você já comprou ou vendeu &mdash; preço, máxima/mínima do dia,
+    abertura, fechamento anterior, volume, valor de mercado e faixa de 52 semanas. Só muda quando você atualiza as cotações.
+</p>
+<a href="{% url 'core:atualizar_cotacoes' %}" class="btn-futurista btn-atualizar-cotacoes" data-overlay-texto="Atualizando cotações...">Atualizar cotações agora</a>
+
+<div class="card-glass" style="margin: 1.5rem 0 2rem;">
+    <h3 style="margin-top: 0;">Consultar cotação avulsa</h3>
+    <p style="color: var(--text-dim); font-size: .9rem;">
+        Digite o ticker de qualquer ação (ex.: PETR4) para ver a cotação atual, na hora, direto da API &mdash;
+        sem precisar tê-la na carteira.
+    </p>
+    <form id="form-consulta-avulsa" class="form-futurista" style="display: flex; gap: .8rem; align-items: flex-end; flex-wrap: wrap;">
+        <div style="flex: 1; min-width: 180px;">
+            <label for="campo-ticker-avulso" style="margin-top: 0;">Ticker</label>
+            <input type="text" id="campo-ticker-avulso" placeholder="Ex.: PETR4" autocomplete="off" maxlength="15" style="text-transform: uppercase;">
+        </div>
+        <button type="submit" id="btn-consultar-avulso" class="btn-futurista">Pesquisar cotação</button>
+    </form>
+    <div id="resultado-consulta-avulsa" style="margin-top: 1.2rem;"></div>
+</div>
+
+<div class="grid-cotacoes">
+    {% for ativo in ativos %}
+    <div class="card-glass cotacao-card">
+        <div class="cotacao-cabecalho">
+            {% if ativo.logo_url %}<img src="{{ ativo.logo_url }}" alt="" class="cotacao-logo">{% endif %}
+            <div>
+                <h3>{{ ativo.ticker }}</h3>
+                <small style="color: var(--text-dim);">{{ ativo.nome_longo|default:ativo.nome|default:"—" }}</small>
+            </div>
+        </div>
+
+        {% with cot=ativo.ultima_cotacao %}
+        <div class="cotacao-preco">
+            {% if cot %}
+            R$ {{ cot.preco_fechamento }}
+            <span class="{% if cot.variacao_dia_pct > 0 %}valor-positivo{% elif cot.variacao_dia_pct < 0 %}valor-negativo{% else %}valor-neutro{% endif %}">
+                {% if cot.variacao_dia_pct is not None %}({{ cot.variacao_dia_pct }}%){% endif %}
+            </span>
+            {% else %}
+            <span style="color: var(--text-dim); font-size: .95rem;">sem cotação ainda</span>
+            {% endif %}
+        </div>
+        {% endwith %}
+
+        <div class="cotacao-grid-campos">
+            <div><span>Máxima do dia</span><strong>{% if ativo.maxima_dia %}R$ {{ ativo.maxima_dia }}{% else %}&mdash;{% endif %}</strong></div>
+            <div><span>Mínima do dia</span><strong>{% if ativo.minima_dia %}R$ {{ ativo.minima_dia }}{% else %}&mdash;{% endif %}</strong></div>
+            <div><span>Abertura</span><strong>{% if ativo.abertura %}R$ {{ ativo.abertura }}{% else %}&mdash;{% endif %}</strong></div>
+            <div><span>Fech. anterior</span><strong>{% if ativo.fechamento_anterior %}R$ {{ ativo.fechamento_anterior }}{% else %}&mdash;{% endif %}</strong></div>
+            <div>
+                <span>Variação (R$)</span>
+                <strong class="{% if ativo.variacao_dia_valor > 0 %}valor-positivo{% elif ativo.variacao_dia_valor < 0 %}valor-negativo{% endif %}">
+                    {% if ativo.variacao_dia_valor is not None %}R$ {{ ativo.variacao_dia_valor }}{% else %}&mdash;{% endif %}
+                </strong>
+            </div>
+            <div><span>Volume</span><strong>{% if ativo.volume %}{{ ativo.volume|intcomma }}{% else %}&mdash;{% endif %}</strong></div>
+            <div><span>Valor de mercado</span><strong>{% if ativo.valor_mercado %}R$ {{ ativo.valor_mercado|intword }}{% else %}&mdash;{% endif %}</strong></div>
+            <div><span>Moeda</span><strong>{{ ativo.moeda|default:"—" }}</strong></div>
+            <div>
+                <span>Faixa 52 semanas</span>
+                <strong>
+                    {% if ativo.minima_52_semanas and ativo.maxima_52_semanas %}
+                        R$ {{ ativo.minima_52_semanas }} &ndash; R$ {{ ativo.maxima_52_semanas }}
+                    {% else %}&mdash;{% endif %}
+                </strong>
+            </div>
+        </div>
+
+        <div class="cotacao-rodape">
+            {% if ativo.hora_cotacao %}<span>Cotação de: {{ ativo.hora_cotacao|date:"d/m/Y H:i" }}</span>{% endif %}
+            {% if ativo.atualizado_em %}<span>Atualizado em: {{ ativo.atualizado_em|date:"d/m/Y H:i" }}</span>{% endif %}
+        </div>
+    </div>
+    {% empty %}
+    <div class="card-glass"><p style="color: var(--text-dim);">Você ainda não possui ativos cadastrados. <a href="{% url 'core:operacao_nova' %}">Registrar uma compra</a>.</p></div>
+    {% endfor %}
+</div>
+
+<script>
+    (function () {
+        var form = document.getElementById("form-consulta-avulsa");
+        var campoTicker = document.getElementById("campo-ticker-avulso");
+        var botao = document.getElementById("btn-consultar-avulso");
+        var resultado = document.getElementById("resultado-consulta-avulsa");
+        if (!form) return;
+
+        function escapeHtml(texto) {
+            return String(texto).replace(/[&<>"']/g, function (c) {
+                return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+            });
+        }
+
+        function formatarReal(valor) {
+            if (valor === null || valor === undefined) return "&mdash;";
+            return "R$ " + Number(valor).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        }
+
+        function formatarInteiro(valor) {
+            if (valor === null || valor === undefined) return "&mdash;";
+            return Number(valor).toLocaleString("pt-BR");
+        }
+
+        function classeVariacao(valor) {
+            if (valor > 0) return "valor-positivo";
+            if (valor < 0) return "valor-negativo";
+            return "valor-neutro";
+        }
+
+        async function pesquisar(evento) {
+            evento.preventDefault();
+            var ticker = campoTicker.value.trim();
+            if (!ticker) {
+                campoTicker.focus();
+                return;
+            }
+
+            botao.disabled = true;
+            botao.textContent = "Pesquisando...";
+            resultado.innerHTML = "";
+
+            try {
+                var resposta = await fetch(
+                    "{% url 'core:consultar_cotacao_avulsa' %}?ticker=" + encodeURIComponent(ticker)
+                );
+                var dados = await resposta.json();
+
+                if (!dados.ok) {
+                    resultado.innerHTML = '<p style="color: var(--neon-red);">' + escapeHtml(dados.erro || "Não foi possível consultar essa cotação.") + '</p>';
+                    return;
+                }
+
+                var variacaoPct = dados.variacao_pct;
+                var variacaoLabel = (variacaoPct !== null && variacaoPct !== undefined)
+                    ? "(" + Number(variacaoPct).toFixed(2).replace(".", ",") + "%)"
+                    : "";
+                var faixa52 = (dados.minima_52_semanas != null && dados.maxima_52_semanas != null)
+                    ? formatarReal(dados.minima_52_semanas) + " &ndash; " + formatarReal(dados.maxima_52_semanas)
+                    : "&mdash;";
+
+                resultado.innerHTML =
+                    '<div class="card-glass cotacao-card">' +
+                        '<div class="cotacao-cabecalho">' +
+                            (dados.logo_url ? '<img src="' + escapeHtml(dados.logo_url) + '" alt="" class="cotacao-logo">' : "") +
+                            '<div><h3>' + escapeHtml(dados.ticker) + '</h3><small style="color: var(--text-dim);">' + escapeHtml(dados.nome) + '</small></div>' +
+                        '</div>' +
+                        '<div class="cotacao-preco">' +
+                            formatarReal(dados.preco) +
+                            ' <span class="' + classeVariacao(variacaoPct) + '">' + variacaoLabel + '</span>' +
+                        '</div>' +
+                        '<div class="cotacao-grid-campos">' +
+                            '<div><span>Máxima do dia</span><strong>' + formatarReal(dados.maxima_dia) + '</strong></div>' +
+                            '<div><span>Mínima do dia</span><strong>' + formatarReal(dados.minima_dia) + '</strong></div>' +
+                            '<div><span>Abertura</span><strong>' + formatarReal(dados.abertura) + '</strong></div>' +
+                            '<div><span>Fech. anterior</span><strong>' + formatarReal(dados.fechamento_anterior) + '</strong></div>' +
+                            '<div><span>Volume</span><strong>' + formatarInteiro(dados.volume) + '</strong></div>' +
+                            '<div><span>Valor de mercado</span><strong>' + formatarReal(dados.valor_mercado) + '</strong></div>' +
+                            '<div><span>Moeda</span><strong>' + escapeHtml(dados.moeda) + '</strong></div>' +
+                            '<div><span>Faixa 52 semanas</span><strong>' + faixa52 + '</strong></div>' +
+                        '</div>' +
+                        (dados.hora_cotacao ? '<div class="cotacao-rodape"><span>Cotação de: ' + escapeHtml(dados.hora_cotacao) + '</span></div>' : "") +
+                    '</div>';
+            } catch (erro) {
+                resultado.innerHTML = '<p style="color: var(--neon-red);">Falha ao consultar a API. Tente novamente.</p>';
+            } finally {
+                botao.disabled = false;
+                botao.textContent = "Pesquisar cotação";
+            }
+        }
+
+        form.addEventListener("submit", pesquisar);
+    })();
+</script>
+{% endblock %}

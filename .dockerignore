@@ -1,0 +1,29 @@
+# Ambiente virtual e cache Python (a imagem instala as dependências do zero)
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# Controle de versão
+.git/
+.gitignore
+
+# Configuração local e segredos (o .env é passado via docker-compose --env-file, não copiado pra imagem)
+.env
+.env.*
+!.env.example
+
+# Banco de dados local (SQLite de testes, se existir) e estáticos já coletados
+db.sqlite3
+staticfiles/
+
+# Documentação e manuais (não fazem parte da aplicação em si)
+docs/
+README.md
+
+# Editores e sistema operacional
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

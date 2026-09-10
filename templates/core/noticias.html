@@ -1,0 +1,129 @@
+{% extends "base.html" %}
+{% block titulo %}Notícias do Mercado - BolsaTrader{% endblock %}
+{% block conteudo %}
+<h1>Notícias do Mercado</h1>
+<p style="color: var(--text-dim);">
+    Manchetes das fontes de notícias e análises configuradas abaixo &mdash; um resumo pra leitura, não um sinal
+    automático de compra/venda. As fontes são compartilhadas entre todos os usuários, como o mural de atividade.
+</p>
+<a href="{% url 'core:noticias_atualizar' %}" class="btn-futurista btn-atualizar-noticias" data-overlay-texto="Buscando notícias...">Atualizar notícias agora</a>
+
+<div class="card-glass" style="margin: 1.5rem 0;">
+    <h3 style="margin-top: 0;">Fontes de notícias</h3>
+    <p style="color: var(--text-dim); font-size: .9rem;">
+        Adicione qualquer site de notícias/análises de mercado. Uma fonte inativa não é lida em "Atualizar notícias
+        agora", mas o histórico dela continua aparecendo abaixo.
+    </p>
+
+    <form method="post" class="form-futurista" style="display: flex; gap: .8rem; align-items: flex-end; flex-wrap: wrap; margin-bottom: 1.4rem;">
+        {% csrf_token %}
+        {% for field in form %}
+        <div style="flex: 1; min-width: 220px;">
+            <label for="{{ field.id_for_label }}" style="margin-top: 0;">{{ field.label }}</label>
+            {{ field }}
+            {{ field.errors }}
+        </div>
+        {% endfor %}
+        <button type="submit" class="btn-futurista">Adicionar fonte</button>
+    </form>
+
+    {% if fontes %}
+    <div class="tabela-scroll">
+    <table class="tabela-futurista">
+        <thead>
+            <tr>
+                <th>Fonte</th>
+                <th>URL</th>
+                <th>Status</th>
+                <th>Ação</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for fonte in fontes %}
+            <tr>
+                <td><strong>{{ fonte.nome }}</strong></td>
+                <td><a href="{{ fonte.url }}" target="_blank" rel="noopener">{{ fonte.url }}</a></td>
+                <td>
+                    {% if fonte.ativa %}
+                        <span class="badge-tendencia badge-alta">Ativa</span>
+                    {% else %}
+                        <span class="badge-tendencia badge-neutro">Inativa</span>
+                    {% endif %}
+                </td>
+                <td>
+                    <div style="display: flex; gap: .4rem;">
+                        <form method="post" action="{% url 'core:noticia_fonte_alternar' fonte.id %}">
+                            {% csrf_token %}
+                            <button type="submit" class="btn-futurista btn-secundario btn-icone" title="{% if fonte.ativa %}Desativar{% else %}Ativar{% endif %}" aria-label="{% if fonte.ativa %}Desativar{% else %}Ativar{% endif %}">
+                                {% if fonte.ativa %}⏸️{% else %}▶️{% endif %}
+                            </button>
+                        </form>
+                        <form method="post" action="{% url 'core:noticia_fonte_excluir' fonte.id %}" onsubmit="return confirm('Excluir a fonte {{ fonte.nome }} e todas as notícias capturadas dela? Essa ação não pode ser desfeita.');">
+                            {% csrf_token %}
+                            <button type="submit" class="btn-futurista btn-secundario btn-icone" style="color: var(--neon-red); border-color: rgba(255, 56, 96, .4);" title="Excluir" aria-label="Excluir">🗑️</button>
+                        </form>
+                    </div>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    </div>
+    {% else %}
+    <p style="color: var(--text-dim);">Nenhuma fonte cadastrada ainda.</p>
+    {% endif %}
+</div>
+
+{% if itens %}
+<div class="card-glass">
+    <div class="abas-navegacao" role="tablist">
+        {% for item in itens %}
+        <button type="button" class="aba-navegacao{% if forloop.first %} ativa{% endif %}" role="tab"
+                aria-selected="{% if forloop.first %}true{% else %}false{% endif %}"
+                data-alvo="painel-fonte-{{ item.fonte.id }}">
+            {{ item.fonte.nome }}
+            {% if item.tem_novas %}<span class="badge-noticia-nova" style="margin-left: .35rem;">Nova</span>{% endif %}
+        </button>
+        {% endfor %}
+    </div>
+
+    {% for item in itens %}
+    <div class="painel-abas" id="painel-fonte-{{ item.fonte.id }}" role="tabpanel"{% if not forloop.first %} hidden{% endif %}>
+        {% if item.noticias %}
+        <ul style="list-style: none; padding: 0; margin: 0;">
+            {% for noticia in item.noticias %}
+            <li style="padding: .55rem 0; border-bottom: 1px solid rgba(0,240,255,.1);" class="{% if noticia.id in noticias_novas_ids %}item-noticia-nova{% endif %}">
+                <a href="{{ noticia.url }}" target="_blank" rel="noopener">{{ noticia.titulo }}</a>
+                {% if noticia.id in noticias_novas_ids %}<span class="badge-noticia-nova">Nova</span>{% endif %}
+                <br><small style="color: var(--text-dim);">Capturada em {{ noticia.capturada_em|date:"d/m/Y H:i" }}</small>
+            </li>
+            {% endfor %}
+        </ul>
+        {% else %}
+        <p style="color: var(--text-dim);">Nenhuma notícia capturada ainda dessa fonte - clique em "Atualizar notícias agora".</p>
+        {% endif %}
+    </div>
+    {% endfor %}
+</div>
+{% endif %}
+
+<script>
+    (function () {
+        var abas = document.querySelectorAll(".aba-navegacao");
+        abas.forEach(function (aba) {
+            aba.addEventListener("click", function () {
+                abas.forEach(function (a) {
+                    a.classList.remove("ativa");
+                    a.setAttribute("aria-selected", "false");
+                });
+                document.querySelectorAll(".painel-abas").forEach(function (p) {
+                    p.hidden = true;
+                });
+                aba.classList.add("ativa");
+                aba.setAttribute("aria-selected", "true");
+                document.getElementById(aba.dataset.alvo).hidden = false;
+            });
+        });
+    })();
+</script>
+{% endblock %}

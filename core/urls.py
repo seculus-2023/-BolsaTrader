@@ -1,0 +1,42 @@
+from django.urls import path
+from . import views
+
+app_name = "core"
+
+urlpatterns = [
+    path("", views.dashboard, name="dashboard"),
+    path("menu/", views.menu, name="menu"),
+    path("operacoes/", views.operacao_lista, name="operacao_lista"),
+    path("operacoes/exportar/excel/", views.operacoes_exportar_excel, name="operacoes_exportar_excel"),
+    path("operacoes/exportar/pdf/", views.operacoes_exportar_pdf, name="operacoes_exportar_pdf"),
+    path("operacoes/nova/", views.operacao_nova, name="operacao_nova"),
+    path("operacoes/<int:operacao_id>/vender/", views.operacao_vender, name="operacao_vender"),
+    path("operacoes/<int:operacao_id>/comprar/", views.operacao_comprar, name="operacao_comprar"),
+    path("operacoes/<int:operacao_id>/editar/", views.operacao_editar, name="operacao_editar"),
+    path(
+        "operacoes/<int:operacao_id>/editar-reserva/",
+        views.operacao_editar_reserva,
+        name="operacao_editar_reserva",
+    ),
+    path("operacoes/<int:operacao_id>/excluir/", views.operacao_excluir, name="operacao_excluir"),
+    path("posicoes/", views.posicoes, name="posicoes"),
+    path("posicoes/exportar/excel/", views.posicoes_exportar_excel, name="posicoes_exportar_excel"),
+    path("posicoes/exportar/pdf/", views.posicoes_exportar_pdf, name="posicoes_exportar_pdf"),
+    path("alertas/", views.alertas, name="alertas"),
+    path("alertas/<int:alerta_id>/lido/", views.alerta_marcar_lido, name="alerta_marcar_lido"),
+    path("analise-mercado/", views.analise_mercado, name="analise_mercado"),
+    path("analise-mercado/robo/exportar/excel/", views.robo_exportar_excel, name="robo_exportar_excel"),
+    path("analise-mercado/robo/exportar/pdf/", views.robo_exportar_pdf, name="robo_exportar_pdf"),
+    path("tradingview/", views.tradingview, name="tradingview"),
+    path("historico-graficos/", views.historico_graficos, name="historico_graficos"),
+    path("whatsapp/", views.mensagens_whatsapp, name="mensagens_whatsapp"),
+    path("cotacoes/detalhes/", views.detalhes_cotacoes, name="detalhes_cotacoes"),
+    path("cotacoes/atualizar/", views.atualizar_cotacoes_agora, name="atualizar_cotacoes"),
+    path("cotacoes/consultar/", views.consultar_cotacao_avulsa, name="consultar_cotacao_avulsa"),
+    path("noticias/", views.noticias, name="noticias"),
+    path("noticias/atualizar/", views.noticias_atualizar, name="noticias_atualizar"),
+    path("noticias/fontes/<int:fonte_id>/alternar/", views.noticia_fonte_alternar, name="noticia_fonte_alternar"),
+    path("noticias/fontes/<int:fonte_id>/excluir/", views.noticia_fonte_excluir, name="noticia_fonte_excluir"),
+    path("acoes-b3/", views.acoes_b3, name="acoes_b3"),
+    path("acoes-b3/atualizar/", views.acoes_b3_atualizar, name="acoes_b3_atualizar"),
+]

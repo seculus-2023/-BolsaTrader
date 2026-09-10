@@ -1,0 +1,348 @@
+{% extends "base.html" %}
+{% block titulo %}Minhas Operações - BolsaTrader{% endblock %}
+{% block conteudo %}
+<h1>Minhas Operações</h1>
+<a href="{% url 'core:operacao_nova' %}" class="btn-futurista">+ Nova compra/reserva</a>
+{% if existe_alguma_operacao %}
+<a href="{% url 'core:operacoes_exportar_excel' %}?data_de_carteira={{ data_de_carteira }}&data_ate_carteira={{ data_ate_carteira }}&data_de_reservada={{ data_de_reservada }}&data_ate_reservada={{ data_ate_reservada }}&data_de_venda={{ data_de_venda }}&data_ate_venda={{ data_ate_venda }}&ativo={{ ativo_selecionado }}" class="btn-futurista btn-secundario">⬇ Exportar Excel</a>
+<a href="{% url 'core:operacoes_exportar_pdf' %}?data_de_carteira={{ data_de_carteira }}&data_ate_carteira={{ data_ate_carteira }}&data_de_reservada={{ data_de_reservada }}&data_ate_reservada={{ data_ate_reservada }}&data_de_venda={{ data_de_venda }}&data_ate_venda={{ data_ate_venda }}&ativo={{ ativo_selecionado }}" class="btn-futurista btn-secundario">⬇ Exportar PDF</a>
+{% endif %}
+<p class="badge-horario-b3 {% if b3_mercado_aberto %}aberto{% else %}fechado{% endif %}">
+    {% if b3_mercado_aberto %}🟢{% else %}⚪{% endif %} B3: {{ b3_horario_abertura }} - {{ b3_horario_fechamento }} &middot; {% if b3_mercado_aberto %}Mercado aberto{% else %}Mercado fechado{% endif %}
+</p>
+
+<div class="card-glass" style="margin-top: 1.5rem;">
+    <form method="get" class="form-futurista" style="display: flex; gap: .8rem; align-items: flex-end; flex-wrap: wrap;">
+        <input type="hidden" name="data_de_carteira" value="{{ data_de_carteira }}">
+        <input type="hidden" name="data_ate_carteira" value="{{ data_ate_carteira }}">
+        <input type="hidden" name="data_de_reservada" value="{{ data_de_reservada }}">
+        <input type="hidden" name="data_ate_reservada" value="{{ data_ate_reservada }}">
+        <input type="hidden" name="data_de_venda" value="{{ data_de_venda }}">
+        <input type="hidden" name="data_ate_venda" value="{{ data_ate_venda }}">
+        <div>
+            <label for="id_ativo" style="margin-top: 0;">Ativo</label>
+            <select id="id_ativo" name="ativo" class="form-control-futurista">
+                <option value="">Todos os ativos</option>
+                {% for ticker in tickers_disponiveis %}
+                <option value="{{ ticker }}" {% if ticker == ativo_selecionado %}selected{% endif %}>{{ ticker }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <button type="submit" class="btn-futurista">Filtrar ativo</button>
+        <a href="{% url 'core:operacao_lista' %}?data_de_carteira=&data_ate_carteira=&data_de_reservada=&data_ate_reservada=&data_de_venda=&data_ate_venda=&ativo=" class="btn-futurista btn-secundario">Limpar todos os filtros</a>
+    </form>
+    <p style="color: var(--text-dim); margin: .6rem 0 0; font-size: .85rem;">
+        Cada grid abaixo tem seu próprio filtro de data - "Em carteira" e "Reservadas" filtram pela data da operação;
+        "Vendidas" filtra pela data da venda.
+    </p>
+</div>
+
+{% if resumo_vendas %}
+<h2 style="margin-top: 1.5rem;">Resumo das vendas</h2>
+<div class="grid-stats">
+    <div class="stat-tile">
+        <div class="label">Total comprado (parte vendida)</div>
+        <div class="value">R$ {{ resumo_vendas.total_comprado }}</div>
+    </div>
+    <div class="stat-tile">
+        <div class="label">Total vendido</div>
+        <div class="value">R$ {{ resumo_vendas.total_vendido }}</div>
+    </div>
+    <div class="stat-tile">
+        <div class="label">Lucro / Perda realizado</div>
+        <div class="value {% if resumo_vendas.lucro_total > 0 %}valor-positivo{% elif resumo_vendas.lucro_total < 0 %}valor-negativo{% else %}valor-neutro{% endif %}">
+            R$ {{ resumo_vendas.lucro_total }}
+            {% if resumo_vendas.lucro_pct_total is not None %}({{ resumo_vendas.lucro_pct_total }}%){% endif %}
+        </div>
+    </div>
+</div>
+{% endif %}
+
+{% if not operacoes and existe_alguma_operacao %}
+<div class="card-glass" style="margin-top: 1.5rem;">
+    <p style="color: var(--text-dim);">Nenhuma operação encontrada nesse período.</p>
+</div>
+{% endif %}
+
+<div class="abas-navegacao" role="tablist" style="margin-top: 1.5rem;">
+    <button type="button" class="aba-navegacao ativa" role="tab" aria-selected="true" data-alvo="painel-em-carteira">Em carteira ({{ operacoes_compradas|length }})</button>
+    <button type="button" class="aba-navegacao" role="tab" aria-selected="false" data-alvo="painel-reservadas">Reservadas ({{ operacoes_reservadas|length }})</button>
+    <button type="button" class="aba-navegacao" role="tab" aria-selected="false" data-alvo="painel-vendidas">Vendidas ({{ operacoes_vendidas|length }})</button>
+</div>
+
+<div class="painel-abas" id="painel-em-carteira" role="tabpanel">
+<form method="get" style="display: flex; gap: .6rem; align-items: flex-end; flex-wrap: wrap; margin-bottom: .8rem;">
+    <input type="hidden" name="data_de_reservada" value="{{ data_de_reservada }}">
+    <input type="hidden" name="data_ate_reservada" value="{{ data_ate_reservada }}">
+    <input type="hidden" name="data_de_venda" value="{{ data_de_venda }}">
+    <input type="hidden" name="data_ate_venda" value="{{ data_ate_venda }}">
+    <input type="hidden" name="ativo" value="{{ ativo_selecionado }}">
+    <div>
+        <label for="id_data_de_carteira" style="margin-top: 0; font-size: .8rem;">Data de</label>
+        <input type="date" id="id_data_de_carteira" name="data_de_carteira" value="{{ data_de_carteira }}" class="form-control-futurista">
+    </div>
+    <div>
+        <label for="id_data_ate_carteira" style="margin-top: 0; font-size: .8rem;">até</label>
+        <input type="date" id="id_data_ate_carteira" name="data_ate_carteira" value="{{ data_ate_carteira }}" class="form-control-futurista">
+    </div>
+    <button type="submit" class="btn-futurista btn-secundario" style="padding: .4rem .9rem; font-size: .85rem;">Filtrar</button>
+</form>
+<div class="card-glass">
+    {% if operacoes_compradas %}
+    <div class="tabela-scroll">
+    <table class="tabela-futurista">
+        <thead>
+            <tr>
+                <th>Ação</th>
+                <th>Data</th>
+                <th>Dias</th>
+                <th>Ativo</th>
+                <th>Qtd. comprada</th>
+                <th>Preço compra</th>
+                <th>Total compra</th>
+                <th>Qtd. vendida</th>
+                <th>Preço venda</th>
+                <th>Total venda</th>
+                <th>Saldo</th>
+                <th>Lucro/Perda realizado</th>
+                <th>Metas (lucro / perda)</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for op in operacoes_compradas %}
+            <tr{% if op.meta_lucro_atingida %} class="linha-meta-atingida"{% endif %}>
+                <td>
+                    <div style="display: flex; gap: .4rem;">
+                        <a href="{% url 'core:operacao_vender' op.id %}" class="btn-futurista btn-secundario btn-icone" title="Vender" aria-label="Vender">💰</a>
+                        <a href="{% url 'core:operacao_editar' op.id %}" class="btn-futurista btn-secundario btn-icone" title="Alterar" aria-label="Alterar">✏️</a>
+                        <form method="post" action="{% url 'core:operacao_excluir' op.id %}" onsubmit="return confirm('Excluir esta compra de {{ op.ativo.ticker }}? Essa ação não pode ser desfeita.');">
+                            {% csrf_token %}
+                            <button type="submit" class="btn-futurista btn-secundario btn-icone" style="color: var(--neon-red); border-color: rgba(255, 56, 96, .4);" title="Excluir" aria-label="Excluir">🗑️</button>
+                        </form>
+                    </div>
+                </td>
+                <td>{{ op.data_operacao|date:"d/m/Y" }}</td>
+                <td>
+                    {% if op.dias_desde_operacao == 0 %}hoje{% elif op.dias_desde_operacao == 1 %}1 dia{% else %}{{ op.dias_desde_operacao }} dias{% endif %}
+                </td>
+                <td>
+                    <strong title="{{ op.ativo.nome_longo|default:op.ativo.nome }}">{{ op.ativo.ticker }}</strong>
+                    {% if op.meta_lucro_atingida %}
+                        <span class="badge-venda">🎯 Meta atingida &mdash; vender</span>
+                    {% endif %}
+                </td>
+                <td>{{ op.quantidade }}</td>
+                <td>R$ {{ op.preco_unitario }}</td>
+                <td>R$ {{ op.valor_total }}</td>
+                <td>{{ op.quantidade_vendida }}</td>
+                <td>{% if op.preco_venda %}R$ {{ op.preco_venda }}{% else %}&mdash;{% endif %}</td>
+                <td>{% if op.valor_total_vendido is not None %}R$ {{ op.valor_total_vendido }}{% else %}&mdash;{% endif %}</td>
+                <td>{{ op.saldo }}</td>
+                <td class="{% if op.lucro_perda_realizado > 0 %}valor-positivo{% elif op.lucro_perda_realizado < 0 %}valor-negativo{% endif %}">
+                    {% if op.lucro_perda_realizado is not None %}
+                        R$ {{ op.lucro_perda_realizado }} ({{ op.lucro_perda_pct_realizado }}%)
+                    {% else %}&mdash;{% endif %}
+                </td>
+                <td>
+                    {% if op.meta_lucro_pct %}+{{ op.meta_lucro_pct }}%{% else %}&mdash;{% endif %}
+                    /
+                    {% if op.meta_perda_pct %}{{ op.meta_perda_pct }}%{% else %}&mdash;{% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    </div>
+    {% else %}
+    <p style="color: var(--text-dim);">Nenhuma compra em carteira no momento.</p>
+    {% endif %}
+</div>
+</div>
+
+<div class="painel-abas" id="painel-reservadas" role="tabpanel" hidden>
+<form method="get" style="display: flex; gap: .6rem; align-items: flex-end; flex-wrap: wrap; margin-bottom: .8rem;">
+    <input type="hidden" name="data_de_carteira" value="{{ data_de_carteira }}">
+    <input type="hidden" name="data_ate_carteira" value="{{ data_ate_carteira }}">
+    <input type="hidden" name="data_de_venda" value="{{ data_de_venda }}">
+    <input type="hidden" name="data_ate_venda" value="{{ data_ate_venda }}">
+    <input type="hidden" name="ativo" value="{{ ativo_selecionado }}">
+    <div>
+        <label for="id_data_de_reservada" style="margin-top: 0; font-size: .8rem;">Data de</label>
+        <input type="date" id="id_data_de_reservada" name="data_de_reservada" value="{{ data_de_reservada }}" class="form-control-futurista">
+    </div>
+    <div>
+        <label for="id_data_ate_reservada" style="margin-top: 0; font-size: .8rem;">até</label>
+        <input type="date" id="id_data_ate_reservada" name="data_ate_reservada" value="{{ data_ate_reservada }}" class="form-control-futurista">
+    </div>
+    <button type="submit" class="btn-futurista btn-secundario" style="padding: .4rem .9rem; font-size: .85rem;">Filtrar</button>
+</form>
+<div class="card-glass">
+    {% if operacoes_reservadas %}
+    <div class="tabela-scroll">
+    <table class="tabela-futurista">
+        <thead>
+            <tr>
+                <th>Ação</th>
+                <th>Data</th>
+                <th>Dias</th>
+                <th>Ativo</th>
+                <th>Quantidade</th>
+                <th>Preço pretendido</th>
+                <th>Total pretendido</th>
+                <th>Variação desde a reserva</th>
+                <th>Metas (lucro / perda)</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for op in operacoes_reservadas %}
+            <tr class="{% if op.meta_compra_atingida %}linha-meta-compra {% endif %}{% if "robô consultor" in op.observacao|lower %}linha-robo{% endif %}">
+                <td>
+                    <div style="display: flex; gap: .4rem;">
+                        <a href="{% url 'core:operacao_comprar' op.id %}" class="btn-futurista btn-secundario btn-icone" title="Comprar" aria-label="Comprar">🛒</a>
+                        <a href="{% url 'core:operacao_editar_reserva' op.id %}" class="btn-futurista btn-secundario btn-icone" title="Alterar" aria-label="Alterar">✏️</a>
+                        <form method="post" action="{% url 'core:operacao_excluir' op.id %}" onsubmit="return confirm('Excluir esta reserva de {{ op.ativo.ticker }}? Essa ação não pode ser desfeita.');">
+                            {% csrf_token %}
+                            <button type="submit" class="btn-futurista btn-secundario btn-icone" style="color: var(--neon-red); border-color: rgba(255, 56, 96, .4);" title="Excluir" aria-label="Excluir">🗑️</button>
+                        </form>
+                    </div>
+                </td>
+                <td>{{ op.data_operacao|date:"d/m/Y" }}</td>
+                <td>
+                    {% if op.dias_desde_operacao == 0 %}hoje{% elif op.dias_desde_operacao == 1 %}1 dia{% else %}{{ op.dias_desde_operacao }} dias{% endif %}
+                </td>
+                <td>
+                    <strong title="{{ op.ativo.nome_longo|default:op.ativo.nome }}">{{ op.ativo.ticker }}</strong>
+                    {% if op.meta_compra_atingida %}
+                        <span class="badge-compra">📉 Baixa atingida &mdash; comprar</span>
+                    {% endif %}
+                    {% if "robô consultor" in op.observacao|lower %}
+                        <span class="badge-robo" title="{{ op.observacao }}">🤖 Robô</span>
+                    {% endif %}
+                </td>
+                <td>{{ op.quantidade }}</td>
+                <td>R$ {{ op.preco_unitario }}</td>
+                <td>R$ {{ op.valor_total }}</td>
+                <td class="{% if op.variacao_pct_reserva > 0 %}valor-positivo{% elif op.variacao_pct_reserva < 0 %}valor-negativo{% else %}valor-neutro{% endif %}">
+                    {% if op.variacao_pct_reserva is not None %}{{ op.variacao_pct_reserva }}%{% else %}&mdash;{% endif %}
+                </td>
+                <td>
+                    {% if op.meta_lucro_pct %}+{{ op.meta_lucro_pct }}%{% else %}&mdash;{% endif %}
+                    /
+                    {% if op.meta_perda_pct %}{{ op.meta_perda_pct }}%{% else %}&mdash;{% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    </div>
+    {% else %}
+    <p style="color: var(--text-dim);">Nenhuma reserva no momento.</p>
+    {% endif %}
+</div>
+</div>
+
+<div class="painel-abas" id="painel-vendidas" role="tabpanel" hidden>
+<form method="get" style="display: flex; gap: .6rem; align-items: flex-end; flex-wrap: wrap; margin-bottom: .8rem;">
+    <input type="hidden" name="data_de_carteira" value="{{ data_de_carteira }}">
+    <input type="hidden" name="data_ate_carteira" value="{{ data_ate_carteira }}">
+    <input type="hidden" name="data_de_reservada" value="{{ data_de_reservada }}">
+    <input type="hidden" name="data_ate_reservada" value="{{ data_ate_reservada }}">
+    <input type="hidden" name="ativo" value="{{ ativo_selecionado }}">
+    <div>
+        <label for="id_data_de_venda" style="margin-top: 0; font-size: .8rem;">Data da venda de</label>
+        <input type="date" id="id_data_de_venda" name="data_de_venda" value="{{ data_de_venda }}" class="form-control-futurista">
+    </div>
+    <div>
+        <label for="id_data_ate_venda" style="margin-top: 0; font-size: .8rem;">até</label>
+        <input type="date" id="id_data_ate_venda" name="data_ate_venda" value="{{ data_ate_venda }}" class="form-control-futurista">
+    </div>
+    <button type="submit" class="btn-futurista btn-secundario" style="padding: .4rem .9rem; font-size: .85rem;">Filtrar</button>
+</form>
+<div class="card-glass">
+    {% if operacoes_vendidas %}
+    <div class="tabela-scroll">
+    <table class="tabela-futurista">
+        <thead>
+            <tr>
+                <th>Data da compra</th>
+                <th>Data da venda</th>
+                <th>Dias em carteira</th>
+                <th>Ativo</th>
+                <th>Qtd. comprada</th>
+                <th>Preço compra</th>
+                <th>Total compra</th>
+                <th>Preço venda</th>
+                <th>Total venda</th>
+                <th>Corretora (%)</th>
+                <th>Valor líquido a receber</th>
+                <th>Lucro/Perda realizado</th>
+                <th>Metas (lucro / perda)</th>
+                <th>Ação</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for op in operacoes_vendidas %}
+            <tr>
+                <td>{{ op.data_operacao|date:"d/m/Y" }}</td>
+                <td>{% if op.data_venda %}{{ op.data_venda|date:"d/m/Y" }}{% else %}&mdash;{% endif %}</td>
+                <td>
+                    {% if op.dias_em_carteira_ate_venda is None %}&mdash;{% elif op.dias_em_carteira_ate_venda == 0 %}mesmo dia{% elif op.dias_em_carteira_ate_venda == 1 %}1 dia{% else %}{{ op.dias_em_carteira_ate_venda }} dias{% endif %}
+                </td>
+                <td><strong title="{{ op.ativo.nome_longo|default:op.ativo.nome }}">{{ op.ativo.ticker }}</strong></td>
+                <td>{{ op.quantidade }}</td>
+                <td>R$ {{ op.preco_unitario }}</td>
+                <td>R$ {{ op.valor_total }}</td>
+                <td>{% if op.preco_venda %}R$ {{ op.preco_venda }}{% else %}&mdash;{% endif %}</td>
+                <td>{% if op.valor_total_vendido is not None %}R$ {{ op.valor_total_vendido }}{% else %}&mdash;{% endif %}</td>
+                <td>{% if op.percentual_corretora %}{{ op.percentual_corretora }}%{% else %}&mdash;{% endif %}</td>
+                <td>{% if op.valor_liquido_vendido is not None %}R$ {{ op.valor_liquido_vendido }}{% else %}&mdash;{% endif %}</td>
+                <td class="{% if op.lucro_perda_realizado > 0 %}valor-positivo{% elif op.lucro_perda_realizado < 0 %}valor-negativo{% endif %}">
+                    {% if op.lucro_perda_realizado is not None %}
+                        R$ {{ op.lucro_perda_realizado }} ({{ op.lucro_perda_pct_realizado }}%)
+                    {% else %}&mdash;{% endif %}
+                </td>
+                <td>
+                    {% if op.meta_lucro_pct %}+{{ op.meta_lucro_pct }}%{% else %}&mdash;{% endif %}
+                    /
+                    {% if op.meta_perda_pct %}{{ op.meta_perda_pct }}%{% else %}&mdash;{% endif %}
+                </td>
+                <td>
+                    <div style="display: flex; gap: .4rem;">
+                        <a href="{% url 'core:operacao_vender' op.id %}" class="btn-futurista btn-secundario btn-icone" title="Editar venda" aria-label="Editar venda">✏️</a>
+                        <form method="post" action="{% url 'core:operacao_excluir' op.id %}" onsubmit="return confirm('Excluir esta compra de {{ op.ativo.ticker }}? Essa ação não pode ser desfeita.');">
+                            {% csrf_token %}
+                            <button type="submit" class="btn-futurista btn-secundario btn-icone" style="color: var(--neon-red); border-color: rgba(255, 56, 96, .4);" title="Excluir" aria-label="Excluir">🗑️</button>
+                        </form>
+                    </div>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    </div>
+    {% else %}
+    <p style="color: var(--text-dim);">Nenhuma compra totalmente vendida ainda.</p>
+    {% endif %}
+</div>
+</div>
+
+<script>
+    (function () {
+        var abas = document.querySelectorAll(".aba-navegacao");
+        abas.forEach(function (aba) {
+            aba.addEventListener("click", function () {
+                abas.forEach(function (a) {
+                    a.classList.remove("ativa");
+                    a.setAttribute("aria-selected", "false");
+                });
+                document.querySelectorAll(".painel-abas").forEach(function (p) {
+                    p.hidden = true;
+                });
+                aba.classList.add("ativa");
+                aba.setAttribute("aria-selected", "true");
+                document.getElementById(aba.dataset.alvo).hidden = false;
+            });
+        });
+    })();
+</script>
+{% endblock %}

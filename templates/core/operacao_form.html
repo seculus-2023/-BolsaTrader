@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block titulo %}Nova operação - BolsaTrader{% endblock %}
+{% block conteudo %}
+<h1>Registrar Compra / Reserva</h1>
+<p style="color: var(--text-dim);">
+    Para vender, registre a compra primeiro e depois use o botão "Vender" na lista de
+    <a href="{% url 'core:operacao_lista' %}">Minhas Operações</a>.
+</p>
+
+<div class="card-glass" style="max-width: 640px;">
+    <form method="post" class="form-futurista">
+        {% csrf_token %}
+        {% for field in form %}
+            <label for="{{ field.id_for_label }}">{{ field.label }}</label>
+            {{ field }}
+            {{ field.errors }}
+        {% endfor %}
+        <button type="submit" class="btn-futurista" style="margin-top: 1.6rem;">Salvar operação</button>
+        <a href="{% url 'core:operacao_lista' %}" class="btn-futurista btn-secundario">Cancelar</a>
+    </form>
+</div>
+
+<script>
+    // No tipo "Reservar", a quantidade não pode passar de 1 (mesma regra validada no servidor).
+    (function () {
+        var campoTipo = document.getElementById("id_tipo");
+        var campoQuantidade = document.getElementById("id_quantidade");
+        if (!campoTipo || !campoQuantidade) return;
+
+        function ajustarLimiteQuantidade() {
+            if (campoTipo.value === "RESERVAR") {
+                campoQuantidade.setAttribute("max", "1");
+                if (Number(campoQuantidade.value) > 1) campoQuantidade.value = "1";
+            } else {
+                campoQuantidade.removeAttribute("max");
+            }
+        }
+
+        campoTipo.addEventListener("change", ajustarLimiteQuantidade);
+        ajustarLimiteQuantidade();
+    })();
+</script>
+{% endblock %}

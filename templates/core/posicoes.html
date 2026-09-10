@@ -1,0 +1,289 @@
+{% extends "base.html" %}
+{% load static l10n %}
+{% block titulo %}Posições - BolsaTrader{% endblock %}
+{% block conteudo %}
+<h1>Posições em Carteira</h1>
+<p style="color: var(--text-dim);">Consolidado das ações compradas, com percentual de lucro ou perda com base na última cotação.</p>
+
+<a href="{% url 'core:atualizar_cotacoes' %}" class="btn-futurista btn-atualizar-cotacoes" data-overlay-texto="Atualizando cotações...">Atualizar cotações agora</a>
+{% if posicoes %}
+<a href="{% url 'core:posicoes_exportar_excel' %}" class="btn-futurista btn-secundario">⬇ Exportar Excel</a>
+<a href="{% url 'core:posicoes_exportar_pdf' %}" class="btn-futurista btn-secundario">⬇ Exportar PDF</a>
+{% endif %}
+{% if ultima_atualizacao_cotacoes %}
+<p class="badge-atualizacao">⏱ Última atualização das cotações: {{ ultima_atualizacao_cotacoes|date:"d/m/Y H:i" }}</p>
+{% endif %}
+<p class="badge-horario-b3 {% if b3_mercado_aberto %}aberto{% else %}fechado{% endif %}">
+    {% if b3_mercado_aberto %}🟢{% else %}⚪{% endif %} B3: {{ b3_horario_abertura }} - {{ b3_horario_fechamento }} &middot; {% if b3_mercado_aberto %}Mercado aberto{% else %}Mercado fechado{% endif %}
+</p>
+
+<div class="grid-stats" style="margin-top: 1.2rem;">
+    <div class="stat-tile">
+        <div class="label">Ativos em carteira</div>
+        <div class="value">{{ total_ativos }}</div>
+    </div>
+    <div class="stat-tile">
+        <div class="label">Valor investido</div>
+        <div class="value">R$ {{ valor_investido_total|floatformat:2 }}</div>
+    </div>
+    <div class="stat-tile">
+        <div class="label">Valor atual</div>
+        <div class="value">R$ {{ valor_atual_total|floatformat:2 }}</div>
+    </div>
+    <div class="stat-tile">
+        <div class="label">Lucro / Perda</div>
+        <div class="value {% if lucro_perda_total > 0 %}valor-positivo{% elif lucro_perda_total < 0 %}valor-negativo{% else %}valor-neutro{% endif %}">
+            R$ {{ lucro_perda_total|floatformat:2 }}
+            {% if lucro_perda_pct_total is not None %}({{ lucro_perda_pct_total|floatformat:2 }}%){% endif %}
+        </div>
+    </div>
+</div>
+
+{% if posicoes %}
+<div class="abas-navegacao" role="tablist" style="margin-top: 1.2rem;">
+    <button type="button" class="aba-navegacao ativa" role="tab" aria-selected="true" data-alvo="painel-compradas">Compradas ({{ posicoes_compradas|length }})</button>
+    <button type="button" class="aba-navegacao" role="tab" aria-selected="false" data-alvo="painel-reservadas-pos">Reservadas ({{ posicoes_reservadas|length }})</button>
+    <button type="button" class="aba-navegacao" role="tab" aria-selected="false" data-alvo="painel-reservadas-robo">Reservadas pelo Robô ({{ posicoes_reservadas_robo|length }})</button>
+</div>
+
+<div class="painel-abas" id="painel-compradas" role="tabpanel">
+<div class="card-glass">
+    {% if posicoes_compradas %}
+    <div class="tabela-scroll">
+    <table class="tabela-futurista">
+        <thead>
+            <tr>
+                <th>Dias em carteira</th>
+                <th>Ativo</th>
+                <th>Lucro/Perda (%)</th>
+                <th>Lucro/Perda (R$)</th>
+                <th>Qtd.</th>
+                <th>Preço médio</th>
+                <th>Valor investido</th>
+                <th>Cotação atual</th>
+                <th>Valor atual</th>
+                <th>Meta lucro / perda</th>
+                <th>Tendência</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for p in posicoes_compradas %}
+            <tr{% if p.reserva_do_robo or p.meta_lucro_atingida %} class="{% if p.reserva_do_robo %}linha-robo {% endif %}{% if p.meta_lucro_atingida %}linha-meta-atingida{% endif %}"{% endif %}>
+                <td>
+                    {% if p.dias_desde_compra is not None %}
+                        {% if p.dias_desde_compra == 0 %}hoje{% elif p.dias_desde_compra == 1 %}1 dia{% else %}{{ p.dias_desde_compra }} dias{% endif %}
+                    {% else %}&mdash;{% endif %}
+                </td>
+                <td>
+                    <strong title="{{ p.ativo.nome_longo|default:p.ativo.nome }}">{{ p.ativo.ticker }}</strong>
+                    {% if p.quantidade_reservada %}
+                        <span class="badge-tendencia badge-neutro" style="margin-left: .4rem;">🔖 +{{ p.quantidade_reservada }} reservada{{ p.quantidade_reservada|pluralize }}</span>
+                    {% endif %}
+                    {% if p.reserva_do_robo %}
+                        <span class="badge-robo" title="Reserva automática do robô consultor">🤖 Robô</span>
+                    {% endif %}
+                    {% if p.meta_lucro_atingida %}
+                        <span class="badge-venda">🎯 Meta atingida &mdash; vender</span>
+                    {% endif %}
+                </td>
+                <td class="{% if p.situacao == 'LUCRO' %}valor-positivo{% elif p.situacao == 'PERDA' %}valor-negativo{% else %}valor-neutro{% endif %}">
+                    {% if p.lucro_perda_pct is not None %}{{ p.lucro_perda_pct }}%{% else %}&mdash;{% endif %}
+                </td>
+                <td class="{% if p.situacao == 'LUCRO' %}valor-positivo{% elif p.situacao == 'PERDA' %}valor-negativo{% else %}valor-neutro{% endif %}">
+                    {% if p.lucro_perda_valor is not None %}R$ {{ p.lucro_perda_valor }}{% else %}&mdash;{% endif %}
+                </td>
+                <td>{{ p.quantidade }}</td>
+                <td>R$ {{ p.preco_medio }}</td>
+                <td>R$ {{ p.valor_investido }}</td>
+                <td>{% if p.preco_atual %}R$ {{ p.preco_atual }}{% else %}&mdash;{% endif %}</td>
+                <td>{% if p.valor_atual %}R$ {{ p.valor_atual }}{% else %}&mdash;{% endif %}</td>
+                <td>
+                    {% if p.meta_lucro_pct %}+{{ p.meta_lucro_pct }}%{% else %}padrão{% endif %}
+                    /
+                    {% if p.meta_perda_pct %}{{ p.meta_perda_pct }}%{% else %}padrão{% endif %}
+                </td>
+                <td>{% if p.tendencia %}<span class="badge-tendencia badge-{{ p.tendencia|lower|slugify }}">{{ p.tendencia }}</span>{% else %}&mdash;{% endif %}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    </div>
+    {% else %}
+    <p style="color: var(--text-dim);">Nenhuma ação comprada no momento.</p>
+    {% endif %}
+</div>
+</div>
+
+<div class="painel-abas" id="painel-reservadas-pos" role="tabpanel" hidden>
+<div class="card-glass">
+    {% if posicoes_reservadas %}
+    <div class="tabela-scroll">
+    <table class="tabela-futurista">
+        <thead>
+            <tr>
+                <th>Ativo</th>
+                <th>Preço pretendido</th>
+                <th>Cotação atual</th>
+                <th>Variação desde a reserva</th>
+                <th>Meta lucro / perda</th>
+                <th>Tendência</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for p in posicoes_reservadas %}
+            <tr{% if p.meta_compra_atingida %} class="linha-meta-compra"{% endif %}>
+                <td>
+                    <strong title="{{ p.ativo.nome_longo|default:p.ativo.nome }}">{{ p.ativo.ticker }}</strong>
+                    {% if p.meta_compra_atingida %}
+                        <span class="badge-compra">📉 Baixa atingida &mdash; comprar</span>
+                    {% endif %}
+                </td>
+                <td>R$ {{ p.preco_medio }}</td>
+                <td>{% if p.preco_atual %}R$ {{ p.preco_atual }}{% else %}&mdash;{% endif %}</td>
+                <td class="{% if p.variacao_pct_reserva > 0 %}valor-positivo{% elif p.variacao_pct_reserva < 0 %}valor-negativo{% else %}valor-neutro{% endif %}">
+                    {% if p.variacao_pct_reserva is not None %}{{ p.variacao_pct_reserva }}%{% else %}&mdash;{% endif %}
+                </td>
+                <td>
+                    {% if p.meta_lucro_pct %}+{{ p.meta_lucro_pct }}%{% else %}padrão{% endif %}
+                    /
+                    {% if p.meta_perda_pct %}{{ p.meta_perda_pct }}%{% else %}padrão{% endif %}
+                </td>
+                <td>{% if p.tendencia %}<span class="badge-tendencia badge-{{ p.tendencia|lower|slugify }}">{{ p.tendencia }}</span>{% else %}&mdash;{% endif %}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    </div>
+    {% else %}
+    <p style="color: var(--text-dim);">Nenhuma reserva manual no momento.</p>
+    {% endif %}
+</div>
+</div>
+
+<div class="painel-abas" id="painel-reservadas-robo" role="tabpanel" hidden>
+<div class="card-glass">
+    {% if posicoes_reservadas_robo %}
+    <div class="tabela-scroll">
+    <table class="tabela-futurista">
+        <thead>
+            <tr>
+                <th>Ativo</th>
+                <th>Preço pretendido</th>
+                <th>Cotação atual</th>
+                <th>Variação desde a reserva</th>
+                <th>Meta lucro / perda</th>
+                <th>Tendência</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for p in posicoes_reservadas_robo %}
+            <tr class="linha-robo{% if p.meta_compra_atingida %} linha-meta-compra{% endif %}">
+                <td>
+                    <strong title="{{ p.ativo.nome_longo|default:p.ativo.nome }}">{{ p.ativo.ticker }}</strong>
+                    <span class="badge-robo" title="Reserva automática do robô consultor">🤖 Robô</span>
+                    {% if p.meta_compra_atingida %}
+                        <span class="badge-compra">📉 Baixa atingida &mdash; comprar</span>
+                    {% endif %}
+                </td>
+                <td>R$ {{ p.preco_medio }}</td>
+                <td>{% if p.preco_atual %}R$ {{ p.preco_atual }}{% else %}&mdash;{% endif %}</td>
+                <td class="{% if p.variacao_pct_reserva > 0 %}valor-positivo{% elif p.variacao_pct_reserva < 0 %}valor-negativo{% else %}valor-neutro{% endif %}">
+                    {% if p.variacao_pct_reserva is not None %}{{ p.variacao_pct_reserva }}%{% else %}&mdash;{% endif %}
+                </td>
+                <td>
+                    {% if p.meta_lucro_pct %}+{{ p.meta_lucro_pct }}%{% else %}padrão{% endif %}
+                    /
+                    {% if p.meta_perda_pct %}{{ p.meta_perda_pct }}%{% else %}padrão{% endif %}
+                </td>
+                <td>{% if p.tendencia %}<span class="badge-tendencia badge-{{ p.tendencia|lower|slugify }}">{{ p.tendencia }}</span>{% else %}&mdash;{% endif %}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    </div>
+    {% else %}
+    <p style="color: var(--text-dim);">Nenhuma sugestão do robô no momento.</p>
+    {% endif %}
+</div>
+</div>
+
+<script>
+    (function () {
+        var abas = document.querySelectorAll(".aba-navegacao");
+        abas.forEach(function (aba) {
+            aba.addEventListener("click", function () {
+                abas.forEach(function (a) {
+                    a.classList.remove("ativa");
+                    a.setAttribute("aria-selected", "false");
+                });
+                document.querySelectorAll(".painel-abas").forEach(function (p) {
+                    p.hidden = true;
+                });
+                aba.classList.add("ativa");
+                aba.setAttribute("aria-selected", "true");
+                document.getElementById(aba.dataset.alvo).hidden = false;
+            });
+        });
+    })();
+</script>
+{% else %}
+<div class="card-glass" style="margin-top: 1.2rem;">
+    <p style="color: var(--text-dim);">Nenhuma posição em carteira. <a href="{% url 'core:operacao_nova' %}">Registrar uma compra</a>.</p>
+</div>
+{% endif %}
+
+{% if comparativo %}
+<div class="card-glass" style="margin-top: 1.2rem;">
+    <h2>Valor de compra x valor atual (histórico)</h2>
+    <p style="color: var(--text-dim); font-size: .85rem; margin-top: -.5rem;">
+        Para cada ativo, a linha do valor de compra (o quanto você pagou) contra a linha do valor atual ao longo do
+        histórico de cotações &mdash; só das ações realmente compradas (reservas não entram).
+    </p>
+    <div class="legenda-comparativo">
+        <span><i class="swatch swatch-investido"></i> Valor de compra</span>
+        <span><i class="swatch swatch-ganho"></i> Valor atual &mdash; lucro</span>
+        <span><i class="swatch swatch-perda"></i> Valor atual &mdash; perda</span>
+    </div>
+</div>
+
+{% for grafico in comparativo %}
+<div class="card-glass" style="margin-top: 1rem;">
+    <h3>{{ grafico.ativo.ticker }} {% if grafico.ativo.nome %}<small style="color: var(--text-dim); font-family: 'Rajdhani', sans-serif;">— {{ grafico.ativo.nome }}</small>{% endif %}</h3>
+    <div class="tabela-scroll">
+    <div class="grafico-wrap">
+        {% localize off %}
+        <svg viewBox="0 0 {{ grafico.largura }} {{ grafico.altura }}"
+             class="grafico-comparativo" preserveAspectRatio="none"
+             style="width: {{ grafico.largura }}px; height: {{ grafico.altura }}px;"
+             data-pontos-id="{{ grafico.id_svg }}"
+             role="img" aria-label="Valor de compra x valor atual de {{ grafico.ativo.ticker }}">
+            {% for linha in grafico.eixo_y %}
+            <line x1="{{ grafico.x_inicio }}" y1="{{ linha.y }}" x2="{{ grafico.x_fim }}" y2="{{ linha.y }}" class="grafico-grid" />
+            <text x="2" y="{{ linha.label_y }}" class="grafico-eixo-texto">{{ linha.label }}</text>
+            {% endfor %}
+
+            <path d="{{ grafico.path_compra }}" fill="none" class="linha-comparativo linha-investido" />
+            <path d="{{ grafico.path_atual }}" fill="none" class="linha-comparativo {% if grafico.ganho_atual %}linha-ganho{% else %}linha-perda{% endif %}" />
+
+            <circle cx="{{ grafico.x_inicio }}" cy="{{ grafico.y_compra }}" r="4" class="marcador-comparativo marcador-investido" />
+            <circle cx="{{ grafico.x_fim }}" cy="{{ grafico.y_compra }}" r="4" class="marcador-comparativo marcador-investido" />
+            {% for p in grafico.pontos %}
+                {% if forloop.first or forloop.last %}
+                <circle cx="{{ p.x }}" cy="{{ p.y }}" r="4" class="marcador-comparativo {% if p.ganho %}marcador-ganho{% else %}marcador-perda{% endif %}" />
+                {% endif %}
+            {% endfor %}
+        </svg>
+        {% endlocalize %}
+        {{ grafico.pontos|json_script:grafico.id_svg }}
+    </div>
+    </div>
+    <div class="grafico-eixos">
+        <span>{{ grafico.primeira_data }}</span>
+        <span>{{ grafico.ultima_data }}</span>
+    </div>
+</div>
+{% endfor %}
+{% endif %}
+
+<script src="{% static 'js/grafico.js' %}" defer></script>
+{% endblock %}

@@ -1,0 +1,140 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block titulo %}BolsaTrader{% endblock %}</title>
+
+    <!-- PWA: manifesto, cor do tema e ícones -->
+    <link rel="manifest" href="{% static 'manifest.webmanifest' %}">
+    <meta name="theme-color" content="#050912">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="BolsaTrader">
+    <meta name="description" content="Compra e venda de ações da B3: posições, lucro/perda, cotações diárias e sinais de tendência de mercado.">
+    <link rel="icon" type="image/png" sizes="32x32" href="{% static 'icons/favicon-32.png' %}">
+    <link rel="icon" type="image/png" sizes="16x16" href="{% static 'icons/favicon-16.png' %}">
+    <link rel="apple-touch-icon" href="{% static 'icons/apple-touch-icon.png' %}">
+
+    <link rel="stylesheet" href="{% static 'css/futurista.css' %}">
+</head>
+<body>
+    {% if user.is_authenticated %}
+    <header class="navbar-futurista">
+        <div class="brand">⚡ BOLSATRADER</div>
+        <button type="button" class="nav-toggle" id="btn-menu-mobile" aria-label="Abrir menu" aria-expanded="false" aria-controls="nav-principal">☰</button>
+        <nav id="nav-principal">
+            <a href="{% url 'core:dashboard' %}">Painel</a>
+            <a href="{% url 'core:menu' %}">Menu</a>
+            <a href="{% url 'core:operacao_lista' %}">Operações</a>
+            <a href="{% url 'core:posicoes' %}">Posições</a>
+            <a href="{% url 'core:analise_mercado' %}">Análise de Mercado</a>
+            <a href="{% url 'core:tradingview' %}">TradingView</a>
+            <a href="{% url 'core:historico_graficos' %}">Histórico e Gráficos</a>
+            <a href="{% url 'core:detalhes_cotacoes' %}">Detalhes de Cotações</a>
+            <a href="{% url 'core:acoes_b3' %}">Ações da B3</a>
+            <a href="{% url 'core:noticias' %}">Notícias do Mercado</a>
+            <a href="{% url 'core:alertas' %}">Alertas
+                {% if total_alertas_pendentes %}<span class="badge-alerta">{{ total_alertas_pendentes }}</span>{% endif %}
+            </a>
+            <a href="{% url 'accounts:cadastro' %}">Cadastrar Usuário</a>
+        </nav>
+        <div class="nav-user">
+            <button id="btn-instalar-pwa" class="btn-futurista btn-secundario" style="display:none; padding:.4rem .8rem; font-size:.85rem; margin-right:.6rem;">
+                ⬇ Instalar app
+            </button>
+            <span style="color: var(--text-dim); margin-right: .6rem;">Olá, {{ user.first_name|default:user.username }}</span>
+            <form method="post" action="{% url 'accounts:logout' %}" style="display: inline;">
+                {% csrf_token %}
+                <button type="submit" class="link-botao">Sair</button>
+            </form>
+        </div>
+    </header>
+    {% else %}
+    <button type="button" id="btn-instalar-pwa-anonimo" class="btn-futurista btn-secundario btn-instalar-flutuante" style="display:none;">
+        ⬇ Instalar app
+    </button>
+    {% endif %}
+
+    <main class="container-futurista">
+        {% if messages %}
+        <div class="mensagens">
+            {% for message in messages %}
+            <div class="mensagem {{ message.tags }}">{{ message }}</div>
+            {% endfor %}
+        </div>
+        {% endif %}
+
+        {% block conteudo %}{% endblock %}
+    </main>
+
+    <footer class="rodape-futurista">
+        BolsaTrader &mdash; sistema de acompanhamento de compra e venda de ações (B3). Uso educacional, não constitui recomendação de investimento.
+    </footer>
+
+    {% if user.is_authenticated and whatsapp_link %}
+    <a href="{{ whatsapp_link }}" class="whatsapp-flutuante" target="_blank" rel="noopener" aria-label="Falar no WhatsApp" title="Falar no WhatsApp">
+        <svg viewBox="0 0 32 32" width="28" height="28" fill="currentColor" aria-hidden="true">
+            <path d="M16.004 3C9.377 3 4 8.377 4 15.003c0 2.65.87 5.1 2.35 7.09L4.6 28.4l6.47-1.7a11.94 11.94 0 0 0 4.93 1.05h.005c6.627 0 12.004-5.377 12.004-12.003C28.007 8.377 22.63 3 16.004 3zm7.03 16.94c-.297.836-1.47 1.53-2.398 1.72-.638.13-1.472.234-4.28-.92-3.594-1.49-5.905-5.14-6.084-5.38-.176-.238-1.454-1.936-1.454-3.694 0-1.758.914-2.62 1.24-2.98.297-.328.646-.41.862-.41.216 0 .432.002.62.012.2.01.468-.076.732.56.297.71.99 2.454 1.076 2.63.087.176.145.383.03.62-.117.238-.176.383-.35.59-.176.208-.365.463-.523.622-.176.176-.36.366-.157.717.208.353.923 1.52 1.98 2.463 1.36 1.213 2.51 1.59 2.86 1.766.35.176.554.146.76-.088.207-.235.878-1.024 1.113-1.376.235-.353.47-.294.79-.176.322.117 2.037.96 2.387 1.135.35.176.583.264.67.41.086.147.086.85-.21 1.687z"/>
+        </svg>
+    </a>
+    {% endif %}
+
+    <div id="overlay-atualizando" class="overlay-atualizando" hidden>
+        <div class="spinner-atualizando" aria-hidden="true"></div>
+        <p id="overlay-atualizando-texto">Atualizando...</p>
+    </div>
+
+    <script src="{% static 'js/pwa.js' %}"></script>
+    <script>
+        (function () {
+            var overlay = document.getElementById("overlay-atualizando");
+            var texto = document.getElementById("overlay-atualizando-texto");
+            if (!overlay) return;
+            document.querySelectorAll(".btn-atualizar-cotacoes, .btn-atualizar-noticias, .btn-atualizar-acoes-b3").forEach(function (link) {
+                link.addEventListener("click", function () {
+                    texto.textContent = link.dataset.overlayTexto || "Atualizando...";
+                    overlay.hidden = false;
+                });
+            });
+        })();
+    </script>
+    {% if user.is_authenticated and total_alertas_acao_pendentes %}
+    <script>
+        (function () {
+            // Toca um som quando há meta de lucro/perda atingida ou sinal do
+            // robô consultor não lido - só uma vez por quantidade
+            // (sessionStorage), pra não repetir o beep a cada navegação
+            // enquanto o mesmo alerta continua sem ser lido.
+            var totalAcao = {{ total_alertas_acao_pendentes }};
+            var chave = "bolsatrader_som_acao_total";
+            if (sessionStorage.getItem(chave) === String(totalAcao)) return;
+            sessionStorage.setItem(chave, String(totalAcao));
+
+            try {
+                var Ctx = window.AudioContext || window.webkitAudioContext;
+                var ctx = new Ctx();
+                var agora = ctx.currentTime;
+
+                [0, 0.18].forEach(function (atraso) {
+                    var osc = ctx.createOscillator();
+                    var ganho = ctx.createGain();
+                    osc.type = "sine";
+                    osc.frequency.setValueAtTime(880, agora + atraso);
+                    ganho.gain.setValueAtTime(0, agora + atraso);
+                    ganho.gain.linearRampToValueAtTime(0.25, agora + atraso + 0.02);
+                    ganho.gain.exponentialRampToValueAtTime(0.001, agora + atraso + 0.16);
+                    osc.connect(ganho).connect(ctx.destination);
+                    osc.start(agora + atraso);
+                    osc.stop(agora + atraso + 0.18);
+                });
+            } catch (erro) {
+                // navegador sem suporte a Web Audio, ou bloqueio de autoplay - ignora
+            }
+        })();
+    </script>
+    {% endif %}
+</body>
+</html>

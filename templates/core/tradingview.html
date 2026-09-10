@@ -1,0 +1,115 @@
+{% extends "base.html" %}
+{% block titulo %}TradingView - BolsaTrader{% endblock %}
+{% block conteudo %}
+<h1>TradingView</h1>
+<p style="color: var(--text-dim);">
+    Gráfico avançado do TradingView, embutido diretamente no sistema (widget oficial). O site
+    <code>br.tradingview.com</code> não permite ser aberto dentro de outra página (bloqueio de segurança do
+    próprio TradingView), então este é o gráfico interativo completo deles, com busca de qualquer ativo,
+    indicadores e desenhos - use o campo de busca do próprio gráfico para trocar de ativo.
+</p>
+
+<div class="card-glass" style="margin-bottom: 1.4rem;">
+    <h3 style="margin-top: 0;">Abrir uma página do TradingView em nova aba</h3>
+    <p style="color: var(--text-dim);">
+        Cole aqui a URL de qualquer página do TradingView (ex: outra lista de mercado, um símbolo específico) e
+        abra em uma nova aba. O valor já vem preenchido com a URL configurada em <code>TRADINGVIEW_URL_PESQUISA</code>
+        no <code>.env</code>.
+    </p>
+    <form id="form-tradingview-url" style="display: flex; flex-wrap: wrap; gap: .6rem;" onsubmit="return false;">
+        <input
+            type="url"
+            id="campo-tradingview-url"
+            value="{{ tradingview_url_pesquisa }}"
+            placeholder="https://br.tradingview.com/..."
+            required
+            style="flex: 1 1 320px; padding: .55rem .8rem; border-radius: .5rem; border: 1px solid var(--borda, #2a3550); background: var(--bg-input, #0D1526); color: var(--text, #fff);"
+        >
+        <button type="submit" id="btn-abrir-tradingview-url" class="btn-futurista">Abrir em nova aba</button>
+    </form>
+</div>
+<script>
+    (function () {
+        var form = document.getElementById("form-tradingview-url");
+        var campo = document.getElementById("campo-tradingview-url");
+        if (!form || !campo) return;
+        form.addEventListener("submit", function () {
+            var url = campo.value.trim();
+            if (url) {
+                window.open(url, "_blank", "noopener,noreferrer");
+            }
+        });
+    })();
+</script>
+
+{% if tickers %}
+<div style="display: flex; flex-wrap: wrap; gap: .6rem; margin: 1rem 0 1.4rem;">
+    {% for ticker in tickers %}
+    <button type="button" class="btn-futurista btn-secundario btn-tradingview-ticker" data-simbolo="BMFBOVESPA:{{ ticker }}" style="padding:.4rem .9rem; font-size:.85rem;">
+        {{ ticker }}
+    </button>
+    {% endfor %}
+</div>
+{% endif %}
+
+<div class="card-glass" style="padding: .5rem;">
+    <div class="tradingview-widget-container">
+        <div id="tradingview_grafico"></div>
+    </div>
+</div>
+
+<script src="https://s3.tradingview.com/tv.js"></script>
+<script>
+    (function () {
+        var simboloInicial = "BMFBOVESPA:IBOV";
+        var widget = new TradingView.widget({
+            "width": "100%",
+            "height": 610,
+            "symbol": simboloInicial,
+            "interval": "D",
+            "timezone": "America/Sao_Paulo",
+            "theme": "dark",
+            "style": "1",
+            "locale": "br",
+            "toolbar_bg": "#0D1526",
+            "enable_publishing": false,
+            "allow_symbol_change": true,
+            "hide_side_toolbar": false,
+            "container_id": "tradingview_grafico"
+        });
+
+        document.querySelectorAll(".btn-tradingview-ticker").forEach(function (botao) {
+            botao.addEventListener("click", function () {
+                widget.setSymbol(botao.dataset.simbolo, "D", function () {});
+            });
+        });
+    })();
+</script>
+
+<h2 style="margin-top: 2rem;">Maiores altas, baixas e mais negociadas (TradingView)</h2>
+<p style="color: var(--text-dim);">
+    Equivalente embutido da página
+    <a href="https://br.tradingview.com/markets/stocks-brazil/market-movers-all-stocks/" target="_blank" rel="noopener">market movers</a>
+    do TradingView para ações brasileiras (ela também não pode ser aberta dentro de um iframe) - widget oficial
+    filtrado para a bolsa brasileira (BMFBOVESPA).
+</p>
+<div class="card-glass" style="padding: .5rem;">
+    <div class="tradingview-widget-container">
+        <div class="tradingview-widget-container__widget"></div>
+    </div>
+</div>
+<script type="text/javascript" src="https://s3.tradingview.com/external-embedding/embed-widget-hotlists.js" async>
+{
+  "colorTheme": "dark",
+  "dateRange": "12M",
+  "exchange": "BMFBOVESPA",
+  "showChart": true,
+  "locale": "br",
+  "isTransparent": false,
+  "showSymbolLogo": true,
+  "showFloatingTooltip": false,
+  "width": "100%",
+  "height": "550"
+}
+</script>
+{% endblock %}

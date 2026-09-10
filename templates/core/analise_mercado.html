@@ -1,0 +1,112 @@
+{% extends "base.html" %}
+{% block titulo %}Análise de Mercado - BolsaTrader{% endblock %}
+{% block conteudo %}
+<h1>Análise de Mercado</h1>
+<p style="color: var(--text-dim);">
+    Indicadores técnicos calculados a partir do histórico de cotações diárias de cada ativo: tendência (média móvel
+    curta x longa), RSI e MACD. O sinal geral soma quantos indicadores apontam compra e quantos apontam venda.
+    É uma referência simples de apoio à decisão &mdash; <strong>não constitui recomendação de investimento</strong>.
+</p>
+<a href="{% url 'core:atualizar_cotacoes' %}" class="btn-futurista btn-atualizar-cotacoes" data-overlay-texto="Atualizando cotações...">Atualizar cotações agora</a>
+<a href="{% url 'core:historico_graficos' %}" class="btn-futurista btn-secundario">Ver histórico e gráficos</a>
+{% if ultima_atualizacao_cotacoes %}
+<p class="badge-atualizacao">⏱ Última atualização das cotações: {{ ultima_atualizacao_cotacoes|date:"d/m/Y H:i" }}</p>
+{% endif %}
+
+<h2 style="margin-top: 1.8rem;">Maiores altas e baixas do dia</h2>
+{% if erro_variacoes %}
+<div class="card-glass"><p style="color: var(--text-dim);">{{ erro_variacoes }}</p></div>
+{% else %}
+<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1.5rem; margin-top: 1rem;">
+    <div class="card-glass">
+        <h3>Top 10 altas</h3>
+        {% if maiores_altas %}
+        <div class="tabela-scroll">
+        <table class="tabela-futurista">
+            <thead><tr><th>Ticker</th><th>Empresa</th><th>Variação</th></tr></thead>
+            <tbody>
+                {% for acao in maiores_altas %}
+                <tr>
+                    <td>{{ acao.stock }}</td>
+                    <td>{{ acao.name }}</td>
+                    <td class="valor-positivo">{{ acao.change }}%</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        </div>
+        {% else %}
+        <p style="color: var(--text-dim);">Sem dados disponíveis no momento.</p>
+        {% endif %}
+    </div>
+    <div class="card-glass">
+        <h3>Top 10 baixas</h3>
+        {% if maiores_baixas %}
+        <div class="tabela-scroll">
+        <table class="tabela-futurista">
+            <thead><tr><th>Ticker</th><th>Empresa</th><th>Variação</th></tr></thead>
+            <tbody>
+                {% for acao in maiores_baixas %}
+                <tr>
+                    <td>{{ acao.stock }}</td>
+                    <td>{{ acao.name }}</td>
+                    <td class="valor-negativo">{{ acao.change }}%</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        </div>
+        {% else %}
+        <p style="color: var(--text-dim);">Sem dados disponíveis no momento.</p>
+        {% endif %}
+    </div>
+</div>
+{% endif %}
+
+<h2 style="margin-top: 2rem;">Indicadores técnicos dos seus ativos acompanhados</h2>
+{% if sinais %}
+<a href="{% url 'core:robo_exportar_excel' %}" class="btn-futurista btn-secundario">⬇ Exportar Excel</a>
+<a href="{% url 'core:robo_exportar_pdf' %}" class="btn-futurista btn-secundario">⬇ Exportar PDF</a>
+{% endif %}
+<div class="card-glass" style="margin-top: 1rem;">
+    {% if sinais %}
+    <div class="tabela-scroll">
+    <table class="tabela-futurista">
+        <thead>
+            <tr>
+                <th>Ativo</th>
+                <th>Tendência (média móvel)</th>
+                <th>RSI</th>
+                <th>MACD</th>
+                <th>Sinal geral</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for item in sinais %}
+            <tr>
+                <td>
+                    <strong>{{ item.ativo.ticker }}</strong>
+                    {% if item.ativo.nome %}<br><small style="color: var(--text-dim);">{{ item.ativo.nome }}</small>{% endif %}
+                </td>
+                <td><span class="badge-tendencia badge-{{ item.tendencia_classe }}">{{ item.tendencia_label }}</span></td>
+                <td>
+                    <span class="badge-tendencia badge-{{ item.rsi_classe }}">
+                        {{ item.rsi_label }}{% if item.rsi is not None %} ({{ item.rsi }}){% endif %}
+                    </span>
+                </td>
+                <td><span class="badge-tendencia badge-{{ item.macd_classe }}">{{ item.macd_label }}</span></td>
+                <td>
+                    <span class="badge-tendencia badge-{{ item.sinal_geral_classe }}">{{ item.sinal_geral_label }}</span>
+                    <br><small style="color: var(--text-dim);">{{ item.votos_compra }} compra / {{ item.votos_venda }} venda</small>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    </div>
+    <a href="{% url 'core:historico_graficos' %}" class="link-secundario">Ver histórico e gráfico de cada ativo →</a>
+    {% else %}
+    <p style="color: var(--text-dim);">Você ainda não possui ativos para analisar.</p>
+    {% endif %}
+</div>
+{% endblock %}

@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+{% block titulo %}Ações da B3 - BolsaTrader{% endblock %}
+{% block conteudo %}
+<h1>Ações da B3</h1>
+<p style="color: var(--text-dim);">
+    Catálogo com todas as ações negociadas na B3, sincronizado com a API de cotações &mdash; é só uma lista de
+    consulta/pesquisa, independente do que você comprou, vendeu ou reservou (isso fica em "Minhas Operações").
+</p>
+<a href="{% url 'core:acoes_b3_atualizar' %}" class="btn-futurista btn-atualizar-acoes-b3" data-overlay-texto="Atualizando lista de ações da B3...">🔄 Atualizar lista</a>
+<p style="color: var(--text-dim); font-size: .85rem; margin-top: .6rem;">
+    "Atualizar lista" apaga o catálogo atual e cadastra de novo a partir do que a API retornar na hora &mdash;
+    inclui ações novas, remove as que não constarem mais.
+</p>
+
+<div class="card-glass" style="margin-top: 1.2rem;">
+    {% if acoes %}
+    <div style="margin-bottom: 1rem;">
+        <input type="text" id="filtro-acoes-b3" class="form-control-futurista" placeholder="Filtrar por ticker ou nome..." style="max-width: 320px;">
+    </div>
+    <div class="tabela-scroll">
+    <table class="tabela-futurista" id="tabela-acoes-b3">
+        <thead>
+            <tr>
+                <th>Ticker</th>
+                <th>Nome</th>
+                <th>Setor</th>
+                <th>Preço atual</th>
+                <th>Variação do dia</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for acao in acoes %}
+            <tr>
+                <td><strong>{{ acao.ticker }}</strong></td>
+                <td>{{ acao.nome|default:"—" }}</td>
+                <td>{{ acao.setor|default:"—" }}</td>
+                <td>{% if acao.preco_atual is not None %}R$ {{ acao.preco_atual }}{% else %}&mdash;{% endif %}</td>
+                <td class="{% if acao.variacao_dia_pct > 0 %}valor-positivo{% elif acao.variacao_dia_pct < 0 %}valor-negativo{% else %}valor-neutro{% endif %}">
+                    {% if acao.variacao_dia_pct is not None %}{{ acao.variacao_dia_pct }}%{% else %}&mdash;{% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    </div>
+    <p style="color: var(--text-dim); font-size: .8rem; margin-top: .8rem;">
+        {{ acoes|length }} ação(ões) no catálogo.
+    </p>
+    {% else %}
+    <p style="color: var(--text-dim);">
+        Nenhuma ação cadastrada ainda &mdash; clique em "Atualizar lista" para carregar o catálogo da B3.
+    </p>
+    {% endif %}
+</div>
+
+<script>
+    (function () {
+        var filtro = document.getElementById("filtro-acoes-b3");
+        var tabela = document.getElementById("tabela-acoes-b3");
+        if (!filtro || !tabela) return;
+        var linhas = tabela.querySelectorAll("tbody tr");
+        filtro.addEventListener("input", function () {
+            var termo = filtro.value.trim().toLowerCase();
+            linhas.forEach(function (linha) {
+                linha.hidden = termo.length > 0 && linha.textContent.toLowerCase().indexOf(termo) === -1;
+            });
+        });
+    })();
+</script>
+{% endblock %}

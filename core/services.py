@@ -12,19 +12,21 @@ tanto pelas views quanto pelos comandos de management (cron).
 
 from __future__ import annotations
 
+import statistics
 from collections import defaultdict
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, datetime, timedelta, timezone as dt_timezone
 from decimal import Decimal, ROUND_HALF_UP
 from urllib.parse import urljoin
 
 import requests
 from bs4 import BeautifulSoup
 from django.conf import settings
+from django.core.exceptions import ObjectDoesNotExist
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 
-from .models import Ativo, Cotacao, Operacao, Alerta, FonteNoticia, Noticia, AcaoB3
+from .models import Ativo, Cotacao, Operacao, Alerta, FonteNoticia, Noticia, AcaoB3, CotacaoIndice
 
 
 # --------------------------------------------------------------------------
@@ -224,6 +226,19 @@ def atualizar_cotacao_diaria(ativo: Ativo, dados_api: dict | None = None) -> Cot
     if hora_cotacao:
         ativo.hora_cotacao = parse_datetime(hora_cotacao)
 
+    if not ativo.setor:
+        # nem toda resposta da brapi.dev traz "sector" na cotação avulsa (é
+        # mais comum vir na lista usada por sincronizar_acoes_b3) - quando
+        # falta, tenta completar pelo catálogo Ações da B3 já sincronizado
+        # (ver core.services.sincronizar_acoes_b3), sem custo de mais uma
+        # chamada de API. Usado pela análise de concentração por setor da
+        # carteira (ver calcular_concentracao_setor).
+        setor = dados.get("sector") or dados.get("sectorName")
+        if not setor:
+            catalogo = AcaoB3.objects.filter(ticker=ativo.ticker).values_list("setor", flat=True).first()
+            setor = catalogo or ""
+        ativo.setor = setor
+
     ativo.save()  # também atualiza 'atualizado_em' (auto_now) com o horário desta atualização
 
     cotacao, _ = Cotacao.objects.update_or_create(
@@ -237,6 +252,322 @@ def atualizar_cotacao_diaria(ativo: Ativo, dados_api: dict | None = None) -> Cot
         },
     )
     return cotacao
+
+
+# --------------------------------------------------------------------------
+# Histórico de preços (brapi.dev) e backfill de Cotacao
+#
+# Usado tanto para preencher de uma vez o histórico de um ativo recém-
+# cadastrado (RSI/MACD exigem ~35 pregões - sem isso o robô consultor fica
+# "Aguardando histórico" por semanas, um dia de cada vez) quanto para o
+# histórico do Ibovespa usado no comparativo com benchmarks (ver
+# atualizar_benchmarks, em core.services).
+# --------------------------------------------------------------------------
+_FAIXAS_RANGE_BRAPI = [
+    (30, "1mo"), (90, "3mo"), (180, "6mo"), (365, "1y"), (730, "2y"), (1825, "5y"),
+]
+
+
+def _range_brapi(dias: int) -> str:
+    """Converte uma quantidade de dias no parâmetro `range` aceito pela brapi.dev (1mo, 3mo, 1y etc.)."""
+    for limite, range_str in _FAIXAS_RANGE_BRAPI:
+        if dias <= limite:
+            return range_str
+    return "10y"
+
+
+def _converter_data_historico(valor) -> date | None:
+    """
+    Converte a data de um ponto do histórico da brapi.dev para date - a API
+    retorna timestamp Unix (segundos, UTC) no campo "date" de
+    historicalDataPrice, mas trata string ISO também, por segurança caso o
+    formato mude (mesma cautela já aplicada em atualizar_cotacao_diaria).
+    """
+    if isinstance(valor, bool):
+        return None
+    if isinstance(valor, (int, float)):
+        try:
+            return datetime.fromtimestamp(valor, tz=dt_timezone.utc).date()
+        except (ValueError, OSError, OverflowError):
+            return None
+    if isinstance(valor, str):
+        convertido = parse_datetime(valor)
+        if convertido:
+            return convertido.date()
+        try:
+            return date.fromisoformat(valor[:10])
+        except ValueError:
+            return None
+    return None
+
+
+def buscar_historico_precos(ticker: str, dias: int = 180) -> list[dict]:
+    """
+    Busca o histórico diário de fechamento de um ticker (ação da B3, ou um
+    índice como "^BVSP" para o Ibovespa) na API brapi.dev.
+
+    Retorna uma lista de {"data": date, "fechamento": Decimal}, em ordem
+    cronológica (mais antigo primeiro) e sem datas duplicadas.
+    """
+    url = f"{settings.BRAPI_BASE_URL}/quote/{ticker.upper()}"
+    params = {"range": _range_brapi(dias), "interval": "1d"}
+    if settings.BRAPI_TOKEN:
+        params["token"] = settings.BRAPI_TOKEN
+
+    try:
+        resposta = requests.get(url, params=params, timeout=30)
+        resposta.raise_for_status()
+        dados = resposta.json()
+    except requests.RequestException as exc:
+        raise BrapiError(f"Falha ao consultar o histórico de {ticker}: {exc}") from exc
+
+    resultados = dados.get("results") or []
+    if not resultados:
+        raise BrapiError(f"Ticker {ticker} não encontrado na API de cotações (histórico).")
+
+    pontos = resultados[0].get("historicalDataPrice") or []
+
+    historico = []
+    vistos = set()
+    for ponto in pontos:
+        fechamento = ponto.get("close")
+        data_convertida = _converter_data_historico(ponto.get("date"))
+        if fechamento is None or data_convertida is None or data_convertida in vistos:
+            continue
+        vistos.add(data_convertida)
+        preco = _para_decimal(fechamento)
+        if preco is not None:
+            historico.append({"data": data_convertida, "fechamento": preco})
+
+    historico.sort(key=lambda item: item["data"])
+    return historico
+
+
+def backfill_historico_cotacoes(ativo: Ativo, dias: int = 180) -> int:
+    """
+    Preenche de uma vez o histórico de cotações diárias (Cotacao) de um
+    ativo, a partir do endpoint histórico da brapi.dev - chamado
+    automaticamente ao registrar a primeira operação de um ativo novo (ver
+    core.views.operacao_nova) e também disponível para ativos já existentes
+    via o comando "python manage.py backfill_cotacoes".
+
+    Não sobrescreve cotações que já existem (ex: a de hoje, gravada por
+    atualizar_cotacao_diaria) - só grava as datas que ainda faltam. Retorna
+    quantas cotações novas foram gravadas.
+    """
+    historico = buscar_historico_precos(ativo.ticker, dias=dias)
+    if not historico:
+        return 0
+
+    datas_buscadas = [item["data"] for item in historico]
+    datas_existentes = set(ativo.cotacoes.filter(data__in=datas_buscadas).values_list("data", flat=True))
+
+    novas = [
+        Cotacao(ativo=ativo, data=item["data"], preco_fechamento=item["fechamento"])
+        for item in historico
+        if item["data"] not in datas_existentes
+    ]
+    if novas:
+        Cotacao.objects.bulk_create(novas, ignore_conflicts=True)
+    return len(novas)
+
+
+# --------------------------------------------------------------------------
+# Benchmark de mercado (Ibovespa / CDI)
+#
+# Responde a pergunta mais importante para decidir se vale a pena continuar
+# operando ativamente: "minha carteira está rendendo mais do que simplesmente
+# deixar esse dinheiro no Ibovespa (renda variável passiva) ou no CDI (renda
+# fixa)?" - sem isso, saber que a carteira está "com +8% de lucro" não diz
+# muita coisa sozinho.
+# --------------------------------------------------------------------------
+IBOVESPA_TICKER = "^BVSP"
+_BCB_SGS_CDI = 12  # código da série do CDI (taxa diária, % ao dia) no SGS do Banco Central
+
+
+def buscar_historico_cdi(dias: int = 180) -> list[dict]:
+    """
+    Busca o histórico diário da taxa do CDI (série 12 do SGS/Banco Central) -
+    cada registro é a taxa do próprio dia (% ao dia), não um índice
+    acumulado, então o retorno de um período precisa compor (juros
+    compostos) as taxas, não só comparar o primeiro e o último valor (ver
+    _retorno_cdi_periodo). Retorna uma lista de {"data": date, "taxa_pct":
+    Decimal} em ordem cronológica.
+
+    Reaproveita BrapiError para o erro, ainda que a fonte aqui seja o Banco
+    Central (não a brapi.dev) - mantém um único tipo de exceção pros
+    chamadores (atualizar_benchmarks, comandos de management) tratarem.
+    """
+    url = f"https://api.bcb.gov.br/dados/serie/bcdata.sgs.{_BCB_SGS_CDI}/dados/ultimos/{max(dias, 1)}"
+    try:
+        resposta = requests.get(url, params={"formato": "json"}, timeout=30)
+        resposta.raise_for_status()
+        dados = resposta.json()
+    except requests.RequestException as exc:
+        raise BrapiError(f"Falha ao consultar o histórico do CDI no Banco Central: {exc}") from exc
+
+    historico = []
+    for item in dados or []:
+        data_str = item.get("data")
+        valor_str = item.get("valor")
+        if not data_str or valor_str is None:
+            continue
+        try:
+            data_convertida = datetime.strptime(data_str, "%d/%m/%Y").date()
+            taxa = Decimal(str(valor_str))
+        except (ValueError, ArithmeticError):
+            continue
+        historico.append({"data": data_convertida, "taxa_pct": taxa})
+
+    historico.sort(key=lambda item: item["data"])
+    return historico
+
+
+def _gravar_historico_indice(indice: str, pontos: list[tuple]) -> int:
+    """Grava em CotacaoIndice os pontos (data, valor) cuja data ainda não existe para aquele índice."""
+    if not pontos:
+        return 0
+    datas = [data for data, _ in pontos]
+    existentes = set(
+        CotacaoIndice.objects.filter(indice=indice, data__in=datas).values_list("data", flat=True)
+    )
+    novos = [
+        CotacaoIndice(indice=indice, data=data, valor=valor)
+        for data, valor in pontos
+        if data not in existentes
+    ]
+    if novos:
+        CotacaoIndice.objects.bulk_create(novos, ignore_conflicts=True)
+    return len(novos)
+
+
+def atualizar_benchmarks(dias: int = 180) -> dict:
+    """
+    Atualiza o histórico de benchmarks (Ibovespa e CDI) usado no comparativo
+    de desempenho da carteira (ver calcular_comparativo_benchmark) - grava em
+    CotacaoIndice as datas que ainda não existiam. Chamado pelo comando
+    "atualizar_benchmarks" (agendável via cron/--loop, separado de
+    "atualizar_cotacoes" de propósito - os benchmarks não dependem de nenhum
+    usuário ter ativos cadastrados e não precisam da mesma frequência).
+
+    Ibovespa e CDI são buscados de fontes independentes - uma fonte fora do
+    ar não impede a atualização da outra. Retorna {"ibovespa": <quantas
+    cotações novas>, "cdi": <quantas taxas novas>, "erros": [...]}.
+    """
+    resultado = {"ibovespa": 0, "cdi": 0, "erros": []}
+
+    try:
+        historico_ibov = buscar_historico_precos(IBOVESPA_TICKER, dias=dias)
+        resultado["ibovespa"] = _gravar_historico_indice(
+            CotacaoIndice.IBOVESPA, [(item["data"], item["fechamento"]) for item in historico_ibov]
+        )
+    except BrapiError as exc:
+        resultado["erros"].append(str(exc))
+
+    try:
+        historico_cdi = buscar_historico_cdi(dias=dias)
+        resultado["cdi"] = _gravar_historico_indice(
+            CotacaoIndice.CDI, [(item["data"], item["taxa_pct"]) for item in historico_cdi]
+        )
+    except BrapiError as exc:
+        resultado["erros"].append(str(exc))
+
+    return resultado
+
+
+def _retorno_indice_periodo(indice: str, data_inicio: date, data_fim: date) -> Decimal | None:
+    """Retorno % de um índice tipo Ibovespa (comparando o primeiro e o último valor do período)."""
+    pontos = list(
+        CotacaoIndice.objects.filter(indice=indice, data__gte=data_inicio, data__lte=data_fim)
+        .order_by("data").values_list("valor", flat=True)
+    )
+    if len(pontos) < 2 or not pontos[0]:
+        return None
+    return ((pontos[-1] - pontos[0]) / pontos[0] * 100).quantize(Decimal("0.01"))
+
+
+def _retorno_cdi_periodo(data_inicio: date, data_fim: date) -> Decimal | None:
+    """
+    Retorno acumulado (%) do CDI no período, compondo (juros compostos) as
+    taxas diárias - cada registro de CotacaoIndice(indice=CDI) é a taxa do
+    próprio dia, não um índice, então soma-los diretamente subestimaria o
+    efeito de juros sobre juros.
+    """
+    taxas = list(
+        CotacaoIndice.objects.filter(indice=CotacaoIndice.CDI, data__gte=data_inicio, data__lte=data_fim)
+        .order_by("data").values_list("valor", flat=True)
+    )
+    if not taxas:
+        return None
+    fator = Decimal("1")
+    for taxa in taxas:
+        fator *= (1 + taxa / 100)
+    return ((fator - 1) * 100).quantize(Decimal("0.01"))
+
+
+def calcular_comparativo_benchmark(usuario, posicoes: list | None = None, dias: int = 90) -> dict | None:
+    """
+    Compara o retorno da carteira comprada (não considera reservas) com o
+    retorno do Ibovespa e o retorno acumulado do CDI no mesmo período - ajuda
+    a decidir se vale a pena continuar operando ativamente em vez de deixar o
+    dinheiro num índice ou na renda fixa.
+
+    O período vai da abertura da posição comprada mais antiga até hoje,
+    limitado a `dias` corridos (carteiras antigas comparam só a janela mais
+    recente, pra manter a comparação relevante ao momento atual). O retorno
+    da carteira é uma aproximação: usa a cotação mais próxima do início do
+    período e a mais recente de cada ativo, ponderada pela quantidade em
+    carteira hoje - não reconstitui compras/vendas feitas dentro da janela.
+
+    Retorna None quando não há posição comprada com histórico suficiente
+    para montar a comparação, ou quando os benchmarks ainda não têm dados no
+    período (ver atualizar_benchmarks).
+    """
+    if posicoes is None:
+        posicoes = calcular_posicoes(usuario)
+
+    compradas = [p for p in posicoes if not p.apenas_reservado and p.quantidade > 0]
+    datas_abertura = [p.data_abertura for p in compradas if p.data_abertura is not None]
+    if not datas_abertura:
+        return None
+
+    hoje = timezone.localdate()
+    limite_periodo = hoje - timedelta(days=dias)
+    data_inicio = max(min(datas_abertura), limite_periodo)
+    if data_inicio >= hoje:
+        return None
+
+    valor_inicial_total = Decimal("0")
+    valor_final_total = Decimal("0")
+    for p in compradas:
+        cotacao_inicial = p.ativo.cotacoes.filter(data__gte=data_inicio).order_by("data").first()
+        cotacao_final = p.ativo.ultima_cotacao()
+        if not cotacao_inicial or not cotacao_final:
+            continue
+        valor_inicial_total += cotacao_inicial.preco_fechamento * p.quantidade
+        valor_final_total += cotacao_final.preco_fechamento * p.quantidade
+
+    if not valor_inicial_total:
+        return None
+
+    retorno_carteira_pct = ((valor_final_total - valor_inicial_total) / valor_inicial_total * 100).quantize(
+        Decimal("0.01")
+    )
+    retorno_ibovespa_pct = _retorno_indice_periodo(CotacaoIndice.IBOVESPA, data_inicio, hoje)
+    retorno_cdi_pct = _retorno_cdi_periodo(data_inicio, hoje)
+
+    return {
+        "data_inicio": data_inicio,
+        "data_fim": hoje,
+        "dias_periodo": (hoje - data_inicio).days,
+        "retorno_carteira_pct": retorno_carteira_pct,
+        "retorno_ibovespa_pct": retorno_ibovespa_pct,
+        "retorno_cdi_pct": retorno_cdi_pct,
+        "carteira_bateu_ibovespa": (
+            retorno_ibovespa_pct is not None and retorno_carteira_pct > retorno_ibovespa_pct
+        ),
+        "carteira_bateu_cdi": retorno_cdi_pct is not None and retorno_carteira_pct > retorno_cdi_pct,
+    }
 
 
 # --------------------------------------------------------------------------
@@ -442,6 +773,122 @@ def calcular_posicoes(usuario) -> list[Posicao]:
         p.ativo.ticker,
     ))
     return posicoes
+
+
+# --------------------------------------------------------------------------
+# Concentração por setor
+# --------------------------------------------------------------------------
+def calcular_concentracao_setor(posicoes: list) -> list[dict]:
+    """
+    Agrupa o valor atual das posições compradas (reservas não entram) por
+    setor do ativo (ver Ativo.setor, preenchido em atualizar_cotacao_diaria)
+    e calcula o percentual de cada setor sobre o valor total da carteira -
+    ativos sem setor conhecido entram em "Sem setor". Ordenado do maior para
+    o menor percentual.
+
+    O limite de ativos diferentes em carteira (MAX_ATIVOS_EM_CARTEIRA) não
+    enxerga isso: dá pra estar "diversificado" em 10 tickers e todos do mesmo
+    setor - esta função é o que permite avisar sobre esse tipo de risco.
+    """
+    valores_por_setor = defaultdict(lambda: Decimal("0"))
+    valor_total = Decimal("0")
+    for p in posicoes:
+        if p.apenas_reservado or p.valor_atual is None:
+            continue
+        setor = p.ativo.setor or "Sem setor"
+        valores_por_setor[setor] += p.valor_atual
+        valor_total += p.valor_atual
+
+    if not valor_total:
+        return []
+
+    concentracao = [
+        {"setor": setor, "valor": valor, "percentual": (valor / valor_total * 100).quantize(Decimal("0.01"))}
+        for setor, valor in valores_por_setor.items()
+    ]
+    concentracao.sort(key=lambda item: item["percentual"], reverse=True)
+    return concentracao
+
+
+# --------------------------------------------------------------------------
+# Métricas de risco: volatilidade, drawdown e concentração por ativo
+#
+# Complementam o lucro/perda: duas carteiras com o mesmo retorno podem ter
+# risco bem diferente - uma diversificada em vários ativos estáveis, outra
+# concentrada numa única posição muito volátil. O percentual de lucro/perda
+# sozinho não distingue os dois casos.
+# --------------------------------------------------------------------------
+DIAS_PREGAO_POR_ANO = 252
+LIMIAR_CONCENTRACAO_ALERTA_PCT = Decimal("40")
+
+
+def calcular_metricas_risco(posicoes: list, dias_janela: int = 30) -> dict:
+    """
+    Para cada posição comprada, calcula a volatilidade anualizada e o
+    drawdown máximo dos últimos `dias_janela` pregões, mais o quanto aquela
+    posição representa do valor atual total da carteira - e, a partir disso,
+    a maior concentração individual e um índice de Herfindahl simples (soma
+    dos quadrados das participações: quanto mais perto de 1, mais concentrada
+    a carteira; quanto mais perto de 1/nº de ativos, mais diversificada).
+
+    Volatilidade: desvio padrão dos retornos diários no período, anualizado
+    (× √252, dias de pregão por ano) - maior valor = preço oscila mais no dia
+    a dia. Drawdown máximo: maior queda percentual do topo ao fundo dentro da
+    mesma janela. Ambos ficam None sem histórico suficiente (< 3 pregões).
+    """
+    compradas = [p for p in posicoes if not p.apenas_reservado and p.quantidade > 0]
+    valor_total = sum((p.valor_atual for p in compradas if p.valor_atual is not None), Decimal("0"))
+
+    por_ativo = []
+    for p in compradas:
+        historico_desc = list(
+            p.ativo.cotacoes.order_by("-data").values_list("preco_fechamento", flat=True)[:dias_janela]
+        )
+        precos = [float(v) for v in reversed(historico_desc)]  # cronológico: mais antigo -> mais recente
+
+        volatilidade_pct = None
+        drawdown_pct = None
+        if len(precos) >= 3:
+            retornos = [
+                (atual - anterior) / anterior for anterior, atual in zip(precos, precos[1:]) if anterior
+            ]
+            if len(retornos) >= 2:
+                volatilidade_pct = round(statistics.pstdev(retornos) * (DIAS_PREGAO_POR_ANO ** 0.5) * 100, 2)
+
+            pico = precos[0]
+            maior_queda = 0.0
+            for preco in precos:
+                pico = max(pico, preco)
+                if pico:
+                    maior_queda = min(maior_queda, (preco - pico) / pico)
+            drawdown_pct = round(maior_queda * 100, 2)
+
+        percentual_carteira = (
+            (p.valor_atual / valor_total * 100).quantize(Decimal("0.01"))
+            if p.valor_atual is not None and valor_total
+            else None
+        )
+        por_ativo.append({
+            "ativo": p.ativo,
+            "volatilidade_pct": volatilidade_pct,
+            "drawdown_pct": drawdown_pct,
+            "percentual_carteira": percentual_carteira,
+        })
+
+    por_ativo.sort(key=lambda item: item["percentual_carteira"] or Decimal("0"), reverse=True)
+    maior_posicao = por_ativo[0] if por_ativo else None
+    indice_herfindahl = sum((float(item["percentual_carteira"] or 0) / 100) ** 2 for item in por_ativo)
+
+    return {
+        "por_ativo": por_ativo,
+        "maior_posicao_ativo": maior_posicao["ativo"] if maior_posicao else None,
+        "maior_posicao_pct": maior_posicao["percentual_carteira"] if maior_posicao else None,
+        "concentracao_alta": bool(
+            maior_posicao and maior_posicao["percentual_carteira"] is not None
+            and maior_posicao["percentual_carteira"] >= LIMIAR_CONCENTRACAO_ALERTA_PCT
+        ),
+        "indice_herfindahl": round(indice_herfindahl, 3),
+    }
 
 
 # --------------------------------------------------------------------------
@@ -679,7 +1126,9 @@ COLUNAS_VENDIDAS = [
     "Data compra", "Data venda", "Dias em carteira", "Ativo", "Qtd. comprada",
     "Preço compra (R$)", "Total compra (R$)", "Preço venda (R$)", "Total venda (R$)",
     "Corretora (%)", "Valor líquido a receber (R$)",
-    "Lucro/Perda realizado (R$)", "Lucro/Perda realizado (%)", "Meta lucro (%)", "Meta perda (%)",
+    "Lucro/Perda realizado (R$)", "Lucro/Perda realizado (%)",
+    "Lucro/Perda por dia (R$)", "Lucro/Perda por dia (%)",
+    "Meta lucro (%)", "Meta perda (%)",
 ]
 
 # Índices (0-based) das colunas numéricas que entram na linha de "TOTAL" no
@@ -748,6 +1197,8 @@ def _linha_vendida(op: Operacao) -> list:
         float(op.valor_liquido_vendido) if op.valor_liquido_vendido is not None else None,
         float(op.lucro_perda_realizado) if op.lucro_perda_realizado is not None else None,
         float(op.lucro_perda_pct_realizado) if op.lucro_perda_pct_realizado is not None else None,
+        float(op.lucro_perda_por_dia) if op.lucro_perda_por_dia is not None else None,
+        float(op.lucro_perda_pct_por_dia) if op.lucro_perda_pct_por_dia is not None else None,
         float(op.meta_lucro_pct) if op.meta_lucro_pct is not None else None,
         float(op.meta_perda_pct) if op.meta_perda_pct is not None else None,
     ]
@@ -943,7 +1394,7 @@ def gerar_pdf_operacoes(
         "Vendidas", periodo_label_vendidas, COLUNAS_VENDIDAS,
         [_linha_vendida(op) for op in operacoes_vendidas],
         [fmt_data, fmt_data, fmt_dias, identidade, identidade, fmt, fmt, fmt, fmt,
-         lambda v: fmt(v, "%"), fmt, fmt, lambda v: fmt(v, "%"),
+         lambda v: fmt(v, "%"), fmt, fmt, lambda v: fmt(v, "%"), fmt, lambda v: fmt(v, "%"),
          lambda v: fmt(v, "%", "padrão"), lambda v: fmt(v, "%", "padrão")],
         INDICES_SOMA_VENDIDAS,
     )
@@ -1031,20 +1482,19 @@ def construir_grafico_cotacoes(
 # --------------------------------------------------------------------------
 # Análise simples de tendência de mercado (alta / baixa / neutro)
 # --------------------------------------------------------------------------
-def analisar_tendencia(ativo: Ativo, janela_curta: int = 3, janela_longa: int = 10) -> str:
+def _tendencia_a_partir_de_precos_desc(precos_desc: list, janela_curta: int = 3, janela_longa: int = 10) -> str:
     """
-    Analisa o histórico de cotações diárias de um ativo e classifica a
-    tendência recente comparando a média móvel curta com a média móvel longa
-    (uma aproximação simples de "possível alta/baixa" para dar suporte à
-    decisão do investidor - não é recomendação de investimento).
+    Núcleo puro (sem acesso ao banco) da análise de tendência: recebe preços
+    já em ordem do mais recente para o mais antigo (no máximo `janela_longa`
+    itens) e classifica comparando a média móvel curta com a longa. Extraído
+    de analisar_tendencia para ser reaproveitado pelo backtesting (ver
+    backtest_sinais_robo), que precisa simular a tendência "como ela era" em
+    cada dia do histórico, não só a de hoje.
     """
-    historico = list(
-        ativo.cotacoes.order_by("-data").values_list("preco_fechamento", flat=True)[:janela_longa]
-    )
-    if len(historico) < 2:
+    if len(precos_desc) < 2:
         return "DADOS_INSUFICIENTES"
 
-    precos = [Decimal(p) for p in historico]  # já em ordem do mais recente para o mais antigo
+    precos = [Decimal(p) for p in precos_desc]
     curta = precos[: min(janela_curta, len(precos))]
     media_curta = sum(curta) / len(curta)
     media_longa = sum(precos) / len(precos)
@@ -1059,6 +1509,19 @@ def analisar_tendencia(ativo: Ativo, janela_curta: int = 3, janela_longa: int = 
     if diferenca_pct <= Decimal("-0.5"):
         return "BAIXA"
     return "NEUTRO"
+
+
+def analisar_tendencia(ativo: Ativo, janela_curta: int = 3, janela_longa: int = 10) -> str:
+    """
+    Analisa o histórico de cotações diárias de um ativo e classifica a
+    tendência recente comparando a média móvel curta com a média móvel longa
+    (uma aproximação simples de "possível alta/baixa" para dar suporte à
+    decisão do investidor - não é recomendação de investimento).
+    """
+    historico = list(
+        ativo.cotacoes.order_by("-data").values_list("preco_fechamento", flat=True)[:janela_longa]
+    )
+    return _tendencia_a_partir_de_precos_desc(historico, janela_curta, janela_longa)
 
 
 TENDENCIA_LABELS = {
@@ -1192,25 +1655,26 @@ SINAL_GERAL_LABELS = {"COMPRA": "Sinal de compra", "VENDA": "Sinal de venda", "N
 SINAL_GERAL_CLASSES = {"COMPRA": "alta", "VENDA": "baixa", "NEUTRO": "neutro"}
 
 
-def analisar_indicadores_tecnicos(ativo: Ativo, janela_curta: int = 3, janela_longa: int = 10) -> dict:
+def analisar_indicadores_tecnicos_precos(
+    precos_cronologico: list[float], janela_curta: int = 3, janela_longa: int = 10
+) -> dict:
     """
-    Consolida a análise técnica de um ativo: tendência (cruzamento de médias
-    móveis já existente), RSI e MACD - cada um com seu próprio sinal - mais um
-    sinal geral simples (quantos indicadores apontam compra x quantos apontam
-    venda; empate ou indicadores insuficientes = neutro). É só uma referência
-    de apoio à decisão, não uma recomendação de investimento.
+    Núcleo puro (sem acesso ao banco) da análise técnica consolidada: recebe
+    os preços de fechamento em ordem cronológica (mais antigo primeiro) "até
+    aquele momento" e devolve tendência, RSI, MACD e o sinal geral. Extraído
+    de analisar_indicadores_tecnicos para ser reaproveitado pelo backtesting
+    (ver backtest_sinais_robo), que recalcula o mesmo sinal em cada dia do
+    passado usando só os preços disponíveis até aquele dia - exatamente a
+    mesma lógica usada ao vivo, sem duplicar as regras de voto.
     """
-    tendencia = analisar_tendencia(ativo, janela_curta, janela_longa)
-
-    historico = list(
-        ativo.cotacoes.order_by("data").values_list("preco_fechamento", flat=True)
+    tendencia = _tendencia_a_partir_de_precos_desc(
+        list(reversed(precos_cronologico))[:janela_longa], janela_curta, janela_longa
     )
-    precos = [float(p) for p in historico]
 
-    rsi = calcular_rsi(precos)
+    rsi = calcular_rsi(precos_cronologico)
     rsi_label_chave = _classificar_rsi(rsi)
 
-    macd = calcular_macd(precos)
+    macd = calcular_macd(precos_cronologico)
     macd_label_chave = macd["cruzamento"] if macd else "DADOS_INSUFICIENTES"
 
     votos_compra = 0
@@ -1251,6 +1715,175 @@ def analisar_indicadores_tecnicos(ativo: Ativo, janela_curta: int = 3, janela_lo
         "votos_compra": votos_compra,
         "votos_venda": votos_venda,
     }
+
+
+def analisar_indicadores_tecnicos(ativo: Ativo, janela_curta: int = 3, janela_longa: int = 10) -> dict:
+    """
+    Consolida a análise técnica de um ativo: tendência (cruzamento de médias
+    móveis já existente), RSI e MACD - cada um com seu próprio sinal - mais um
+    sinal geral simples (quantos indicadores apontam compra x quantos apontam
+    venda; empate ou indicadores insuficientes = neutro). É só uma referência
+    de apoio à decisão, não uma recomendação de investimento.
+    """
+    historico = list(
+        ativo.cotacoes.order_by("data").values_list("preco_fechamento", flat=True)
+    )
+    precos = [float(p) for p in historico]
+    return analisar_indicadores_tecnicos_precos(precos, janela_curta, janela_longa)
+
+
+# --------------------------------------------------------------------------
+# Backtesting do robô consultor
+#
+# Responde à pergunta que o robô sozinho não responde: "se eu tivesse
+# seguido todo sinal de compra/venda que o robô já deu para este ativo,
+# quantas vezes eu teria acertado?" - percorre o histórico de Cotacao já
+# salvo recalculando, em cada pregão, o mesmo sinal que analisar_indicadores_
+# tecnicos_precos calcularia "ao vivo" naquele dia (usando só os preços
+# disponíveis até ali, nunca os futuros), e confere contra o retorno real
+# `dias_retorno` pregões à frente. É só uma estatística sobre o passado, não
+# garante desempenho futuro - a mesma ressalva do robô ao vivo.
+# --------------------------------------------------------------------------
+def backtest_sinais_robo(
+    ativo: Ativo, dias_retorno: int = 5, janela_curta: int = 3, janela_longa: int = 10,
+    minimo_precos: int = 15,
+) -> dict:
+    """
+    Simula, dia a dia, os sinais que o robô consultor teria dado para
+    `ativo` no passado (com base só no histórico de Cotacao já salvo) e mede
+    a taxa de acerto: um sinal de COMPRA "acerta" quando o preço `dias_retorno`
+    pregões depois está mais alto; um sinal de VENDA "acerta" quando está mais
+    baixo. Sinais NEUTRO não entram na contagem (não haveria ação a avaliar).
+
+    `minimo_precos` é o menor histórico a partir do qual já vale a pena
+    simular um sinal (por padrão, o mínimo do RSI - com menos que isso o
+    sinal geral tende a ficar sempre neutro por falta de dados); o MACD
+    completo só passa a contar a partir de 35 pregões acumulados, mas isso é
+    tratado automaticamente por analisar_indicadores_tecnicos_precos (fica
+    "aguardando histórico" e simplesmente não vota até lá).
+    """
+    cotacoes = list(ativo.cotacoes.order_by("data"))
+    precos = [float(c.preco_fechamento) for c in cotacoes]
+    datas = [c.data for c in cotacoes]
+    total_pregoes = len(precos)
+
+    sinais = []
+    for i in range(minimo_precos - 1, total_pregoes):
+        if i + dias_retorno >= total_pregoes:
+            break  # não há pregões suficientes à frente pra conferir o resultado deste sinal ainda
+
+        indicadores = analisar_indicadores_tecnicos_precos(precos[: i + 1], janela_curta, janela_longa)
+        sinal = indicadores["sinal_geral"]
+        if sinal not in ("COMPRA", "VENDA"):
+            continue
+
+        preco_no_sinal = precos[i]
+        if not preco_no_sinal:
+            continue
+        retorno_pct = (precos[i + dias_retorno] - preco_no_sinal) / preco_no_sinal * 100
+        acerto = (sinal == "COMPRA" and retorno_pct > 0) or (sinal == "VENDA" and retorno_pct < 0)
+        sinais.append({
+            "data": datas[i], "sinal": sinal, "preco": round(preco_no_sinal, 2),
+            "retorno_pct": round(retorno_pct, 2), "acerto": acerto,
+        })
+
+    if not sinais:
+        return {
+            "ativo": ativo, "dias_retorno": dias_retorno, "total_sinais": 0,
+            "sinais_compra": 0, "sinais_venda": 0, "taxa_acerto_pct": None,
+            "taxa_acerto_compra_pct": None, "taxa_acerto_venda_pct": None,
+            "retorno_medio_compra_pct": None, "retorno_medio_venda_pct": None,
+            "sinais": [], "dados_insuficientes": total_pregoes < minimo_precos + dias_retorno,
+        }
+
+    def _media_pct(itens):
+        valores = [s["retorno_pct"] for s in itens]
+        return round(sum(valores) / len(valores), 2) if valores else None
+
+    def _taxa_acerto(itens):
+        return round(sum(1 for s in itens if s["acerto"]) / len(itens) * 100, 1) if itens else None
+
+    sinais_compra = [s for s in sinais if s["sinal"] == "COMPRA"]
+    sinais_venda = [s for s in sinais if s["sinal"] == "VENDA"]
+
+    return {
+        "ativo": ativo,
+        "dias_retorno": dias_retorno,
+        "total_sinais": len(sinais),
+        "sinais_compra": len(sinais_compra),
+        "sinais_venda": len(sinais_venda),
+        "taxa_acerto_pct": _taxa_acerto(sinais),
+        "taxa_acerto_compra_pct": _taxa_acerto(sinais_compra),
+        "taxa_acerto_venda_pct": _taxa_acerto(sinais_venda),
+        "retorno_medio_compra_pct": _media_pct(sinais_compra),
+        "retorno_medio_venda_pct": _media_pct(sinais_venda),
+        # mais recentes primeiro, limitado pra não pesar a página com anos de sinais
+        "sinais": list(reversed(sinais))[:30],
+        "dados_insuficientes": False,
+    }
+
+
+# --------------------------------------------------------------------------
+# Envio de avisos proativos via WhatsApp (Meta Cloud API)
+#
+# O sistema já recebe mensagens via webhook (ver core.views.whatsapp_webhook)
+# - isso fecha o ciclo no outro sentido: enviar um aviso automático quando uma
+# meta de lucro/perda é atingida ou o robô consultor dá um sinal de compra/
+# venda, em vez de depender do usuário lembrar de abrir a tela Alertas. Cada
+# usuário configura seu próprio número em "Minha Conta" (ver
+# accounts.models.PerfilUsuario); sem WHATSAPP_ACCESS_TOKEN e
+# WHATSAPP_PHONE_NUMBER_ID configurados no .env, o envio fica desligado e os
+# alertas continuam funcionando normalmente, só na tela.
+# --------------------------------------------------------------------------
+def whatsapp_envio_configurado() -> bool:
+    """True quando as credenciais do WhatsApp Business (Meta Cloud API) para ENVIAR mensagens estão configuradas."""
+    return bool(settings.WHATSAPP_ACCESS_TOKEN and settings.WHATSAPP_PHONE_NUMBER_ID)
+
+
+def enviar_whatsapp(numero_destino: str, mensagem: str) -> bool:
+    """
+    Envia uma mensagem de texto avulsa via WhatsApp Business (Meta Cloud API)
+    para `numero_destino` (formato internacional, só dígitos - ex:
+    5565999998888). Retorna True se a API aceitou o envio, False em qualquer
+    falha (número inválido, token expirado, API fora do ar etc.) - nunca
+    levanta exceção, porque um aviso por WhatsApp que falha não pode impedir
+    o alerta de ser gravado e exibido normalmente na tela (ver
+    _notificar_whatsapp_usuario).
+    """
+    if not whatsapp_envio_configurado() or not numero_destino:
+        return False
+
+    url = f"https://graph.facebook.com/v20.0/{settings.WHATSAPP_PHONE_NUMBER_ID}/messages"
+    headers = {"Authorization": f"Bearer {settings.WHATSAPP_ACCESS_TOKEN}"}
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": numero_destino,
+        "type": "text",
+        "text": {"body": mensagem},
+    }
+    try:
+        resposta = requests.post(url, json=payload, headers=headers, timeout=10)
+        resposta.raise_for_status()
+        return True
+    except requests.RequestException:
+        return False
+
+
+def _notificar_whatsapp_usuario(usuario, mensagem: str) -> None:
+    """
+    Envia `mensagem` para o WhatsApp cadastrado do usuário (ver
+    accounts.models.PerfilUsuario), quando o envio está configurado e o
+    usuário tem um número salvo - silencioso em qualquer outro caso (usuário
+    sem perfil, sem número, ou envio desligado).
+    """
+    if not whatsapp_envio_configurado():
+        return
+    try:
+        numero = usuario.perfil.numero_whatsapp
+    except ObjectDoesNotExist:
+        return
+    if numero:
+        enviar_whatsapp(numero, mensagem)
 
 
 # --------------------------------------------------------------------------
@@ -1312,6 +1945,7 @@ def gerar_alertas_para_usuario(usuario) -> list[Alerta]:
                     percentual=posicao.lucro_perda_pct,
                 )
                 novos_alertas.append(alerta)
+                _notificar_whatsapp_usuario(usuario, alerta.mensagem)
 
         if posicao.tendencia in ("ALTA", "BAIXA"):
             ja_existe_tendencia = Alerta.objects.filter(
@@ -1403,6 +2037,7 @@ def gerar_sinais_robo_para_usuario(usuario) -> list[Alerta]:
             )
             alerta = Alerta.objects.create(usuario=usuario, ativo=ativo, tipo=tipo, mensagem=mensagem)
             novos_alertas.append(alerta)
+            _notificar_whatsapp_usuario(usuario, alerta.mensagem)
 
         if sinal == "COMPRA":
             _reservar_automaticamente(usuario, ativo)

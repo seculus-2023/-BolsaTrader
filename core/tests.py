@@ -7,21 +7,30 @@ Executar com:
 import hashlib
 import hmac
 import json
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone as dt_timezone
 from decimal import Decimal
 from io import StringIO
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
+import requests
 from django.contrib.auth.models import User
 from django.core.management import call_command
 from django.core.management.base import CommandError
 from django.test import TestCase, override_settings
 from django.urls import reverse
 
+from accounts.models import PerfilUsuario
+
 from .forms import OperacaoForm, VendaLoteForm
-from .models import Ativo, Cotacao, Operacao, Alerta, MensagemWhatsapp
+from .models import Ativo, Cotacao, Operacao, Alerta, MensagemWhatsapp, CotacaoIndice
 from .services import (
     calcular_posicoes, analisar_tendencia, gerar_alertas_para_usuario, construir_comparativo_valores,
+    analisar_indicadores_tecnicos, analisar_indicadores_tecnicos_precos,
+    buscar_historico_precos, backfill_historico_cotacoes, backtest_sinais_robo,
+    buscar_historico_cdi, calcular_comparativo_benchmark, _retorno_indice_periodo, _retorno_cdi_periodo,
+    calcular_concentracao_setor, calcular_metricas_risco,
+    enviar_whatsapp, whatsapp_envio_configurado,
+    BrapiError,
 )
 
 
@@ -1049,7 +1058,10 @@ class PwaTests(TestCase):
         resposta = self.client.get("/sw.js")
         self.assertEqual(resposta.status_code, 200)
         self.assertEqual(resposta["Content-Type"], "application/javascript")
-        self.assertIn("bolsatrader-v1", resposta.content.decode("utf-8"))
+        # regressão: o teste ficou preso em "v1" depois que o cache do Service
+        # Worker foi renomeado pra "v2" (ver static/js/service-worker-source.js) -
+        # checa só o prefixo, pra não travar de novo na próxima renomeação.
+        self.assertIn("bolsatrader-v", resposta.content.decode("utf-8"))
 
     def test_pagina_offline_nao_exige_login(self):
         resposta = self.client.get("/offline/")
@@ -1139,3 +1151,579 @@ class WhatsappTests(TestCase):
                 HTTP_X_HUB_SIGNATURE_256=assinatura,
             )
         self.assertEqual(resposta.status_code, 200)
+
+
+# ==========================================================================
+# Testes das melhorias de apoio à decisão (backfill de histórico,
+# backtesting do robô, benchmark Ibovespa/CDI, concentração por setor,
+# métricas de risco e avisos proativos via WhatsApp)
+# ==========================================================================
+class BuscarHistoricoPrecosTests(TestCase):
+    """core.services.buscar_historico_precos / backfill_historico_cotacoes"""
+
+    def setUp(self):
+        self.ativo = Ativo.objects.create(ticker="PETR4")
+
+    @patch("core.services.requests.get")
+    def test_converte_timestamp_unix_e_remove_data_duplicada(self, mock_get):
+        base = int(datetime(2026, 9, 1, tzinfo=dt_timezone.utc).timestamp())
+        mock_get.return_value.raise_for_status = lambda: None
+        mock_get.return_value.json = lambda: {
+            "results": [{
+                "symbol": "PETR4",
+                "historicalDataPrice": [
+                    {"date": base + 86400, "close": 31.0},
+                    {"date": base, "close": 30.0},
+                    {"date": base, "close": 30.5},  # mesma data - só a primeira deve ficar
+                ],
+            }]
+        }
+        historico = buscar_historico_precos("PETR4", dias=30)
+        self.assertEqual(len(historico), 2)
+        self.assertEqual(historico[0]["data"], date(2026, 9, 1))
+        self.assertEqual(historico[0]["fechamento"], Decimal("30.00"))
+        self.assertEqual(historico[1]["data"], date(2026, 9, 2))
+
+    @patch("core.services.requests.get")
+    def test_ticker_nao_encontrado_gera_brapierror(self, mock_get):
+        mock_get.return_value.raise_for_status = lambda: None
+        mock_get.return_value.json = lambda: {"results": []}
+        with self.assertRaises(BrapiError):
+            buscar_historico_precos("XXXX9")
+
+    @patch("core.services.requests.get")
+    def test_falha_de_rede_gera_brapierror(self, mock_get):
+        mock_get.side_effect = requests.RequestException("timeout")
+        with self.assertRaises(BrapiError):
+            buscar_historico_precos("PETR4")
+
+    @patch("core.services.requests.get")
+    def test_backfill_grava_so_as_datas_que_faltam_sem_sobrescrever_existentes(self, mock_get):
+        Cotacao.objects.create(ativo=self.ativo, data=date(2026, 9, 1), preco_fechamento=Decimal("99.00"))
+        base = int(datetime(2026, 9, 1, tzinfo=dt_timezone.utc).timestamp())
+        mock_get.return_value.raise_for_status = lambda: None
+        mock_get.return_value.json = lambda: {"results": [{"historicalDataPrice": [
+            {"date": base, "close": 30.0},
+            {"date": base + 86400, "close": 31.0},
+        ]}]}
+
+        gravadas = backfill_historico_cotacoes(self.ativo)
+
+        self.assertEqual(gravadas, 1)  # só 02/09 - 01/09 já existia
+        self.assertEqual(Cotacao.objects.filter(ativo=self.ativo).count(), 2)
+        cotacao_existente = Cotacao.objects.get(ativo=self.ativo, data=date(2026, 9, 1))
+        self.assertEqual(cotacao_existente.preco_fechamento, Decimal("99.00"))  # não foi sobrescrita
+
+    @patch("core.services.requests.get")
+    def test_backfill_sem_pontos_no_historico_nao_quebra(self, mock_get):
+        mock_get.return_value.raise_for_status = lambda: None
+        mock_get.return_value.json = lambda: {"results": [{"historicalDataPrice": []}]}
+        self.assertEqual(backfill_historico_cotacoes(self.ativo), 0)
+
+
+class BackfillAoRegistrarOperacaoTests(TestCase):
+    """A primeira compra de um ativo novo aciona o backfill automático (ver core.views.operacao_nova)."""
+
+    def setUp(self):
+        self.usuario = User.objects.create_user(username="investidor_backfill", password="SenhaForte123!")
+        self.client.login(username="investidor_backfill", password="SenhaForte123!")
+
+    def _resposta_por_endpoint(self, base_timestamp):
+        def _resposta(url, params=None, timeout=None):
+            resposta = Mock()
+            resposta.raise_for_status = lambda: None
+            if params and "range" in params:
+                resposta.json = lambda: {"results": [{"historicalDataPrice": [
+                    {"date": base_timestamp, "close": 29.0},
+                    {"date": base_timestamp + 86400, "close": 29.5},
+                ]}]}
+            else:
+                resposta.json = lambda: {
+                    "results": [{"regularMarketPrice": 30.0, "regularMarketChangePercent": 1.0}]
+                }
+            return resposta
+        return _resposta
+
+    @patch("core.services.requests.get")
+    def test_primeira_compra_de_ativo_novo_preenche_historico(self, mock_get):
+        base = int(datetime(2026, 1, 1, tzinfo=dt_timezone.utc).timestamp())
+        mock_get.side_effect = self._resposta_por_endpoint(base)
+
+        self.client.post(reverse("core:operacao_nova"), {
+            "ticker": "PETR4", "tipo": Operacao.COMPRA, "quantidade": "10",
+            "preco_unitario": "30.00", "data_operacao": date.today().isoformat(),
+            "meta_lucro_pct": "", "meta_perda_pct": "", "observacao": "",
+        })
+
+        ativo = Ativo.objects.get(ticker="PETR4")
+        # 1 cotação de hoje (atualizar_cotacao_diaria) + 2 do backfill (datas de 2026, diferentes de hoje)
+        self.assertEqual(ativo.cotacoes.count(), 3)
+
+    @patch("core.services.requests.get")
+    def test_segunda_compra_do_mesmo_ativo_nao_aciona_backfill_de_novo(self, mock_get):
+        base = int(datetime(2026, 1, 1, tzinfo=dt_timezone.utc).timestamp())
+        mock_get.side_effect = self._resposta_por_endpoint(base)
+
+        dados_post = {
+            "ticker": "VALE3", "tipo": Operacao.COMPRA, "quantidade": "5",
+            "preco_unitario": "60.00", "data_operacao": date.today().isoformat(),
+            "meta_lucro_pct": "", "meta_perda_pct": "", "observacao": "",
+        }
+        self.client.post(reverse("core:operacao_nova"), dados_post)
+        total_apos_primeira = mock_get.call_count
+
+        self.client.post(reverse("core:operacao_nova"), dados_post)
+        # a 2ª compra só atualiza a cotação de hoje (1 chamada a mais) - não repete o backfill,
+        # porque o ativo já deixou de ter "menos de 2 cotações"
+        self.assertEqual(mock_get.call_count, total_apos_primeira + 1)
+
+
+class IndicadoresRefatoradosTests(TestCase):
+    """Garante que extrair o núcleo puro (por preços) não mudou o resultado de analisar_indicadores_tecnicos."""
+
+    def test_versao_por_ativo_bate_com_versao_por_precos(self):
+        ativo = Ativo.objects.create(ticker="ITSA4")
+        hoje = date.today()
+        for i in range(40):
+            Cotacao.objects.create(
+                ativo=ativo, data=hoje - timedelta(days=40 - i),
+                preco_fechamento=Decimal("10.00") + Decimal(i) * Decimal("0.10"),
+            )
+        via_ativo = analisar_indicadores_tecnicos(ativo)
+        precos = [float(v) for v in ativo.cotacoes.order_by("data").values_list("preco_fechamento", flat=True)]
+        via_precos = analisar_indicadores_tecnicos_precos(precos)
+        self.assertEqual(via_ativo, via_precos)
+
+
+class BacktestRoboTests(TestCase):
+    """core.services.backtest_sinais_robo"""
+
+    def setUp(self):
+        self.ativo = Ativo.objects.create(ticker="VALE3")
+
+    def test_sem_historico_suficiente_marca_dados_insuficientes(self):
+        Cotacao.objects.create(ativo=self.ativo, data=date.today(), preco_fechamento=Decimal("60.00"))
+        resultado = backtest_sinais_robo(self.ativo, dias_retorno=5)
+        self.assertEqual(resultado["total_sinais"], 0)
+        self.assertTrue(resultado["dados_insuficientes"])
+
+    def test_serie_consistentemente_em_alta_acerta_todo_sinal_de_compra(self):
+        # uptrend com pequenos recuos periódicos (não uma reta perfeita, que satura o RSI em
+        # 100 e nunca gera sinal de compra) - qualquer sinal de compra que o robô emita nessa
+        # série de tendência forte deve "acertar" (preço sempre mais alto adiante)
+        hoje = date.today()
+        passo = [Decimal("0.35"), Decimal("0.30"), Decimal("-0.10"), Decimal("0.25"), Decimal("0.30"), Decimal("-0.05")]
+        preco = Decimal("10.00")
+        for i in range(60):
+            Cotacao.objects.create(ativo=self.ativo, data=hoje - timedelta(days=60 - i), preco_fechamento=preco)
+            preco += passo[i % len(passo)]
+
+        resultado = backtest_sinais_robo(self.ativo, dias_retorno=3)
+
+        self.assertFalse(resultado["dados_insuficientes"])
+        self.assertGreater(resultado["sinais_compra"], 0)
+        self.assertEqual(resultado["taxa_acerto_compra_pct"], 100.0)
+        for sinal in resultado["sinais"]:
+            if sinal["sinal"] == "COMPRA":
+                self.assertTrue(sinal["acerto"])
+                self.assertGreater(sinal["retorno_pct"], 0)
+
+    def test_view_backtest_robo_renderiza_para_ativos_do_usuario(self):
+        usuario = User.objects.create_user(username="investidor_bt", password="SenhaForte123!")
+        client_logado = self.client
+        client_logado.login(username="investidor_bt", password="SenhaForte123!")
+        Operacao.objects.create(
+            usuario=usuario, ativo=self.ativo, tipo=Operacao.COMPRA,
+            quantidade=10, preco_unitario=Decimal("10.00"), data_operacao=date.today(),
+        )
+        resposta = client_logado.get(reverse("core:backtest_robo"))
+        self.assertEqual(resposta.status_code, 200)
+        self.assertContains(resposta, "VALE3")
+
+    def test_view_backtest_robo_exige_login(self):
+        resposta = self.client.get(reverse("core:backtest_robo"))
+        self.assertEqual(resposta.status_code, 302)
+
+
+class BenchmarkTests(TestCase):
+    """core.services: buscar_historico_cdi, atualizar_benchmarks, calcular_comparativo_benchmark"""
+
+    def setUp(self):
+        self.usuario = User.objects.create_user(username="investidor_bench", password="SenhaForte123!")
+        self.ativo = Ativo.objects.create(ticker="WEGE3")
+
+    @patch("core.services.requests.get")
+    def test_buscar_historico_cdi_converte_data_br_para_iso(self, mock_get):
+        mock_get.return_value.raise_for_status = lambda: None
+        mock_get.return_value.json = lambda: [
+            {"data": "01/09/2026", "valor": "0.0539"},
+            {"data": "02/09/2026", "valor": "0.0540"},
+        ]
+        historico = buscar_historico_cdi(dias=30)
+        self.assertEqual(historico[0]["data"], date(2026, 9, 1))
+        self.assertEqual(historico[0]["taxa_pct"], Decimal("0.0539"))
+        self.assertEqual(historico[1]["data"], date(2026, 9, 2))
+
+    @patch("core.services.requests.get")
+    def test_buscar_historico_cdi_falha_de_rede_gera_brapierror(self, mock_get):
+        mock_get.side_effect = requests.RequestException("Banco Central fora do ar")
+        with self.assertRaises(BrapiError):
+            buscar_historico_cdi()
+
+    def test_retorno_indice_periodo_compara_primeiro_e_ultimo_valor(self):
+        CotacaoIndice.objects.create(indice=CotacaoIndice.IBOVESPA, data=date(2026, 9, 1), valor=Decimal("130000"))
+        CotacaoIndice.objects.create(indice=CotacaoIndice.IBOVESPA, data=date(2026, 9, 10), valor=Decimal("136500"))
+        retorno = _retorno_indice_periodo(CotacaoIndice.IBOVESPA, date(2026, 9, 1), date(2026, 9, 10))
+        self.assertEqual(retorno, Decimal("5.00"))
+
+    def test_retorno_indice_sem_dados_retorna_none(self):
+        self.assertIsNone(_retorno_indice_periodo(CotacaoIndice.IBOVESPA, date(2026, 9, 1), date(2026, 9, 10)))
+
+    def test_retorno_cdi_periodo_compoe_juros_em_vez_de_somar(self):
+        # taxas diárias "grandes" o bastante pra o efeito de juros sobre juros sobreviver ao
+        # arredondamento de 2 casas decimais do resultado (com 0.05% a diferença some no quantize)
+        CotacaoIndice.objects.create(indice=CotacaoIndice.CDI, data=date(2026, 9, 1), valor=Decimal("1.00"))
+        CotacaoIndice.objects.create(indice=CotacaoIndice.CDI, data=date(2026, 9, 2), valor=Decimal("1.00"))
+        retorno = _retorno_cdi_periodo(date(2026, 9, 1), date(2026, 9, 2))
+        esperado = ((Decimal("1.01") * Decimal("1.01")) - 1) * 100
+        self.assertEqual(retorno, esperado.quantize(Decimal("0.01")))
+        # a composição rende um pouquinho mais que a soma simples (1.00 + 1.00 = 2.00)
+        self.assertGreater(retorno, Decimal("2.00"))
+
+    def test_comparativo_benchmark_sem_posicao_comprada_retorna_none(self):
+        self.assertIsNone(calcular_comparativo_benchmark(self.usuario, posicoes=[]))
+
+    def test_comparativo_benchmark_calcula_retorno_da_carteira(self):
+        Operacao.objects.create(
+            usuario=self.usuario, ativo=self.ativo, tipo=Operacao.COMPRA,
+            quantidade=10, preco_unitario=Decimal("50.00"), data_operacao=date.today() - timedelta(days=10),
+        )
+        Cotacao.objects.create(
+            ativo=self.ativo, data=date.today() - timedelta(days=10), preco_fechamento=Decimal("50.00")
+        )
+        Cotacao.objects.create(ativo=self.ativo, data=date.today(), preco_fechamento=Decimal("55.00"))
+
+        comparativo = calcular_comparativo_benchmark(self.usuario)
+
+        self.assertIsNotNone(comparativo)
+        self.assertEqual(comparativo["retorno_carteira_pct"], Decimal("10.00"))
+        self.assertIsNone(comparativo["retorno_ibovespa_pct"])  # sem CotacaoIndice cadastrada ainda
+
+    def test_dashboard_exibe_comparativo_quando_disponivel(self):
+        self.client.login(username="investidor_bench", password="SenhaForte123!")
+        Operacao.objects.create(
+            usuario=self.usuario, ativo=self.ativo, tipo=Operacao.COMPRA,
+            quantidade=10, preco_unitario=Decimal("50.00"), data_operacao=date.today() - timedelta(days=5),
+        )
+        Cotacao.objects.create(
+            ativo=self.ativo, data=date.today() - timedelta(days=5), preco_fechamento=Decimal("50.00")
+        )
+        Cotacao.objects.create(ativo=self.ativo, data=date.today(), preco_fechamento=Decimal("52.00"))
+        resposta = self.client.get(reverse("core:dashboard"))
+        self.assertContains(resposta, "Sua carteira x mercado")
+
+    def test_posicoes_exibe_comparativo_quando_disponivel(self):
+        self.client.login(username="investidor_bench", password="SenhaForte123!")
+        Operacao.objects.create(
+            usuario=self.usuario, ativo=self.ativo, tipo=Operacao.COMPRA,
+            quantidade=10, preco_unitario=Decimal("50.00"), data_operacao=date.today() - timedelta(days=5),
+        )
+        Cotacao.objects.create(
+            ativo=self.ativo, data=date.today() - timedelta(days=5), preco_fechamento=Decimal("50.00")
+        )
+        Cotacao.objects.create(ativo=self.ativo, data=date.today(), preco_fechamento=Decimal("52.00"))
+
+        resposta = self.client.get(reverse("core:posicoes"))
+        self.assertContains(resposta, "Sua carteira x mercado")
+
+    @patch("core.services.requests.get")
+    def test_botao_atualizar_benchmarks_grava_historico_e_redireciona(self, mock_get):
+        self.client.login(username="investidor_bench", password="SenhaForte123!")
+        base = int(datetime(2026, 1, 1, tzinfo=dt_timezone.utc).timestamp())
+
+        def _resposta(url, params=None, timeout=None):
+            resposta = Mock()
+            resposta.raise_for_status = lambda: None
+            if "bcb.gov.br" in url:
+                resposta.json = lambda: [{"data": "01/01/2026", "valor": "0.05"}]
+            else:
+                resposta.json = lambda: {"results": [{"historicalDataPrice": [{"date": base, "close": 130000.0}]}]}
+            return resposta
+
+        mock_get.side_effect = _resposta
+
+        resposta = self.client.get(reverse("core:atualizar_benchmarks") + "?next=" + reverse("core:posicoes"))
+
+        self.assertRedirects(resposta, reverse("core:posicoes"))
+        self.assertEqual(CotacaoIndice.objects.filter(indice=CotacaoIndice.IBOVESPA).count(), 1)
+        self.assertEqual(CotacaoIndice.objects.filter(indice=CotacaoIndice.CDI).count(), 1)
+
+
+class ComandoAtualizarBenchmarksTests(TestCase):
+    @patch("core.services.requests.get")
+    def test_atualiza_ibovespa_e_cdi_de_fontes_independentes(self, mock_get):
+        base = int(datetime(2026, 1, 1, tzinfo=dt_timezone.utc).timestamp())
+
+        def _resposta(url, params=None, timeout=None):
+            resposta = Mock()
+            resposta.raise_for_status = lambda: None
+            if "bcb.gov.br" in url:
+                resposta.json = lambda: [{"data": "01/01/2026", "valor": "0.05"}]
+            else:
+                resposta.json = lambda: {"results": [{"historicalDataPrice": [
+                    {"date": base, "close": 130000.0}
+                ]}]}
+            return resposta
+
+        mock_get.side_effect = _resposta
+        saida = StringIO()
+        call_command("atualizar_benchmarks", stdout=saida)
+
+        self.assertEqual(CotacaoIndice.objects.filter(indice=CotacaoIndice.IBOVESPA).count(), 1)
+        self.assertEqual(CotacaoIndice.objects.filter(indice=CotacaoIndice.CDI).count(), 1)
+        self.assertIn("Ibovespa: 1", saida.getvalue())
+
+    @patch("core.services.requests.get")
+    def test_falha_em_uma_fonte_nao_impede_a_outra(self, mock_get):
+        def _resposta(url, params=None, timeout=None):
+            if "bcb.gov.br" in url:
+                raise requests.RequestException("Banco Central fora do ar")
+            resposta = Mock()
+            resposta.raise_for_status = lambda: None
+            base = int(datetime(2026, 1, 1, tzinfo=dt_timezone.utc).timestamp())
+            resposta.json = lambda: {"results": [{"historicalDataPrice": [{"date": base, "close": 130000.0}]}]}
+            return resposta
+
+        mock_get.side_effect = _resposta
+        saida = StringIO()
+        call_command("atualizar_benchmarks", stdout=saida)
+
+        self.assertEqual(CotacaoIndice.objects.filter(indice=CotacaoIndice.IBOVESPA).count(), 1)
+        self.assertEqual(CotacaoIndice.objects.filter(indice=CotacaoIndice.CDI).count(), 0)
+        self.assertIn("FALHA", saida.getvalue())
+
+
+class ComandoBackfillCotacoesTests(TestCase):
+    @patch("core.services.requests.get")
+    def test_processa_apenas_ativos_com_poucas_cotacoes(self, mock_get):
+        ativo_pouco = Ativo.objects.create(ticker="PETR4")
+        ativo_completo = Ativo.objects.create(ticker="VALE3")
+        hoje = date.today()
+        for i in range(40):
+            Cotacao.objects.create(
+                ativo=ativo_completo, data=hoje - timedelta(days=40 - i), preco_fechamento=Decimal("10.00")
+            )
+
+        base = int(datetime(2026, 1, 1, tzinfo=dt_timezone.utc).timestamp())
+        mock_get.return_value.raise_for_status = lambda: None
+        mock_get.return_value.json = lambda: {"results": [{"historicalDataPrice": [
+            {"date": base, "close": 30.0}, {"date": base + 86400, "close": 31.0},
+        ]}]}
+
+        saida = StringIO()
+        call_command("backfill_cotacoes", "--minimo", "35", stdout=saida)
+
+        self.assertEqual(Cotacao.objects.filter(ativo=ativo_pouco).count(), 2)
+        mock_get.assert_called_once()  # só ativo_pouco foi processado - ativo_completo já tem 40 >= 35
+        self.assertIn("1 ativo(s) com menos de 35", saida.getvalue())
+
+
+class ConcentracaoSetorTests(TestCase):
+    """core.services.calcular_concentracao_setor"""
+
+    def setUp(self):
+        self.usuario = User.objects.create_user(username="investidor_setor", password="SenhaForte123!")
+        self.banco1 = Ativo.objects.create(ticker="ITUB4", setor="Bancos")
+        self.banco2 = Ativo.objects.create(ticker="BBDC4", setor="Bancos")
+        self.varejo = Ativo.objects.create(ticker="MGLU3", setor="Varejo")
+
+    def _comprar(self, ativo, preco):
+        Operacao.objects.create(
+            usuario=self.usuario, ativo=ativo, tipo=Operacao.COMPRA,
+            quantidade=10, preco_unitario=Decimal(preco), data_operacao=date.today(),
+        )
+        Cotacao.objects.create(ativo=ativo, data=date.today(), preco_fechamento=Decimal(preco))
+
+    def test_agrupa_por_setor_e_calcula_percentual(self):
+        self._comprar(self.banco1, "10.00")
+        self._comprar(self.banco2, "10.00")
+        self._comprar(self.varejo, "10.00")
+
+        concentracao = calcular_concentracao_setor(calcular_posicoes(self.usuario))
+        por_setor = {item["setor"]: item["percentual"] for item in concentracao}
+
+        self.assertEqual(por_setor["Bancos"], Decimal("66.67"))
+        self.assertEqual(por_setor["Varejo"], Decimal("33.33"))
+        # ordenado do maior para o menor
+        self.assertEqual(concentracao[0]["setor"], "Bancos")
+
+    def test_ativo_sem_setor_cai_em_sem_setor(self):
+        sem_setor = Ativo.objects.create(ticker="XYZ3")
+        self._comprar(sem_setor, "1.00")
+
+        concentracao = calcular_concentracao_setor(calcular_posicoes(self.usuario))
+
+        self.assertEqual(concentracao[0]["setor"], "Sem setor")
+
+    def test_sem_posicoes_compradas_retorna_lista_vazia(self):
+        self.assertEqual(calcular_concentracao_setor([]), [])
+
+    def test_reserva_nao_entra_na_concentracao(self):
+        Operacao.objects.create(
+            usuario=self.usuario, ativo=self.banco1, tipo=Operacao.RESERVAR,
+            quantidade=1, preco_unitario=Decimal("10.00"), data_operacao=date.today(),
+        )
+        concentracao = calcular_concentracao_setor(calcular_posicoes(self.usuario))
+        self.assertEqual(concentracao, [])
+
+
+class MetricasRiscoTests(TestCase):
+    """core.services.calcular_metricas_risco"""
+
+    def setUp(self):
+        self.usuario = User.objects.create_user(username="investidor_risco", password="SenhaForte123!")
+        self.ativo = Ativo.objects.create(ticker="PETR4")
+        Operacao.objects.create(
+            usuario=self.usuario, ativo=self.ativo, tipo=Operacao.COMPRA,
+            quantidade=10, preco_unitario=Decimal("30.00"), data_operacao=date.today(),
+        )
+
+    def test_sem_historico_suficiente_retorna_none_nos_indicadores(self):
+        Cotacao.objects.create(ativo=self.ativo, data=date.today(), preco_fechamento=Decimal("30.00"))
+        metricas = calcular_metricas_risco(calcular_posicoes(self.usuario))
+        item = metricas["por_ativo"][0]
+        self.assertIsNone(item["volatilidade_pct"])
+        self.assertIsNone(item["drawdown_pct"])
+
+    def test_drawdown_maximo_detectado_corretamente(self):
+        # pico em 36, fundo em 27 depois do pico -> queda de 25% do topo ao fundo
+        precos = [Decimal("30.00"), Decimal("36.00"), Decimal("27.00"), Decimal("28.00")]
+        hoje = date.today()
+        for i, preco in enumerate(precos):
+            Cotacao.objects.create(ativo=self.ativo, data=hoje - timedelta(days=len(precos) - i), preco_fechamento=preco)
+
+        item = calcular_metricas_risco(calcular_posicoes(self.usuario))["por_ativo"][0]
+
+        self.assertEqual(item["drawdown_pct"], -25.0)
+        self.assertIsNotNone(item["volatilidade_pct"])
+        self.assertGreater(item["volatilidade_pct"], 0)
+
+    def test_concentracao_alta_detectada_quando_um_ativo_domina_a_carteira(self):
+        outro = Ativo.objects.create(ticker="VALE3")
+        Operacao.objects.create(
+            usuario=self.usuario, ativo=outro, tipo=Operacao.COMPRA,
+            quantidade=1, preco_unitario=Decimal("1.00"), data_operacao=date.today(),
+        )
+        Cotacao.objects.create(ativo=self.ativo, data=date.today(), preco_fechamento=Decimal("30.00"))
+        Cotacao.objects.create(ativo=outro, data=date.today(), preco_fechamento=Decimal("1.00"))
+
+        metricas = calcular_metricas_risco(calcular_posicoes(self.usuario))
+
+        self.assertTrue(metricas["concentracao_alta"])
+        self.assertEqual(metricas["maior_posicao_ativo"], self.ativo)
+
+    def test_carteira_bem_distribuida_nao_gera_alerta_de_concentracao(self):
+        # com só 2 ativos, mesmo 50/50 (o máximo de diversificação possível) já passa dos 40%
+        # do limiar de alerta - uma carteira "bem distribuída" de verdade precisa de mais ativos,
+        # cada um abaixo do limiar
+        outro = Ativo.objects.create(ticker="VALE3")
+        terceiro = Ativo.objects.create(ticker="ITSA4")
+        Operacao.objects.create(
+            usuario=self.usuario, ativo=outro, tipo=Operacao.COMPRA,
+            quantidade=10, preco_unitario=Decimal("30.00"), data_operacao=date.today(),
+        )
+        Operacao.objects.create(
+            usuario=self.usuario, ativo=terceiro, tipo=Operacao.COMPRA,
+            quantidade=10, preco_unitario=Decimal("30.00"), data_operacao=date.today(),
+        )
+        Cotacao.objects.create(ativo=self.ativo, data=date.today(), preco_fechamento=Decimal("30.00"))
+        Cotacao.objects.create(ativo=outro, data=date.today(), preco_fechamento=Decimal("30.00"))
+        Cotacao.objects.create(ativo=terceiro, data=date.today(), preco_fechamento=Decimal("30.00"))
+
+        metricas = calcular_metricas_risco(calcular_posicoes(self.usuario))
+
+        self.assertFalse(metricas["concentracao_alta"])
+        self.assertEqual(metricas["maior_posicao_pct"], Decimal("33.33"))
+
+    def test_posicoes_page_exibe_secao_de_risco_e_setor(self):
+        self.client.login(username="investidor_risco", password="SenhaForte123!")
+        Cotacao.objects.create(ativo=self.ativo, data=date.today(), preco_fechamento=Decimal("33.00"))
+        resposta = self.client.get(reverse("core:posicoes"))
+        self.assertContains(resposta, "Indicadores de risco")
+
+
+class EnviarWhatsappTests(TestCase):
+    """core.services.enviar_whatsapp / whatsapp_envio_configurado e o disparo a partir dos alertas."""
+
+    def setUp(self):
+        self.usuario = User.objects.create_user(username="investidor_wa", password="SenhaForte123!")
+        self.ativo = Ativo.objects.create(ticker="PETR4")
+
+    def test_envio_desligado_sem_credenciais_configuradas(self):
+        with override_settings(WHATSAPP_ACCESS_TOKEN="", WHATSAPP_PHONE_NUMBER_ID=""):
+            self.assertFalse(whatsapp_envio_configurado())
+            self.assertFalse(enviar_whatsapp("5565999998888", "teste"))
+
+    @patch("core.services.requests.post")
+    def test_envio_bem_sucedido_chama_a_api_da_meta_corretamente(self, mock_post):
+        mock_post.return_value.raise_for_status = lambda: None
+        with override_settings(WHATSAPP_ACCESS_TOKEN="token123", WHATSAPP_PHONE_NUMBER_ID="1234567890"):
+            resultado = enviar_whatsapp("5565999998888", "PETR4: meta de lucro atingida")
+
+        self.assertTrue(resultado)
+        url_chamada = mock_post.call_args[0][0]
+        self.assertIn("1234567890", url_chamada)
+        payload = mock_post.call_args.kwargs["json"]
+        self.assertEqual(payload["to"], "5565999998888")
+        self.assertEqual(payload["text"]["body"], "PETR4: meta de lucro atingida")
+
+    @patch("core.services.requests.post")
+    def test_falha_na_api_retorna_false_sem_lancar_excecao(self, mock_post):
+        mock_post.side_effect = requests.RequestException("fora do ar")
+        with override_settings(WHATSAPP_ACCESS_TOKEN="token123", WHATSAPP_PHONE_NUMBER_ID="1234567890"):
+            self.assertFalse(enviar_whatsapp("5565999998888", "teste"))
+
+    @patch("core.services.enviar_whatsapp")
+    def test_alerta_de_meta_dispara_envio_quando_usuario_tem_numero_cadastrado(self, mock_enviar):
+        PerfilUsuario.objects.create(usuario=self.usuario, numero_whatsapp="5565999998888")
+        Operacao.objects.create(
+            usuario=self.usuario, ativo=self.ativo, tipo=Operacao.COMPRA,
+            quantidade=10, preco_unitario=Decimal("20.00"), data_operacao=date.today(),
+            meta_lucro_pct=Decimal("5.0"), meta_perda_pct=Decimal("-5.0"),
+        )
+        Cotacao.objects.create(ativo=self.ativo, data=date.today(), preco_fechamento=Decimal("25.00"))
+
+        with override_settings(WHATSAPP_ACCESS_TOKEN="token123", WHATSAPP_PHONE_NUMBER_ID="1234567890"):
+            gerar_alertas_para_usuario(self.usuario)
+
+        mock_enviar.assert_called_once()
+        self.assertEqual(mock_enviar.call_args[0][0], "5565999998888")
+
+    @patch("core.services.enviar_whatsapp")
+    def test_alerta_nao_dispara_envio_sem_numero_cadastrado(self, mock_enviar):
+        Operacao.objects.create(
+            usuario=self.usuario, ativo=self.ativo, tipo=Operacao.COMPRA,
+            quantidade=10, preco_unitario=Decimal("20.00"), data_operacao=date.today(),
+            meta_lucro_pct=Decimal("5.0"), meta_perda_pct=Decimal("-5.0"),
+        )
+        Cotacao.objects.create(ativo=self.ativo, data=date.today(), preco_fechamento=Decimal("25.00"))
+
+        with override_settings(WHATSAPP_ACCESS_TOKEN="token123", WHATSAPP_PHONE_NUMBER_ID="1234567890"):
+            gerar_alertas_para_usuario(self.usuario)
+
+        mock_enviar.assert_not_called()
+
+    @patch("core.services.enviar_whatsapp")
+    def test_alerta_nao_dispara_envio_quando_credenciais_nao_configuradas(self, mock_enviar):
+        PerfilUsuario.objects.create(usuario=self.usuario, numero_whatsapp="5565999998888")
+        Operacao.objects.create(
+            usuario=self.usuario, ativo=self.ativo, tipo=Operacao.COMPRA,
+            quantidade=10, preco_unitario=Decimal("20.00"), data_operacao=date.today(),
+            meta_lucro_pct=Decimal("5.0"), meta_perda_pct=Decimal("-5.0"),
+        )
+        Cotacao.objects.create(ativo=self.ativo, data=date.today(), preco_fechamento=Decimal("25.00"))
+
+        with override_settings(WHATSAPP_ACCESS_TOKEN="", WHATSAPP_PHONE_NUMBER_ID=""):
+            gerar_alertas_para_usuario(self.usuario)
+
+        mock_enviar.assert_not_called()

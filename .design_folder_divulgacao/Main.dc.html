@@ -1,0 +1,192 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; }
+    .flyer { font-family: "IBM Plex Sans", "Segoe UI", sans-serif; }
+    .display { font-family: "Space Grotesk", "Century Gothic", sans-serif; }
+    a { color: #0891B2; text-decoration: none; }
+    a:hover { color: #0E7490; }
+  </style>
+</helmet>
+
+<div class="flyer" style="width:794px; height:1123px; background:#FFFFFF; position:relative; overflow:hidden; color:#0D1526;">
+
+  <!-- ============== HERO (dark band) ============== -->
+  <div style="position:relative; width:100%; height:238px; background:linear-gradient(135deg, #050912 0%, #0D1526 70%, #10192E 100%); overflow:hidden;">
+    <!-- decorative grid texture -->
+    <svg width="794" height="238" viewBox="0 0 794 238" style="position:absolute; top:0; left:0; opacity:0.16;">
+      <defs>
+        <pattern id="grid" width="34" height="34" patternUnits="userSpaceOnUse">
+          <path d="M 34 0 L 0 0 0 34" fill="none" stroke="#00F0FF" stroke-width="1"></path>
+        </pattern>
+      </defs>
+      <rect width="794" height="238" fill="url(#grid)"></rect>
+    </svg>
+    <!-- decorative rising sparkline -->
+    <svg width="420" height="180" viewBox="0 0 420 180" style="position:absolute; right:-30px; bottom:-30px; opacity:0.5;">
+      <polyline points="0,150 60,130 110,145 170,90 230,110 290,55 350,70 420,10" fill="none" stroke="#39FF8F" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"></polyline>
+    </svg>
+    <!-- radial glow -->
+    <div style="position:absolute; top:-120px; left:-80px; width:320px; height:320px; border-radius:50%; background:radial-gradient(circle, rgba(0,240,255,0.28) 0%, rgba(0,240,255,0) 70%);"></div>
+
+    <div style="position:relative; padding:44px 56px 0 56px;">
+      <div style="font-size:12px; letter-spacing:3px; color:#7FE7F2; font-weight:600; text-transform:uppercase;">Sistema de Investimentos &middot; B3</div>
+
+      <div style="display:flex; align-items:center; gap:14px; margin-top:14px;">
+        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" style="flex-shrink:0;">
+          <path d="M13 2 L4 14h6l-1 8 9-12h-6l1-8z" fill="#00F0FF"></path>
+        </svg>
+        <div class="display" style="font-size:42px; font-weight:700; color:#F4FAFD; letter-spacing:0.5px;">BOLSATRADER</div>
+      </div>
+
+      <div style="margin-top:16px; font-size:20px; line-height:1.5; color:#C8D6E5; max-width:560px; font-weight:400;">
+        Compre e venda ações da B3 com o apoio de um <strong style="color:#B9F3FF; font-weight:600;">robô consultor</strong> que analisa o mercado por você, 24 horas por dia.
+      </div>
+    </div>
+  </div>
+
+  <!-- ============== FEATURES (light body) ============== -->
+  <div style="padding:44px 56px 0 56px;">
+    <div class="display" style="font-size:15px; font-weight:600; letter-spacing:1.5px; text-transform:uppercase; color:#0891B2; margin-bottom:28px;">
+      O que o sistema faz por você
+    </div>
+
+    <div style="display:grid; grid-template-columns:repeat(2, minmax(0,1fr)); column-gap:36px; row-gap:34px;">
+
+      <!-- 1. Robo consultor -->
+      <div style="display:flex; gap:16px; align-items:flex-start;">
+        <div style="flex-shrink:0; width:48px; height:48px; border-radius:50%; background:#F2E9FE; display:flex; align-items:center; justify-content:center; color:#7C3AED;">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="5" y="7" width="14" height="12" rx="2.5"></rect>
+            <path d="M9 7V4.5a1.5 1.5 0 0 1 3 0V7"></path>
+            <path d="M15 7V4.5a1.5 1.5 0 0 0-3 0"></path>
+            <circle cx="9.5" cy="12.5" r="1.2" fill="currentColor" stroke="none"></circle>
+            <circle cx="14.5" cy="12.5" r="1.2" fill="currentColor" stroke="none"></circle>
+            <path d="M9 16.5h6"></path>
+            <path d="M2.5 11v3"></path>
+            <path d="M21.5 11v3"></path>
+          </svg>
+        </div>
+        <div>
+          <div style="font-weight:600; font-size:16px; color:#0D1526;">Robô Consultor</div>
+          <div style="font-size:14px; line-height:1.5; color:#5A6474; margin-top:3px;">Analisa RSI, MACD e tendência de cada ativo e sugere quando comprar ou vender.</div>
+        </div>
+      </div>
+
+      <!-- 2. Painel de controle -->
+      <div style="display:flex; gap:16px; align-items:flex-start;">
+        <div style="flex-shrink:0; width:48px; height:48px; border-radius:50%; background:#E0F7FA; display:flex; align-items:center; justify-content:center; color:#0891B2;">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3.5" y="3.5" width="7.5" height="7.5" rx="1.5"></rect>
+            <rect x="13" y="3.5" width="7.5" height="7.5" rx="1.5"></rect>
+            <rect x="3.5" y="13" width="7.5" height="7.5" rx="1.5"></rect>
+            <rect x="13" y="13" width="7.5" height="7.5" rx="1.5"></rect>
+          </svg>
+        </div>
+        <div>
+          <div style="font-weight:600; font-size:16px; color:#0D1526;">Painel de Controle</div>
+          <div style="font-size:14px; line-height:1.5; color:#5A6474; margin-top:3px;">Valor investido, valor atual e lucro/perda da carteira, em tempo real.</div>
+        </div>
+      </div>
+
+      <!-- 3. Indicadores tecnicos -->
+      <div style="display:flex; gap:16px; align-items:flex-start;">
+        <div style="flex-shrink:0; width:48px; height:48px; border-radius:50%; background:#E6FBEF; display:flex; align-items:center; justify-content:center; color:#16A34A;">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M3 17l5-6 4 3 6-8"></path>
+            <circle cx="18" cy="6" r="1.6" fill="currentColor" stroke="none"></circle>
+            <path d="M3 20.5h18"></path>
+          </svg>
+        </div>
+        <div>
+          <div style="font-weight:600; font-size:16px; color:#0D1526;">Indicadores Técnicos</div>
+          <div style="font-size:14px; line-height:1.5; color:#5A6474; margin-top:3px;">Tendência, RSI e MACD calculados automaticamente para cada ação.</div>
+        </div>
+      </div>
+
+      <!-- 4. TradingView -->
+      <div style="display:flex; gap:16px; align-items:flex-start;">
+        <div style="flex-shrink:0; width:48px; height:48px; border-radius:50%; background:#E0F7FA; display:flex; align-items:center; justify-content:center; color:#0891B2;">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M6 20V9"></path>
+            <path d="M6 9l-2 1.5M6 9l2 1.5"></path>
+            <path d="M12 20V5"></path>
+            <path d="M12 5l-2 1.5M12 5l2 1.5"></path>
+            <path d="M18 20v-8"></path>
+            <path d="M18 12l-2 1.5M18 12l2 1.5"></path>
+          </svg>
+        </div>
+        <div>
+          <div style="font-weight:600; font-size:16px; color:#0D1526;">Gráfico TradingView</div>
+          <div style="font-size:14px; line-height:1.5; color:#5A6474; margin-top:3px;">Gráfico profissional embutido, com busca de qualquer ativo da bolsa.</div>
+        </div>
+      </div>
+
+      <!-- 5. Relatorios -->
+      <div style="display:flex; gap:16px; align-items:flex-start;">
+        <div style="flex-shrink:0; width:48px; height:48px; border-radius:50%; background:#F2E9FE; display:flex; align-items:center; justify-content:center; color:#7C3AED;">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M7 3.5h7l4 4V20a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V4.5a1 1 0 0 1 1-1z"></path>
+            <path d="M14 3.5V8h4"></path>
+            <path d="M8.5 13.5v3"></path>
+            <path d="M12 11.5v5.5"></path>
+            <path d="M15.5 15v2"></path>
+          </svg>
+        </div>
+        <div>
+          <div style="font-weight:600; font-size:16px; color:#0D1526;">Relatórios Profissionais</div>
+          <div style="font-size:14px; line-height:1.5; color:#5A6474; margin-top:3px;">Exportação em Excel e PDF, com totais e filtros por período.</div>
+        </div>
+      </div>
+
+      <!-- 6. PWA -->
+      <div style="display:flex; gap:16px; align-items:flex-start;">
+        <div style="flex-shrink:0; width:48px; height:48px; border-radius:50%; background:#E6FBEF; display:flex; align-items:center; justify-content:center; color:#16A34A;">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="6.5" y="2.5" width="11" height="19" rx="2.2"></rect>
+            <path d="M10 18.3h4"></path>
+            <path d="M12 7v5.5"></path>
+            <path d="M9.3 10.3l2.7 2.7 2.7-2.7"></path>
+          </svg>
+        </div>
+        <div>
+          <div style="font-weight:600; font-size:16px; color:#0D1526;">App Instalável</div>
+          <div style="font-size:14px; line-height:1.5; color:#5A6474; margin-top:3px;">Funciona como aplicativo no computador ou celular, direto do navegador.</div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ============== FOOTER (dark band, CTA + legal) ============== -->
+  <div style="position:absolute; bottom:0; left:0; width:100%; height:172px; background:linear-gradient(120deg, #0D1526 0%, #050912 100%);">
+    <div style="padding:26px 56px 0 56px; display:flex; align-items:center; justify-content:space-between;">
+      <div>
+        <div class="display" style="font-size:22px; font-weight:700; color:#F4FAFD;">Pronto para investir com mais clareza?</div>
+        <div style="font-size:14px; color:#93A4BC; margin-top:6px;">Contato para demonstração: <span style="color:#B9F3FF;">[seu contato aqui]</span></div>
+      </div>
+      <div style="flex-shrink:0; padding:13px 26px; border-radius:999px; border:1.5px solid #00F0FF; color:#00F0FF; font-weight:600; font-size:14px; letter-spacing:0.5px; white-space:nowrap;">
+        PEÇA UMA DEMONSTRAÇÃO
+      </div>
+    </div>
+
+    <div style="margin:20px 56px 0 56px; border-top:1px solid rgba(255,255,255,0.12);"></div>
+
+    <div style="padding:14px 56px 0 56px; font-size:12px; line-height:1.5; color:#66748C;">
+      BolsaTrader &mdash; sistema de acompanhamento de compra e venda de ações (B3). Uso educacional. Os indicadores e sinais do robô consultor são referências técnicas de apoio à decisão e não constituem recomendação de investimento.
+    </div>
+  </div>
+
+</div>
+</x-dc>
+</body>
+</html>

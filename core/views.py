@@ -48,6 +48,12 @@ from .services import (
     atualizar_noticias_fonte,
     NoticiaScrapingError,
     BrapiError,
+    backfill_historico_cotacoes,
+    backtest_sinais_robo,
+    calcular_concentracao_setor,
+    calcular_metricas_risco,
+    calcular_comparativo_benchmark,
+    atualizar_benchmarks,
 )
 
 TICKER_VALIDO = re.compile(r"^[A-Z0-9]{1,15}$")
@@ -76,6 +82,7 @@ def dashboard(request):
         "alertas_recentes": alertas_recentes,
         "total_ativos": len([p for p in posicoes if not p.apenas_reservado]),
         "atividade_recente": atividade_recente(limite=15),
+        "comparativo_benchmark": calcular_comparativo_benchmark(request.user, posicoes=posicoes),
     }
     return render(request, "core/dashboard.html", contexto)
 
@@ -299,6 +306,17 @@ def operacao_nova(request):
             except BrapiError:
                 pass  # a cotação será buscada depois pelo comando de atualização diária
 
+            # ativo com menos de 2 cotações = acabou de ser cadastrado (só a
+            # de hoje, se a chamada acima teve sucesso) - preenche de uma vez
+            # o histórico recente, pra não deixar RSI/MACD "aguardando
+            # histórico" por semanas até acumular os pregões dia a dia (ver
+            # core.services.backfill_historico_cotacoes)
+            if operacao.ativo.cotacoes.count() < 2:
+                try:
+                    backfill_historico_cotacoes(operacao.ativo)
+                except BrapiError:
+                    pass  # sem histórico disponível agora - o robô fica "aguardando histórico" normalmente
+
             tipo_label = operacao.get_tipo_display()
             messages.success(
                 request,
@@ -453,6 +471,9 @@ def posicoes(request):
         "valor_atual_total": valor_atual_total,
         "lucro_perda_total": lucro_perda_total,
         "lucro_perda_pct_total": lucro_perda_pct_total,
+        "concentracao_setor": calcular_concentracao_setor(lista_posicoes),
+        "metricas_risco": calcular_metricas_risco(lista_posicoes),
+        "comparativo_benchmark": calcular_comparativo_benchmark(request.user, posicoes=lista_posicoes),
     }
     return render(request, "core/posicoes.html", contexto)
 
@@ -574,6 +595,32 @@ def robo_exportar_pdf(request):
 
 
 @login_required
+def backtest_robo(request):
+    """
+    Backtesting do robô consultor: para cada ativo que o usuário acompanha,
+    simula os sinais que o robô teria dado no passado (com base só no
+    histórico de cotações já salvo) e mostra a taxa de acerto - responde à
+    pergunta "esse robô presta?" antes de confiar capital de verdade nele
+    (ver core.services.backtest_sinais_robo). Só uma estatística sobre o
+    passado, não garante desempenho futuro.
+    """
+    dias_retorno = 5
+    try:
+        dias_retorno = int(request.GET.get("dias_retorno", dias_retorno))
+    except (TypeError, ValueError):
+        pass
+    dias_retorno = max(1, min(dias_retorno, 60))
+
+    ativos = Ativo.objects.filter(operacoes__usuario=request.user).distinct().order_by("ticker")
+    resultados = [backtest_sinais_robo(ativo, dias_retorno=dias_retorno) for ativo in ativos]
+
+    return render(
+        request, "core/backtest_robo.html",
+        {"resultados": resultados, "dias_retorno": dias_retorno},
+    )
+
+
+@login_required
 def historico_graficos(request):
     """
     Página dedicada ao histórico de cotações diárias e ao gráfico de
@@ -666,6 +713,31 @@ def atualizar_cotacoes_agora(request):
     gerar_alertas_para_usuario(request.user)
     gerar_sinais_robo_para_usuario(request.user)
     return redirect("core:dashboard")
+
+
+@login_required
+def atualizar_benchmarks_agora(request):
+    """
+    Permite forçar pelo próprio painel a atualização do histórico de
+    benchmarks (Ibovespa e CDI) usado no comparativo "Sua carteira x
+    mercado" - equivalente a rodar `python manage.py atualizar_benchmarks`
+    na mão. Os benchmarks são globais (não dependem do usuário), então
+    qualquer usuário logado pode disparar a atualização.
+    """
+    resultado = atualizar_benchmarks()
+    if resultado["erros"]:
+        messages.warning(
+            request,
+            f"Benchmarks atualizados parcialmente (Ibovespa: {resultado['ibovespa']} nova(s), "
+            f"CDI: {resultado['cdi']} nova(s)). Erros: {'; '.join(resultado['erros'])}",
+        )
+    else:
+        messages.success(
+            request,
+            f"Benchmarks atualizados: Ibovespa ({resultado['ibovespa']} cotação(ões) nova(s)) e "
+            f"CDI ({resultado['cdi']} cotação(ões) nova(s)).",
+        )
+    return redirect(request.GET.get("next") or "core:dashboard")
 
 
 def offline_view(request):

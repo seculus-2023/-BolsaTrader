@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block titulo %}Minha Conta - BolsaTrader{% endblock %}
+{% block conteudo %}
+<h1>Minha Conta</h1>
+<p style="color: var(--text-dim);">
+    Informe seu número de WhatsApp para receber avisos automáticos quando uma meta de lucro/perda for atingida
+    ou o robô consultor identificar um sinal de compra/venda - os avisos continuam aparecendo normalmente em
+    <a href="{% url 'core:alertas' %}">Alertas</a> mesmo sem um número cadastrado aqui.
+</p>
+
+<div class="card-glass" style="max-width: 480px; margin-top: 1rem;">
+    <form method="post" class="form-futurista">
+        {% csrf_token %}
+        {% for field in form %}
+            <label for="{{ field.id_for_label }}">{{ field.label }}</label>
+            {{ field }}
+            {{ field.errors }}
+            {% if field.help_text %}<small style="color: var(--text-dim);">{{ field.help_text }}</small>{% endif %}
+        {% endfor %}
+        <button type="submit" class="btn-futurista" style="margin-top: 1.4rem;">Salvar</button>
+    </form>
+</div>
+{% endblock %}

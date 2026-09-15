@@ -21,6 +21,11 @@ class Ativo(models.Model):
     nome_longo = models.CharField("Nome completo", max_length=255, blank=True)
     moeda = models.CharField("Moeda", max_length=8, blank=True)
     logo_url = models.URLField("URL do logo", max_length=500, blank=True)
+    setor = models.CharField(
+        "Setor", max_length=150, blank=True,
+        help_text="Preenchido automaticamente pela API de cotações ou pelo catálogo Ações da B3, "
+        "quando disponível - usado para a análise de concentração por setor da carteira.",
+    )
 
     maxima_dia = models.DecimalField("Máxima do dia (R$)", max_digits=12, decimal_places=2, null=True, blank=True)
     minima_dia = models.DecimalField("Mínima do dia (R$)", max_digits=12, decimal_places=2, null=True, blank=True)
@@ -190,6 +195,29 @@ class Operacao(models.Model):
         if not custo:
             return None
         return (lucro / custo * 100).quantize(Decimal("0.01"))
+
+    @property
+    def lucro_perda_por_dia(self):
+        """
+        Lucro/perda realizado (R$) dividido pelos dias que o lote ficou em
+        carteira até a venda - mede a "velocidade" do resultado (R$/dia), não
+        só o total. None quando vendido no mesmo dia da compra (0 dias, não
+        dá pra ratear) ou quando ainda não há lucro/perda apurado.
+        """
+        lucro = self.lucro_perda_realizado
+        dias = self.dias_em_carteira_ate_venda
+        if lucro is None or not dias:
+            return None
+        return (lucro / dias).quantize(Decimal("0.01"))
+
+    @property
+    def lucro_perda_pct_por_dia(self):
+        """Lucro/perda realizado (%) dividido pelos dias em carteira até a venda - mesma ideia de lucro_perda_por_dia, em percentual."""
+        pct = self.lucro_perda_pct_realizado
+        dias = self.dias_em_carteira_ate_venda
+        if pct is None or not dias:
+            return None
+        return (pct / dias).quantize(Decimal("0.01"))
 
     @property
     def preco_atual(self):
@@ -415,3 +443,40 @@ class AcaoB3(models.Model):
 
     def __str__(self):
         return self.ticker
+
+
+class CotacaoIndice(models.Model):
+    """
+    Histórico diário de um índice/indicador de mercado usado como referência
+    (benchmark) para comparar com o desempenho da carteira - ver
+    core.services.calcular_comparativo_benchmark.
+
+    IBOVESPA: valor é o número de pontos do índice no fechamento do dia (ex:
+    134500.00), igual ao de uma cotação normal - o retorno do período é
+    calculado comparando o valor do primeiro e do último dia.
+
+    CDI: valor é a taxa diária (%) do dia, publicada pelo Banco Central (SGS
+    série 12) - o retorno acumulado do período é obtido compondo (juros
+    compostos) as taxas diárias, não subtraindo o primeiro do último valor.
+    """
+
+    IBOVESPA = "IBOVESPA"
+    CDI = "CDI"
+    INDICE_CHOICES = [(IBOVESPA, "Ibovespa"), (CDI, "CDI")]
+
+    indice = models.CharField("Índice", max_length=10, choices=INDICE_CHOICES)
+    data = models.DateField("Data")
+    valor = models.DecimalField(
+        "Valor", max_digits=14, decimal_places=6,
+        help_text="Pontos do índice (Ibovespa) ou taxa diária em % (CDI).",
+    )
+    criado_em = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = "Cotação de índice"
+        verbose_name_plural = "Cotações de índices"
+        ordering = ["indice", "-data"]
+        unique_together = ("indice", "data")
+
+    def __str__(self):
+        return f"{self.get_indice_display()} {self.data} = {self.valor}"

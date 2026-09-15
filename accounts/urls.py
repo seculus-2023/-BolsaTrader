@@ -7,4 +7,5 @@ urlpatterns = [
     path("login/", views.LoginFuturistaView.as_view(), name="login"),
     path("logout/", views.LogoutFuturistaView.as_view(), name="logout"),
     path("cadastro/", views.cadastro_view, name="cadastro"),
+    path("minha-conta/", views.minha_conta_view, name="minha_conta"),
 ]

@@ -253,3 +253,13 @@ WHATSAPP_VERIFY_TOKEN = config("WHATSAPP_VERIFY_TOKEN", default="")
 # das requisições do webhook. Sem isso configurado, a assinatura não é validada
 # - recomendado preencher antes de expor o webhook publicamente em produção.
 WHATSAPP_APP_SECRET = config("WHATSAPP_APP_SECRET", default="")
+
+# Credenciais para ENVIAR mensagens (avisos proativos de meta de lucro/perda
+# e sinais do robô consultor - ver core.services.enviar_whatsapp) via WhatsApp
+# Business (Meta Cloud API): token de acesso do app e o Phone Number ID do
+# número remetente (painel da Meta, não é o número em si). Sem os dois
+# configurados, o envio fica desligado e os alertas continuam funcionando
+# normalmente, só na tela - cada usuário informa o próprio número de destino
+# em "Minha Conta" (ver accounts.models.PerfilUsuario).
+WHATSAPP_ACCESS_TOKEN = config("WHATSAPP_ACCESS_TOKEN", default="")
+WHATSAPP_PHONE_NUMBER_ID = config("WHATSAPP_PHONE_NUMBER_ID", default="")

@@ -1,12 +1,20 @@
 from django.contrib import admin
 
-from .models import Ativo, Operacao, Cotacao, Alerta, MensagemWhatsapp, FonteNoticia, Noticia
+from .models import (
+    Ativo, Operacao, Cotacao, Alerta, MensagemWhatsapp, FonteNoticia, Noticia, CotacaoIndice,
+)
 
 
 @admin.register(Ativo)
 class AtivoAdmin(admin.ModelAdmin):
-    list_display = ("ticker", "nome", "criado_em")
-    search_fields = ("ticker", "nome")
+    list_display = ("ticker", "nome", "setor", "criado_em")
+    search_fields = ("ticker", "nome", "setor")
+
+
+@admin.register(CotacaoIndice)
+class CotacaoIndiceAdmin(admin.ModelAdmin):
+    list_display = ("indice", "data", "valor")
+    list_filter = ("indice",)
 
 
 @admin.register(Operacao)

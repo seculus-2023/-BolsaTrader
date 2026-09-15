@@ -276,6 +276,7 @@
                 <th>Corretora (%)</th>
                 <th>Valor líquido a receber</th>
                 <th>Lucro/Perda realizado</th>
+                <th>Lucro/Perda por dia em carteira</th>
                 <th>Metas (lucro / perda)</th>
                 <th>Ação</th>
             </tr>
@@ -299,6 +300,11 @@
                 <td class="{% if op.lucro_perda_realizado > 0 %}valor-positivo{% elif op.lucro_perda_realizado < 0 %}valor-negativo{% endif %}">
                     {% if op.lucro_perda_realizado is not None %}
                         R$ {{ op.lucro_perda_realizado }} ({{ op.lucro_perda_pct_realizado }}%)
+                    {% else %}&mdash;{% endif %}
+                </td>
+                <td class="{% if op.lucro_perda_por_dia > 0 %}valor-positivo{% elif op.lucro_perda_por_dia < 0 %}valor-negativo{% endif %}">
+                    {% if op.lucro_perda_por_dia is not None %}
+                        R$ {{ op.lucro_perda_por_dia }}/dia ({{ op.lucro_perda_pct_por_dia }}%/dia)
                     {% else %}&mdash;{% endif %}
                 </td>
                 <td>

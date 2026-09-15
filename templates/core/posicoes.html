@@ -39,7 +39,47 @@
     </div>
 </div>
 
+{% if comparativo_benchmark %}
+<div class="card-glass" style="margin-top: 1.2rem;">
+    <h2>Sua carteira x mercado</h2>
+    <p style="color: var(--text-dim); font-size: .85rem; margin-top: -.5rem;">
+        Retorno da carteira comprada (aproximado) desde {{ comparativo_benchmark.data_inicio|date:"d/m/Y" }}
+        ({{ comparativo_benchmark.dias_periodo }} dia{{ comparativo_benchmark.dias_periodo|pluralize }}),
+        comparado ao Ibovespa e ao CDI acumulado no mesmo período.
+    </p>
+    <div class="grid-stats">
+        <div class="stat-tile">
+            <div class="label">Sua carteira</div>
+            <div class="value {% if comparativo_benchmark.retorno_carteira_pct > 0 %}valor-positivo{% elif comparativo_benchmark.retorno_carteira_pct < 0 %}valor-negativo{% else %}valor-neutro{% endif %}">
+                {{ comparativo_benchmark.retorno_carteira_pct }}%
+            </div>
+        </div>
+        <div class="stat-tile">
+            <div class="label">Ibovespa no período</div>
+            <div class="value valor-neutro">
+                {% if comparativo_benchmark.retorno_ibovespa_pct is not None %}{{ comparativo_benchmark.retorno_ibovespa_pct }}%{% else %}<span style="color: var(--text-dim); font-size: .8rem;">sem dados</span>{% endif %}
+            </div>
+        </div>
+        <div class="stat-tile">
+            <div class="label">CDI no período</div>
+            <div class="value valor-neutro">
+                {% if comparativo_benchmark.retorno_cdi_pct is not None %}{{ comparativo_benchmark.retorno_cdi_pct }}%{% else %}<span style="color: var(--text-dim); font-size: .8rem;">sem dados</span>{% endif %}
+            </div>
+        </div>
+    </div>
+    {% if comparativo_benchmark.retorno_ibovespa_pct is not None or comparativo_benchmark.retorno_cdi_pct is not None %}
+    <p style="color: var(--text-dim); font-size: .85rem;">
+        {% if comparativo_benchmark.carteira_bateu_ibovespa %}✅ Sua carteira bateu o Ibovespa no período.{% else %}⚠️ Sua carteira não bateu o Ibovespa no período.{% endif %}
+        {% if comparativo_benchmark.carteira_bateu_cdi %}✅ Sua carteira bateu o CDI no período.{% else %}⚠️ Sua carteira não bateu o CDI no período.{% endif %}
+    </p>
+    {% else %}
+    <a href="{% url 'core:atualizar_benchmarks' %}?next={{ request.path|urlencode }}" class="btn-futurista btn-secundario">🔄 Atualizar benchmarks (Ibovespa / CDI)</a>
+    {% endif %}
+</div>
+{% endif %}
+
 {% if posicoes %}
+<div class="grupo-abas">
 <div class="abas-navegacao" role="tablist" style="margin-top: 1.2rem;">
     <button type="button" class="aba-navegacao ativa" role="tab" aria-selected="true" data-alvo="painel-compradas">Compradas ({{ posicoes_compradas|length }})</button>
     <button type="button" class="aba-navegacao" role="tab" aria-selected="false" data-alvo="painel-reservadas-pos">Reservadas ({{ posicoes_reservadas|length }})</button>
@@ -231,83 +271,171 @@
 </div>
 </div>
 
-<script>
-    (function () {
-        var abas = document.querySelectorAll(".aba-navegacao");
-        abas.forEach(function (aba) {
-            aba.addEventListener("click", function () {
-                abas.forEach(function (a) {
-                    a.classList.remove("ativa");
-                    a.setAttribute("aria-selected", "false");
-                });
-                document.querySelectorAll(".painel-abas").forEach(function (p) {
-                    p.hidden = true;
-                });
-                aba.classList.add("ativa");
-                aba.setAttribute("aria-selected", "true");
-                document.getElementById(aba.dataset.alvo).hidden = false;
-            });
-        });
-    })();
-</script>
+</div>
 {% else %}
 <div class="card-glass" style="margin-top: 1.2rem;">
     <p style="color: var(--text-dim);">Nenhuma posição em carteira. <a href="{% url 'core:operacao_nova' %}">Registrar uma compra</a>.</p>
 </div>
 {% endif %}
 
-{% if comparativo %}
-<div class="card-glass" style="margin-top: 1.2rem;">
-    <h2>Valor de compra x valor atual (histórico)</h2>
+{% if concentracao_setor or metricas_risco.por_ativo or comparativo %}
+<div class="grupo-abas" style="margin-top: 1.2rem;">
+<div class="abas-navegacao" role="tablist">
+    <button type="button" class="aba-navegacao ativa" role="tab" aria-selected="true" data-alvo="painel-concentracao-setor">Concentração por setor</button>
+    <button type="button" class="aba-navegacao" role="tab" aria-selected="false" data-alvo="painel-indicadores-risco">Indicadores de risco</button>
+    <button type="button" class="aba-navegacao" role="tab" aria-selected="false" data-alvo="painel-comparativo-historico">Valor de compra x valor atual (histórico)</button>
+</div>
+
+<div class="painel-abas" id="painel-concentracao-setor" role="tabpanel">
+<div class="card-glass">
+    {% if concentracao_setor %}
+    <h2>Concentração por setor</h2>
     <p style="color: var(--text-dim); font-size: .85rem; margin-top: -.5rem;">
-        Para cada ativo, a linha do valor de compra (o quanto você pagou) contra a linha do valor atual ao longo do
-        histórico de cotações &mdash; só das ações realmente compradas (reservas não entram).
+        O limite de ativos diferentes em carteira não enxerga isto: dá pra estar "diversificado" em vários tickers
+        do mesmo setor. Setores acima de {{ 40 }}% da carteira aparecem destacados.
     </p>
-    <div class="legenda-comparativo">
-        <span><i class="swatch swatch-investido"></i> Valor de compra</span>
-        <span><i class="swatch swatch-ganho"></i> Valor atual &mdash; lucro</span>
-        <span><i class="swatch swatch-perda"></i> Valor atual &mdash; perda</span>
+    <div style="display: flex; flex-direction: column; gap: .6rem; margin-top: .8rem;">
+        {% for item in concentracao_setor %}
+        <div>
+            <div style="display: flex; justify-content: space-between; font-size: .9rem; margin-bottom: .2rem;">
+                <span>{{ item.setor }}{% if item.percentual >= 40 %} <span class="badge-venda" style="margin-left:.3rem;">⚠ concentrado</span>{% endif %}</span>
+                <span>R$ {{ item.valor|floatformat:2 }} &middot; {{ item.percentual }}%</span>
+            </div>
+            <div style="background: rgba(0,240,255,.08); border-radius: 6px; height: 10px; overflow: hidden;">
+                <div style="width: {{ item.percentual }}%; height: 100%; background: linear-gradient(90deg, var(--neon-cyan), var(--neon-purple));"></div>
+            </div>
+        </div>
+        {% endfor %}
     </div>
+    {% else %}
+    <p style="color: var(--text-dim);">Sem dados de concentração por setor no momento.</p>
+    {% endif %}
+</div>
 </div>
 
-{% for grafico in comparativo %}
-<div class="card-glass" style="margin-top: 1rem;">
-    <h3>{{ grafico.ativo.ticker }} {% if grafico.ativo.nome %}<small style="color: var(--text-dim); font-family: 'Rajdhani', sans-serif;">— {{ grafico.ativo.nome }}</small>{% endif %}</h3>
+<div class="painel-abas" id="painel-indicadores-risco" role="tabpanel" hidden>
+<div class="card-glass">
+    {% if metricas_risco.por_ativo %}
+    <h2>Indicadores de risco</h2>
+    <p style="color: var(--text-dim); font-size: .85rem; margin-top: -.5rem;">
+        Volatilidade anualizada e maior queda (drawdown) de cada ativo nos últimos 30 pregões, mais o quanto cada
+        posição representa da carteira. Índice de concentração (Herfindahl): {{ metricas_risco.indice_herfindahl }}
+        &mdash; quanto mais perto de 1, mais concentrada a carteira numa posição só.
+        {% if metricas_risco.concentracao_alta %}
+        <strong style="color: var(--neon-red);">⚠ {{ metricas_risco.maior_posicao_ativo.ticker }} sozinho já é {{ metricas_risco.maior_posicao_pct }}% da carteira.</strong>
+        {% endif %}
+    </p>
     <div class="tabela-scroll">
-    <div class="grafico-wrap">
-        {% localize off %}
-        <svg viewBox="0 0 {{ grafico.largura }} {{ grafico.altura }}"
-             class="grafico-comparativo" preserveAspectRatio="none"
-             style="width: {{ grafico.largura }}px; height: {{ grafico.altura }}px;"
-             data-pontos-id="{{ grafico.id_svg }}"
-             role="img" aria-label="Valor de compra x valor atual de {{ grafico.ativo.ticker }}">
-            {% for linha in grafico.eixo_y %}
-            <line x1="{{ grafico.x_inicio }}" y1="{{ linha.y }}" x2="{{ grafico.x_fim }}" y2="{{ linha.y }}" class="grafico-grid" />
-            <text x="2" y="{{ linha.label_y }}" class="grafico-eixo-texto">{{ linha.label }}</text>
+    <table class="tabela-futurista">
+        <thead>
+            <tr>
+                <th>Ativo</th>
+                <th>% da carteira</th>
+                <th>Volatilidade anualizada</th>
+                <th>Drawdown máximo (30 pregões)</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for item in metricas_risco.por_ativo %}
+            <tr>
+                <td><strong>{{ item.ativo.ticker }}</strong></td>
+                <td>{% if item.percentual_carteira is not None %}{{ item.percentual_carteira }}%{% else %}&mdash;{% endif %}</td>
+                <td>{% if item.volatilidade_pct is not None %}{{ item.volatilidade_pct }}%{% else %}<span style="color: var(--text-dim);">aguardando histórico</span>{% endif %}</td>
+                <td class="{% if item.drawdown_pct %}valor-negativo{% endif %}">{% if item.drawdown_pct is not None %}{{ item.drawdown_pct }}%{% else %}<span style="color: var(--text-dim);">aguardando histórico</span>{% endif %}</td>
+            </tr>
             {% endfor %}
-
-            <path d="{{ grafico.path_compra }}" fill="none" class="linha-comparativo linha-investido" />
-            <path d="{{ grafico.path_atual }}" fill="none" class="linha-comparativo {% if grafico.ganho_atual %}linha-ganho{% else %}linha-perda{% endif %}" />
-
-            <circle cx="{{ grafico.x_inicio }}" cy="{{ grafico.y_compra }}" r="4" class="marcador-comparativo marcador-investido" />
-            <circle cx="{{ grafico.x_fim }}" cy="{{ grafico.y_compra }}" r="4" class="marcador-comparativo marcador-investido" />
-            {% for p in grafico.pontos %}
-                {% if forloop.first or forloop.last %}
-                <circle cx="{{ p.x }}" cy="{{ p.y }}" r="4" class="marcador-comparativo {% if p.ganho %}marcador-ganho{% else %}marcador-perda{% endif %}" />
-                {% endif %}
-            {% endfor %}
-        </svg>
-        {% endlocalize %}
-        {{ grafico.pontos|json_script:grafico.id_svg }}
+        </tbody>
+    </table>
     </div>
-    </div>
-    <div class="grafico-eixos">
-        <span>{{ grafico.primeira_data }}</span>
-        <span>{{ grafico.ultima_data }}</span>
-    </div>
+    {% else %}
+    <p style="color: var(--text-dim);">Sem indicadores de risco no momento.</p>
+    {% endif %}
 </div>
-{% endfor %}
+</div>
+
+<div class="painel-abas" id="painel-comparativo-historico" role="tabpanel" hidden>
+    {% if comparativo %}
+    <div class="card-glass">
+        <h2>Valor de compra x valor atual (histórico)</h2>
+        <p style="color: var(--text-dim); font-size: .85rem; margin-top: -.5rem;">
+            Para cada ativo, a linha do valor de compra (o quanto você pagou) contra a linha do valor atual ao longo do
+            histórico de cotações &mdash; só das ações realmente compradas (reservas não entram).
+        </p>
+        <div class="legenda-comparativo">
+            <span><i class="swatch swatch-investido"></i> Valor de compra</span>
+            <span><i class="swatch swatch-ganho"></i> Valor atual &mdash; lucro</span>
+            <span><i class="swatch swatch-perda"></i> Valor atual &mdash; perda</span>
+        </div>
+    </div>
+
+    {% for grafico in comparativo %}
+    <div class="card-glass" style="margin-top: 1rem;">
+        <h3>{{ grafico.ativo.ticker }} {% if grafico.ativo.nome %}<small style="color: var(--text-dim); font-family: 'Rajdhani', sans-serif;">— {{ grafico.ativo.nome }}</small>{% endif %}</h3>
+        <div class="tabela-scroll">
+        <div class="grafico-wrap">
+            {% localize off %}
+            <svg viewBox="0 0 {{ grafico.largura }} {{ grafico.altura }}"
+                 class="grafico-comparativo" preserveAspectRatio="none"
+                 style="width: {{ grafico.largura }}px; height: {{ grafico.altura }}px;"
+                 data-pontos-id="{{ grafico.id_svg }}"
+                 role="img" aria-label="Valor de compra x valor atual de {{ grafico.ativo.ticker }}">
+                {% for linha in grafico.eixo_y %}
+                <line x1="{{ grafico.x_inicio }}" y1="{{ linha.y }}" x2="{{ grafico.x_fim }}" y2="{{ linha.y }}" class="grafico-grid" />
+                <text x="2" y="{{ linha.label_y }}" class="grafico-eixo-texto">{{ linha.label }}</text>
+                {% endfor %}
+
+                <path d="{{ grafico.path_compra }}" fill="none" class="linha-comparativo linha-investido" />
+                <path d="{{ grafico.path_atual }}" fill="none" class="linha-comparativo {% if grafico.ganho_atual %}linha-ganho{% else %}linha-perda{% endif %}" />
+
+                <circle cx="{{ grafico.x_inicio }}" cy="{{ grafico.y_compra }}" r="4" class="marcador-comparativo marcador-investido" />
+                <circle cx="{{ grafico.x_fim }}" cy="{{ grafico.y_compra }}" r="4" class="marcador-comparativo marcador-investido" />
+                {% for p in grafico.pontos %}
+                    {% if forloop.first or forloop.last %}
+                    <circle cx="{{ p.x }}" cy="{{ p.y }}" r="4" class="marcador-comparativo {% if p.ganho %}marcador-ganho{% else %}marcador-perda{% endif %}" />
+                    {% endif %}
+                {% endfor %}
+            </svg>
+            {% endlocalize %}
+            {{ grafico.pontos|json_script:grafico.id_svg }}
+        </div>
+        </div>
+        <div class="grafico-eixos">
+            <span>{{ grafico.primeira_data }}</span>
+            <span>{{ grafico.ultima_data }}</span>
+        </div>
+    </div>
+    {% endfor %}
+    {% else %}
+    <div class="card-glass">
+        <p style="color: var(--text-dim);">Sem histórico de cotações suficiente para montar o comparativo ainda.</p>
+    </div>
+    {% endif %}
+</div>
+
+</div>
 {% endif %}
+
+<script>
+    (function () {
+        document.querySelectorAll(".grupo-abas").forEach(function (grupo) {
+            var abas = grupo.querySelectorAll(".aba-navegacao");
+            abas.forEach(function (aba) {
+                aba.addEventListener("click", function () {
+                    abas.forEach(function (a) {
+                        a.classList.remove("ativa");
+                        a.setAttribute("aria-selected", "false");
+                    });
+                    grupo.querySelectorAll(".painel-abas").forEach(function (p) {
+                        p.hidden = true;
+                    });
+                    aba.classList.add("ativa");
+                    aba.setAttribute("aria-selected", "true");
+                    document.getElementById(aba.dataset.alvo).hidden = false;
+                });
+            });
+        });
+    })();
+</script>
 
 <script src="{% static 'js/grafico.js' %}" defer></script>
 {% endblock %}

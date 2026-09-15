@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+{% block titulo %}Backtesting do Robô - BolsaTrader{% endblock %}
+{% block conteudo %}
+<h1>Backtesting do Robô Consultor</h1>
+<p style="color: var(--text-dim);">
+    Simula, dia a dia, os sinais de compra/venda que o robô consultor teria dado no passado para cada ativo (com
+    base só no histórico de cotações já salvo) e mede a taxa de acerto: um sinal de <strong>compra</strong> acerta
+    quando o preço está mais alto {{ dias_retorno }} pregão{{ dias_retorno|pluralize }} depois; um sinal de
+    <strong>venda</strong> acerta quando está mais baixo. É uma estatística sobre o passado &mdash;
+    <strong>não garante desempenho futuro nem constitui recomendação de investimento</strong>.
+</p>
+
+<form method="get" style="display: flex; gap: .6rem; align-items: flex-end; margin: 1rem 0; flex-wrap: wrap;">
+    <div>
+        <label for="dias_retorno" style="display:block; font-size:.85rem; color: var(--text-dim);">Conferir o resultado quantos pregões depois do sinal?</label>
+        <input type="number" min="1" max="60" name="dias_retorno" id="dias_retorno" value="{{ dias_retorno }}" class="form-control-futurista" style="width: 100px;">
+    </div>
+    <button type="submit" class="btn-futurista btn-secundario">Recalcular</button>
+</form>
+
+{% if resultados %}
+    {% for r in resultados %}
+    <div class="card-glass" style="margin-top: 1rem;">
+        <h3>
+            {{ r.ativo.ticker }}
+            {% if r.ativo.nome %}<small style="color: var(--text-dim); font-family: 'Rajdhani', sans-serif;">— {{ r.ativo.nome }}</small>{% endif %}
+        </h3>
+        {% if r.dados_insuficientes %}
+        <p style="color: var(--text-dim);">Histórico de cotações ainda insuficiente para simular sinais deste ativo.</p>
+        {% elif r.total_sinais == 0 %}
+        <p style="color: var(--text-dim);">O robô não teria emitido nenhum sinal de compra/venda (só neutro) para este ativo no histórico disponível.</p>
+        {% else %}
+        <div class="grid-stats">
+            <div class="stat-tile">
+                <div class="label">Sinais simulados</div>
+                <div class="value">{{ r.total_sinais }}</div>
+            </div>
+            <div class="stat-tile">
+                <div class="label">Taxa de acerto geral</div>
+                <div class="value {% if r.taxa_acerto_pct >= 50 %}valor-positivo{% else %}valor-negativo{% endif %}">{{ r.taxa_acerto_pct }}%</div>
+            </div>
+            <div class="stat-tile">
+                <div class="label">Compra ({{ r.sinais_compra }}x)</div>
+                <div class="value">
+                    {% if r.taxa_acerto_compra_pct is not None %}{{ r.taxa_acerto_compra_pct }}% acerto{% else %}&mdash;{% endif %}
+                    {% if r.retorno_medio_compra_pct is not None %}<br><small style="color: var(--text-dim);">retorno médio {{ r.retorno_medio_compra_pct }}%</small>{% endif %}
+                </div>
+            </div>
+            <div class="stat-tile">
+                <div class="label">Venda ({{ r.sinais_venda }}x)</div>
+                <div class="value">
+                    {% if r.taxa_acerto_venda_pct is not None %}{{ r.taxa_acerto_venda_pct }}% acerto{% else %}&mdash;{% endif %}
+                    {% if r.retorno_medio_venda_pct is not None %}<br><small style="color: var(--text-dim);">retorno médio {{ r.retorno_medio_venda_pct }}%</small>{% endif %}
+                </div>
+            </div>
+        </div>
+
+        <div class="tabela-scroll" style="margin-top: .8rem;">
+        <table class="tabela-futurista">
+            <thead>
+                <tr><th>Data do sinal</th><th>Sinal</th><th>Preço no sinal</th><th>Retorno {{ dias_retorno }} pregões depois</th><th>Resultado</th></tr>
+            </thead>
+            <tbody>
+                {% for s in r.sinais %}
+                <tr>
+                    <td>{{ s.data|date:"d/m/Y" }}</td>
+                    <td><span class="badge-tendencia badge-{% if s.sinal == 'COMPRA' %}alta{% else %}baixa{% endif %}">{{ s.sinal }}</span></td>
+                    <td>R$ {{ s.preco }}</td>
+                    <td class="{% if s.retorno_pct > 0 %}valor-positivo{% elif s.retorno_pct < 0 %}valor-negativo{% else %}valor-neutro{% endif %}">{{ s.retorno_pct }}%</td>
+                    <td>{% if s.acerto %}✅ acertou{% else %}❌ errou{% endif %}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        </div>
+        {% endif %}
+    </div>
+    {% endfor %}
+{% else %}
+<div class="card-glass" style="margin-top: 1rem;">
+    <p style="color: var(--text-dim);">Você ainda não possui ativos para simular.</p>
+</div>
+{% endif %}
+{% endblock %}

@@ -28,6 +28,45 @@
     </div>
 </div>
 
+{% if comparativo_benchmark %}
+<div class="card-glass">
+    <h2>Sua carteira x mercado</h2>
+    <p style="color: var(--text-dim); font-size: .85rem; margin-top: -.5rem;">
+        Retorno da carteira comprada (aproximado) desde {{ comparativo_benchmark.data_inicio|date:"d/m/Y" }}
+        ({{ comparativo_benchmark.dias_periodo }} dia{{ comparativo_benchmark.dias_periodo|pluralize }}),
+        comparado ao Ibovespa e ao CDI acumulado no mesmo período.
+    </p>
+    <div class="grid-stats">
+        <div class="stat-tile">
+            <div class="label">Sua carteira</div>
+            <div class="value {% if comparativo_benchmark.retorno_carteira_pct > 0 %}valor-positivo{% elif comparativo_benchmark.retorno_carteira_pct < 0 %}valor-negativo{% else %}valor-neutro{% endif %}">
+                {{ comparativo_benchmark.retorno_carteira_pct }}%
+            </div>
+        </div>
+        <div class="stat-tile">
+            <div class="label">Ibovespa no período</div>
+            <div class="value valor-neutro">
+                {% if comparativo_benchmark.retorno_ibovespa_pct is not None %}{{ comparativo_benchmark.retorno_ibovespa_pct }}%{% else %}<span style="color: var(--text-dim); font-size: .8rem;">sem dados</span>{% endif %}
+            </div>
+        </div>
+        <div class="stat-tile">
+            <div class="label">CDI no período</div>
+            <div class="value valor-neutro">
+                {% if comparativo_benchmark.retorno_cdi_pct is not None %}{{ comparativo_benchmark.retorno_cdi_pct }}%{% else %}<span style="color: var(--text-dim); font-size: .8rem;">sem dados</span>{% endif %}
+            </div>
+        </div>
+    </div>
+    {% if comparativo_benchmark.retorno_ibovespa_pct is not None or comparativo_benchmark.retorno_cdi_pct is not None %}
+    <p style="color: var(--text-dim); font-size: .85rem;">
+        {% if comparativo_benchmark.carteira_bateu_ibovespa %}✅ Sua carteira bateu o Ibovespa no período.{% else %}⚠️ Sua carteira não bateu o Ibovespa no período.{% endif %}
+        {% if comparativo_benchmark.carteira_bateu_cdi %}✅ Sua carteira bateu o CDI no período.{% else %}⚠️ Sua carteira não bateu o CDI no período.{% endif %}
+    </p>
+    {% else %}
+    <a href="{% url 'core:atualizar_benchmarks' %}?next={{ request.path|urlencode }}" class="btn-futurista btn-secundario">🔄 Atualizar benchmarks (Ibovespa / CDI)</a>
+    {% endif %}
+</div>
+{% endif %}
+
 <div class="card-glass">
     <h2>Ações rápidas</h2>
     <div style="display: flex; flex-wrap: nowrap; gap: .6rem; overflow-x: auto; padding-bottom: .3rem;">

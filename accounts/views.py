@@ -1,10 +1,12 @@
 from django.contrib.auth import login
+from django.contrib.auth.decorators import login_required
 from django.contrib.auth.views import LoginView, LogoutView
 from django.shortcuts import render, redirect
 from django.urls import reverse_lazy
 from django.contrib import messages
 
-from .forms import CadastroForm
+from .forms import CadastroForm, PerfilUsuarioForm
+from .models import PerfilUsuario
 
 
 class LoginFuturistaView(LoginView):
@@ -40,3 +42,26 @@ def cadastro_view(request):
         form = CadastroForm()
 
     return render(request, "accounts/cadastro.html", {"form": form})
+
+
+@login_required
+def minha_conta_view(request):
+    """
+    Tela para o usuário informar/atualizar seu número de WhatsApp, usado para
+    receber avisos proativos (meta de lucro/perda atingida, sinal do robô
+    consultor - ver core.services.enviar_whatsapp) - o perfil é criado sob
+    demanda na primeira visita a esta tela (get_or_create), não em todo
+    cadastro de usuário.
+    """
+    perfil, _ = PerfilUsuario.objects.get_or_create(usuario=request.user)
+
+    if request.method == "POST":
+        form = PerfilUsuarioForm(request.POST, instance=perfil)
+        if form.is_valid():
+            form.save()
+            messages.success(request, "Dados da conta atualizados com sucesso.")
+            return redirect("accounts:minha_conta")
+    else:
+        form = PerfilUsuarioForm(instance=perfil)
+
+    return render(request, "accounts/minha_conta.html", {"form": form})

@@ -26,7 +26,10 @@ from django.core.exceptions import ObjectDoesNotExist
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 
-from .models import Ativo, Cotacao, Operacao, Alerta, FonteNoticia, Noticia, AcaoB3, CotacaoIndice
+from .models import (
+    Ativo, Cotacao, Operacao, Alerta, FonteNoticia, Noticia, AcaoB3, CotacaoIndice,
+    RegistroAtualizacaoCarteira,
+)
 
 
 # --------------------------------------------------------------------------
@@ -264,16 +267,22 @@ def atualizar_cotacao_diaria(ativo: Ativo, dados_api: dict | None = None) -> Cot
 # atualizar_benchmarks, em core.services).
 # --------------------------------------------------------------------------
 _FAIXAS_RANGE_BRAPI = [
-    (30, "1mo"), (90, "3mo"), (180, "6mo"), (365, "1y"), (730, "2y"), (1825, "5y"),
+    (30, "1mo"), (90, "3mo"),
 ]
 
 
 def _range_brapi(dias: int) -> str:
-    """Converte uma quantidade de dias no parâmetro `range` aceito pela brapi.dev (1mo, 3mo, 1y etc.)."""
+    """
+    Converte uma quantidade de dias no parâmetro `range` aceito pela
+    brapi.dev. Limitado a "3mo" - ranges maiores ("6mo", "1y", ...) exigem
+    um plano pago da brapi.dev e retornam 400 Bad Request no plano
+    gratuito, então qualquer pedido de mais de 90 dias é limitado a essa
+    janela em vez de estourar a requisição.
+    """
     for limite, range_str in _FAIXAS_RANGE_BRAPI:
         if dias <= limite:
             return range_str
-    return "10y"
+    return "3mo"
 
 
 def _converter_data_historico(valor) -> date | None:
@@ -397,10 +406,21 @@ def buscar_historico_cdi(dias: int = 180) -> list[dict]:
     Reaproveita BrapiError para o erro, ainda que a fonte aqui seja o Banco
     Central (não a brapi.dev) - mantém um único tipo de exceção pros
     chamadores (atualizar_benchmarks, comandos de management) tratarem.
+
+    Usa o endpoint por intervalo de datas (`dados?dataInicial=...`), não o
+    `dados/ultimos/N` - esse último retorna 400 Bad Request ("quantidade
+    máxima de valores deve ser 20") pra série do CDI acima de 20 registros.
     """
-    url = f"https://api.bcb.gov.br/dados/serie/bcdata.sgs.{_BCB_SGS_CDI}/dados/ultimos/{max(dias, 1)}"
+    data_final = date.today()
+    data_inicial = data_final - timedelta(days=max(dias, 1))
+    url = f"https://api.bcb.gov.br/dados/serie/bcdata.sgs.{_BCB_SGS_CDI}/dados"
+    params = {
+        "formato": "json",
+        "dataInicial": data_inicial.strftime("%d/%m/%Y"),
+        "dataFinal": data_final.strftime("%d/%m/%Y"),
+    }
     try:
-        resposta = requests.get(url, params={"formato": "json"}, timeout=30)
+        resposta = requests.get(url, params=params, timeout=30)
         resposta.raise_for_status()
         dados = resposta.json()
     except requests.RequestException as exc:
@@ -615,6 +635,28 @@ class Posicao:
         return (timezone.localdate() - self.data_abertura).days
 
     @property
+    def lucro_perda_por_dia_valor(self) -> Decimal | None:
+        """
+        Lucro/perda atual (R$, ainda não realizado) dividido pelos dias que a
+        posição está em carteira - mede a "velocidade" do resultado (R$/dia),
+        igual à mesma ideia já usada em Operacao.lucro_perda_por_dia para
+        vendas, mas aqui sobre a posição aberta. None quando comprado hoje (0
+        dias, não dá pra ratear) ou sem lucro/perda apurado (sem cotação).
+        """
+        dias = self.dias_desde_compra
+        if self.lucro_perda_valor is None or not dias:
+            return None
+        return (self.lucro_perda_valor / dias).quantize(Decimal("0.01"))
+
+    @property
+    def lucro_perda_por_dia_pct(self) -> Decimal | None:
+        """Lucro/perda atual (%) dividido pelos dias em carteira - mesma ideia de lucro_perda_por_dia_valor, em percentual."""
+        dias = self.dias_desde_compra
+        if self.lucro_perda_pct is None or not dias:
+            return None
+        return (self.lucro_perda_pct / dias).quantize(Decimal("0.01"))
+
+    @property
     def meta_lucro_atingida(self) -> bool:
         """
         True quando o lucro/perda atual da posição já atingiu a meta de lucro
@@ -773,6 +815,224 @@ def calcular_posicoes(usuario) -> list[Posicao]:
         p.ativo.ticker,
     ))
     return posicoes
+
+
+# --------------------------------------------------------------------------
+# Histórico de atualizações da carteira (snapshot a cada atualização de
+# cotações) - ver core.models.RegistroAtualizacaoCarteira e a tela Histórico
+# de Atualizações.
+# --------------------------------------------------------------------------
+def registrar_atualizacao_carteira(usuario, posicoes: list[Posicao] | None = None) -> RegistroAtualizacaoCarteira:
+    """
+    Grava um retrato (snapshot) dos totais da carteira comprada do usuário
+    (total de ativos, valor investido, valor atual, lucro/perda) - chamado
+    toda vez que as cotações são atualizadas, seja pelo botão manual
+    "Atualizar cotações agora" (core.views.atualizar_cotacoes_agora) seja
+    pelo comando "atualizar_cotacoes" (inclusive em --loop). Mesma conta
+    usada nos cartões de resumo do Painel e de Posições em Carteira.
+    """
+    if posicoes is None:
+        posicoes = calcular_posicoes(usuario)
+
+    compradas = [p for p in posicoes if not p.apenas_reservado]
+    valor_investido = sum((p.valor_investido for p in compradas), Decimal("0"))
+    valor_atual = sum((p.valor_atual for p in compradas if p.valor_atual is not None), Decimal("0"))
+    lucro_perda = valor_atual - valor_investido
+    lucro_perda_pct = (
+        (lucro_perda / valor_investido * 100).quantize(Decimal("0.01")) if valor_investido else None
+    )
+
+    return RegistroAtualizacaoCarteira.objects.create(
+        usuario=usuario,
+        total_ativos=len(compradas),
+        valor_investido=valor_investido,
+        valor_atual=valor_atual,
+        lucro_perda=lucro_perda,
+        lucro_perda_pct=lucro_perda_pct,
+    )
+
+
+def excluir_registros_atualizacao_antigos(usuario, dias: int) -> int:
+    """
+    Exclui os registros de atualização da carteira do usuário com mais de
+    `dias` dias - usado no formulário "Excluir por dias" da tela Histórico
+    de Atualizações, pra não deixar a tabela crescer indefinidamente quando
+    o comando "atualizar_cotacoes --loop" fica rodando o dia inteiro.
+    """
+    limite = timezone.now() - timedelta(days=dias)
+    excluidos, _ = RegistroAtualizacaoCarteira.objects.filter(
+        usuario=usuario, criado_em__lt=limite,
+    ).delete()
+    return excluidos
+
+
+def construir_grafico_atualizacoes_dia(
+    registros_dia: list[RegistroAtualizacaoCarteira], largura: int = 640, altura: int = 200, padding: int = 40,
+) -> dict | None:
+    """
+    Monta os dados (SVG) do gráfico "Variações do dia" da tela Histórico de
+    Atualizações: evolução do lucro/perda (%) da carteira ao longo dos
+    registros de hoje, na ordem em que foram gravados. Recebe os registros
+    já filtrados pelo dia atual, em ordem cronológica (mais antigo primeiro).
+
+    Retorna None quando não há pelo menos 2 registros hoje (não dá pra
+    traçar uma linha com um ponto só).
+    """
+    pontos_validos = [r for r in registros_dia if r.lucro_perda_pct is not None]
+    if len(pontos_validos) < 2:
+        return None
+
+    valores = [float(r.lucro_perda_pct) for r in pontos_validos]
+    valor_min, valor_max = min(valores), max(valores)
+    faixa = (valor_max - valor_min) or 1.0
+
+    plot_largura = largura - (padding * 2)
+    plot_altura = altura - (padding * 2)
+    passo_x = plot_largura / (len(pontos_validos) - 1)
+
+    pontos = []
+    comandos_path = []
+    for i, (registro, valor) in enumerate(zip(pontos_validos, valores)):
+        x = round(padding + i * passo_x, 2)
+        y = round(padding + (1 - (valor - valor_min) / faixa) * plot_altura, 2)
+        comandos_path.append(f"{'M' if i == 0 else 'L'}{x} {y}")
+
+        pontos.append({
+            "x": x,
+            "y": y,
+            "hora_label": timezone.localtime(registro.criado_em).strftime("%H:%M"),
+            "valor_atual_label": f"R$ {registro.valor_atual:,.2f}".replace(",", "#").replace(".", ",").replace("#", "."),
+            "lucro_perda_label": f"R$ {registro.lucro_perda:,.2f}".replace(",", "#").replace(".", ",").replace("#", "."),
+            "lucro_perda_pct_label": f"{valor:.2f}%".replace(".", ","),
+            "positivo": valor >= 0,
+        })
+
+    return {
+        "id_svg": "pontos-atualizacoes-dia",
+        "largura": largura,
+        "altura": altura,
+        "x_inicio": padding,
+        "x_fim": largura - padding,
+        "y_topo": padding,
+        "y_base": altura - padding,
+        "path_d": " ".join(comandos_path),
+        "pontos": pontos,
+        "faixa_min_label": f"{valor_min:.2f}%".replace(".", ","),
+        "faixa_max_label": f"{valor_max:.2f}%".replace(".", ","),
+        "tendencia_alta": valores[-1] >= valores[0],
+    }
+
+
+COLUNAS_HISTORICO_ATUALIZACOES = [
+    "Data/hora", "Total de ativos", "Valor investido (R$)", "Valor atual (R$)",
+    "Lucro/Perda (R$)", "Lucro/Perda (%)",
+]
+
+
+def _linha_historico_atualizacao(registro: RegistroAtualizacaoCarteira) -> list:
+    return [
+        timezone.localtime(registro.criado_em),
+        registro.total_ativos,
+        float(registro.valor_investido),
+        float(registro.valor_atual),
+        float(registro.lucro_perda),
+        float(registro.lucro_perda_pct) if registro.lucro_perda_pct is not None else None,
+    ]
+
+
+def gerar_excel_historico_atualizacoes(registros: list[RegistroAtualizacaoCarteira]) -> bytes:
+    """Gera uma planilha .xlsx com o histórico de atualizações da carteira do usuário, pronta para download."""
+    import io
+
+    from openpyxl import Workbook
+    from openpyxl.styles import Alignment, Font, PatternFill
+    from openpyxl.utils import get_column_letter
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Histórico de atualizações"
+
+    ws.append(["Histórico de Atualizações"])
+    ws.append([f"Gerado em {timezone.localtime().strftime('%d/%m/%Y %H:%M')}"])
+    ws.append([])
+    ws.append(COLUNAS_HISTORICO_ATUALIZACOES)
+    for celula in ws[4]:
+        celula.font = Font(bold=True, color="FFFFFF")
+        celula.fill = PatternFill("solid", fgColor="0D1526")
+        celula.alignment = Alignment(horizontal="center")
+
+    for registro in registros:
+        linha = _linha_historico_atualizacao(registro)
+        linha[0] = linha[0].strftime("%d/%m/%Y %H:%M")
+        ws.append(linha)
+
+    for indice in range(1, len(COLUNAS_HISTORICO_ATUALIZACOES) + 1):
+        ws.column_dimensions[get_column_letter(indice)].width = 19
+    ws.freeze_panes = "A5"
+
+    buffer = io.BytesIO()
+    wb.save(buffer)
+    return buffer.getvalue()
+
+
+def gerar_pdf_historico_atualizacoes(registros: list[RegistroAtualizacaoCarteira], nome_usuario: str) -> bytes:
+    """Gera um PDF com o histórico de atualizações da carteira do usuário, pronto para download."""
+    import io
+    from xml.sax.saxutils import escape
+
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import A4, landscape
+    from reportlab.lib.styles import getSampleStyleSheet
+    from reportlab.lib.units import cm
+    from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+
+    nome_usuario = escape(nome_usuario)
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(
+        buffer, pagesize=landscape(A4),
+        topMargin=1.5 * cm, bottomMargin=1.5 * cm, leftMargin=1.2 * cm, rightMargin=1.2 * cm,
+    )
+    estilos = getSampleStyleSheet()
+
+    elementos = [
+        Paragraph("BolsaTrader - Histórico de Atualizações", estilos["Title"]),
+        Paragraph(
+            f"{nome_usuario} - gerado em {timezone.localtime().strftime('%d/%m/%Y %H:%M')}",
+            estilos["Normal"],
+        ),
+        Spacer(1, 0.5 * cm),
+    ]
+
+    def fmt(valor, sufixo="", quando_none="—"):
+        return f"{valor:.2f}{sufixo}" if valor is not None else quando_none
+
+    if not registros:
+        elementos.append(Paragraph("Nenhum registro de atualização até o momento.", estilos["Normal"]))
+    else:
+        dados = [COLUNAS_HISTORICO_ATUALIZACOES]
+        for registro in registros:
+            linha = _linha_historico_atualizacao(registro)
+            dados.append([
+                linha[0].strftime("%d/%m/%Y %H:%M"), str(linha[1]), fmt(linha[2]), fmt(linha[3]),
+                fmt(linha[4]), fmt(linha[5], "%"),
+            ])
+
+        tabela = Table(dados, repeatRows=1)
+        tabela.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#0D1526")),
+            ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+            ("FONTSIZE", (0, 0), (-1, -1), 8),
+            ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#cccccc")),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#eef2f7")]),
+            ("ALIGN", (1, 0), (-1, -1), "CENTER"),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("TOPPADDING", (0, 0), (-1, -1), 5),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+        ]))
+        elementos.append(tabela)
+
+    doc.build(elementos)
+    return buffer.getvalue()
 
 
 # --------------------------------------------------------------------------
@@ -1013,8 +1273,20 @@ def _linha_exportacao_posicao(p: Posicao) -> list:
     ]
 
 
-def gerar_excel_posicoes(posicoes: list[Posicao]) -> bytes:
-    """Gera uma planilha .xlsx com as posições em carteira, pronta para download."""
+def gerar_excel_posicoes(
+    posicoes: list[Posicao],
+    comparativo_benchmark: dict | None = None,
+    concentracao_setor: list[dict] | None = None,
+    metricas_risco: dict | None = None,
+) -> bytes:
+    """
+    Gera uma planilha .xlsx com as posições em carteira, pronta para
+    download - a aba "Posições" com a grid principal, mais três abas
+    espelhando as análises da tela (ver templates/core/posicoes.html):
+    "Carteira x Mercado" (comparativo_benchmark), "Concentração por setor"
+    e "Indicadores de risco". As três últimas são omitidas (recebem só uma
+    linha de aviso) quando a análise correspondente ainda não tem dados.
+    """
     import io
 
     from openpyxl import Workbook
@@ -1038,13 +1310,80 @@ def gerar_excel_posicoes(posicoes: list[Posicao]) -> bytes:
         ws.column_dimensions[get_column_letter(indice)].width = 17
     ws.freeze_panes = "A2"
 
+    def cabecalho(ws, colunas):
+        ws.append(colunas)
+        for celula in ws[ws.max_row]:
+            celula.font = Font(bold=True, color="FFFFFF")
+            celula.fill = PatternFill("solid", fgColor="0D1526")
+            celula.alignment = Alignment(horizontal="center")
+        for indice in range(1, len(colunas) + 1):
+            ws.column_dimensions[get_column_letter(indice)].width = 22
+
+    ws_benchmark = wb.create_sheet("Carteira x Mercado")
+    if comparativo_benchmark:
+        c = comparativo_benchmark
+        ws_benchmark.append([
+            f"Desde {c['data_inicio'].strftime('%d/%m/%Y')} até {c['data_fim'].strftime('%d/%m/%Y')} "
+            f"({c['dias_periodo']} dias)"
+        ])
+        ws_benchmark.append([])
+        cabecalho(ws_benchmark, ["Indicador", "Retorno no período (%)"])
+        ws_benchmark.append(["Sua carteira", float(c["retorno_carteira_pct"])])
+        ws_benchmark.append([
+            "Ibovespa", float(c["retorno_ibovespa_pct"]) if c["retorno_ibovespa_pct"] is not None else "sem dados"
+        ])
+        ws_benchmark.append([
+            "CDI", float(c["retorno_cdi_pct"]) if c["retorno_cdi_pct"] is not None else "sem dados"
+        ])
+        ws_benchmark.append([])
+        ws_benchmark.append(["Bateu o Ibovespa no período?", "Sim" if c["carteira_bateu_ibovespa"] else "Não"])
+        ws_benchmark.append(["Bateu o CDI no período?", "Sim" if c["carteira_bateu_cdi"] else "Não"])
+    else:
+        ws_benchmark.append(["Sem dados suficientes para comparar com o mercado no momento."])
+
+    ws_setor = wb.create_sheet("Concentração por setor")
+    if concentracao_setor:
+        cabecalho(ws_setor, ["Setor", "Valor (R$)", "% da carteira"])
+        for item in concentracao_setor:
+            ws_setor.append([item["setor"], float(item["valor"]), float(item["percentual"])])
+    else:
+        ws_setor.append(["Sem dados de concentração por setor no momento."])
+
+    ws_risco = wb.create_sheet("Indicadores de risco")
+    if metricas_risco and metricas_risco.get("por_ativo"):
+        ws_risco.append([f"Índice de concentração (Herfindahl): {metricas_risco['indice_herfindahl']}"])
+        ws_risco.append([])
+        cabecalho(ws_risco, ["Ativo", "% da carteira", "Volatilidade anualizada (%)", "Drawdown máximo (%)"])
+        for item in metricas_risco["por_ativo"]:
+            ws_risco.append([
+                item["ativo"].ticker,
+                float(item["percentual_carteira"]) if item["percentual_carteira"] is not None else None,
+                item["volatilidade_pct"],
+                item["drawdown_pct"],
+            ])
+    else:
+        ws_risco.append(["Sem indicadores de risco no momento."])
+
     buffer = io.BytesIO()
     wb.save(buffer)
     return buffer.getvalue()
 
 
-def gerar_pdf_posicoes(posicoes: list[Posicao], nome_usuario: str) -> bytes:
-    """Gera um PDF (paisagem, uma tabela) com as posições em carteira, pronto para download."""
+def gerar_pdf_posicoes(
+    posicoes: list[Posicao],
+    nome_usuario: str,
+    comparativo_benchmark: dict | None = None,
+    concentracao_setor: list[dict] | None = None,
+    metricas_risco: dict | None = None,
+) -> bytes:
+    """
+    Gera um PDF (paisagem) com as posições em carteira, pronto para
+    download - a tabela principal, mais três seções espelhando as análises
+    da tela (ver templates/core/posicoes.html): "Carteira x Mercado"
+    (comparativo_benchmark), "Concentração por setor" e "Indicadores de
+    risco". As três últimas mostram um aviso quando a análise
+    correspondente ainda não tem dados, em vez de sumir da página.
+    """
     import io
     from xml.sax.saxutils import escape
 
@@ -1099,6 +1438,85 @@ def gerar_pdf_posicoes(posicoes: list[Posicao], nome_usuario: str) -> bytes:
             ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
         ]))
         elementos.append(tabela)
+
+    def estilo_tabela_secao():
+        return TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#0D1526")),
+            ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+            ("FONTSIZE", (0, 0), (-1, -1), 8),
+            ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#cccccc")),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#eef2f7")]),
+            ("ALIGN", (1, 0), (-1, -1), "CENTER"),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("TOPPADDING", (0, 0), (-1, -1), 5),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+        ])
+
+    elementos.append(Spacer(1, 0.8 * cm))
+    elementos.append(Paragraph("Sua carteira x mercado", estilos["Heading2"]))
+    if comparativo_benchmark:
+        c = comparativo_benchmark
+        elementos.append(Paragraph(
+            escape(
+                f"Desde {c['data_inicio'].strftime('%d/%m/%Y')} até {c['data_fim'].strftime('%d/%m/%Y')} "
+                f"({c['dias_periodo']} dias)"
+            ),
+            estilos["Normal"],
+        ))
+        elementos.append(Spacer(1, 0.2 * cm))
+        dados_benchmark = [
+            ["Indicador", "Retorno no período (%)"],
+            ["Sua carteira", fmt(float(c["retorno_carteira_pct"]), "%")],
+            ["Ibovespa", fmt(float(c["retorno_ibovespa_pct"]), "%") if c["retorno_ibovespa_pct"] is not None else "sem dados"],
+            ["CDI", fmt(float(c["retorno_cdi_pct"]), "%") if c["retorno_cdi_pct"] is not None else "sem dados"],
+        ]
+        tabela_benchmark = Table(dados_benchmark, repeatRows=1, colWidths=[6 * cm, 6 * cm])
+        tabela_benchmark.setStyle(estilo_tabela_secao())
+        elementos.append(tabela_benchmark)
+        elementos.append(Spacer(1, 0.2 * cm))
+        elementos.append(Paragraph(
+            ("✅" if c["carteira_bateu_ibovespa"] else "⚠️") + " Sua carteira "
+            + ("bateu" if c["carteira_bateu_ibovespa"] else "não bateu") + " o Ibovespa no período. "
+            + ("✅" if c["carteira_bateu_cdi"] else "⚠️") + " Sua carteira "
+            + ("bateu" if c["carteira_bateu_cdi"] else "não bateu") + " o CDI no período.",
+            estilos["Normal"],
+        ))
+    else:
+        elementos.append(Paragraph("Sem dados suficientes para comparar com o mercado no momento.", estilos["Normal"]))
+
+    elementos.append(Spacer(1, 0.8 * cm))
+    elementos.append(Paragraph("Concentração por setor", estilos["Heading2"]))
+    if concentracao_setor:
+        dados_setor = [["Setor", "Valor (R$)", "% da carteira"]]
+        for item in concentracao_setor:
+            dados_setor.append([item["setor"], fmt(float(item["valor"])), fmt(float(item["percentual"]), "%")])
+        tabela_setor = Table(dados_setor, repeatRows=1, colWidths=[8 * cm, 5 * cm, 5 * cm])
+        tabela_setor.setStyle(estilo_tabela_secao())
+        elementos.append(tabela_setor)
+    else:
+        elementos.append(Paragraph("Sem dados de concentração por setor no momento.", estilos["Normal"]))
+
+    elementos.append(Spacer(1, 0.8 * cm))
+    elementos.append(Paragraph("Indicadores de risco", estilos["Heading2"]))
+    if metricas_risco and metricas_risco.get("por_ativo"):
+        elementos.append(Paragraph(
+            escape(f"Índice de concentração (Herfindahl): {metricas_risco['indice_herfindahl']}"),
+            estilos["Normal"],
+        ))
+        elementos.append(Spacer(1, 0.2 * cm))
+        dados_risco = [["Ativo", "% da carteira", "Volatilidade anualizada (%)", "Drawdown máximo (%)"]]
+        for item in metricas_risco["por_ativo"]:
+            dados_risco.append([
+                item["ativo"].ticker,
+                fmt(float(item["percentual_carteira"])) if item["percentual_carteira"] is not None else "—",
+                fmt(item["volatilidade_pct"], "%", "aguardando histórico"),
+                fmt(item["drawdown_pct"], "%", "aguardando histórico"),
+            ])
+        tabela_risco = Table(dados_risco, repeatRows=1)
+        tabela_risco.setStyle(estilo_tabela_secao())
+        elementos.append(tabela_risco)
+    else:
+        elementos.append(Paragraph("Sem indicadores de risco no momento.", estilos["Normal"]))
 
     doc.build(elementos)
     return buffer.getvalue()

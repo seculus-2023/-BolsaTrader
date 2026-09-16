@@ -7,6 +7,7 @@
 <a href="{% url 'core:operacoes_exportar_excel' %}?data_de_carteira={{ data_de_carteira }}&data_ate_carteira={{ data_ate_carteira }}&data_de_reservada={{ data_de_reservada }}&data_ate_reservada={{ data_ate_reservada }}&data_de_venda={{ data_de_venda }}&data_ate_venda={{ data_ate_venda }}&ativo={{ ativo_selecionado }}" class="btn-futurista btn-secundario">⬇ Exportar Excel</a>
 <a href="{% url 'core:operacoes_exportar_pdf' %}?data_de_carteira={{ data_de_carteira }}&data_ate_carteira={{ data_ate_carteira }}&data_de_reservada={{ data_de_reservada }}&data_ate_reservada={{ data_ate_reservada }}&data_de_venda={{ data_de_venda }}&data_ate_venda={{ data_ate_venda }}&ativo={{ ativo_selecionado }}" class="btn-futurista btn-secundario">⬇ Exportar PDF</a>
 {% endif %}
+<a href="{% url 'core:historico_atualizacoes' %}" class="btn-futurista btn-secundario">🗂️ Histórico de Atualizações</a>
 <p class="badge-horario-b3 {% if b3_mercado_aberto %}aberto{% else %}fechado{% endif %}">
     {% if b3_mercado_aberto %}🟢{% else %}⚪{% endif %} B3: {{ b3_horario_abertura }} - {{ b3_horario_fechamento }} &middot; {% if b3_mercado_aberto %}Mercado aberto{% else %}Mercado fechado{% endif %}
 </p>

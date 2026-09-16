@@ -32,6 +32,7 @@ from core.services import (
     atualizar_cotacao_diaria,
     gerar_alertas_para_usuario,
     gerar_sinais_robo_para_usuario,
+    registrar_atualizacao_carteira,
     BrapiError,
 )
 
@@ -104,6 +105,7 @@ class Command(BaseCommand):
             total_alertas += len(novos)
             novos_sinais = gerar_sinais_robo_para_usuario(usuario)
             total_sinais_robo += len(novos_sinais)
+            registrar_atualizacao_carteira(usuario)
 
         self.stdout.write(
             self.style.SUCCESS(

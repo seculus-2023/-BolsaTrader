@@ -10,6 +10,7 @@
 <a href="{% url 'core:posicoes_exportar_excel' %}" class="btn-futurista btn-secundario">⬇ Exportar Excel</a>
 <a href="{% url 'core:posicoes_exportar_pdf' %}" class="btn-futurista btn-secundario">⬇ Exportar PDF</a>
 {% endif %}
+<a href="{% url 'core:historico_atualizacoes' %}" class="btn-futurista btn-secundario">🗂️ Histórico de Atualizações</a>
 {% if ultima_atualizacao_cotacoes %}
 <p class="badge-atualizacao">⏱ Última atualização das cotações: {{ ultima_atualizacao_cotacoes|date:"d/m/Y H:i" }}</p>
 {% endif %}
@@ -95,6 +96,7 @@
             <tr>
                 <th>Dias em carteira</th>
                 <th>Ativo</th>
+                <th>Lucro/Perda por dia em carteira</th>
                 <th>Lucro/Perda (%)</th>
                 <th>Lucro/Perda (R$)</th>
                 <th>Qtd.</th>
@@ -125,6 +127,11 @@
                     {% if p.meta_lucro_atingida %}
                         <span class="badge-venda">🎯 Meta atingida &mdash; vender</span>
                     {% endif %}
+                </td>
+                <td class="{% if p.lucro_perda_por_dia_valor > 0 %}valor-positivo{% elif p.lucro_perda_por_dia_valor < 0 %}valor-negativo{% else %}valor-neutro{% endif %}">
+                    {% if p.lucro_perda_por_dia_valor is not None %}
+                        R$ {{ p.lucro_perda_por_dia_valor }}/dia ({{ p.lucro_perda_por_dia_pct }}%/dia)
+                    {% else %}&mdash;{% endif %}
                 </td>
                 <td class="{% if p.situacao == 'LUCRO' %}valor-positivo{% elif p.situacao == 'PERDA' %}valor-negativo{% else %}valor-neutro{% endif %}">
                     {% if p.lucro_perda_pct is not None %}{{ p.lucro_perda_pct }}%{% else %}&mdash;{% endif %}

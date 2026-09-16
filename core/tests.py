@@ -18,11 +18,12 @@ from django.core.management import call_command
 from django.core.management.base import CommandError
 from django.test import TestCase, override_settings
 from django.urls import reverse
+from django.utils import timezone
 
 from accounts.models import PerfilUsuario
 
 from .forms import OperacaoForm, VendaLoteForm
-from .models import Ativo, Cotacao, Operacao, Alerta, MensagemWhatsapp, CotacaoIndice
+from .models import Ativo, Cotacao, Operacao, Alerta, MensagemWhatsapp, CotacaoIndice, RegistroAtualizacaoCarteira
 from .services import (
     calcular_posicoes, analisar_tendencia, gerar_alertas_para_usuario, construir_comparativo_valores,
     analisar_indicadores_tecnicos, analisar_indicadores_tecnicos_precos,
@@ -30,6 +31,7 @@ from .services import (
     buscar_historico_cdi, calcular_comparativo_benchmark, _retorno_indice_periodo, _retorno_cdi_periodo,
     calcular_concentracao_setor, calcular_metricas_risco,
     enviar_whatsapp, whatsapp_envio_configurado,
+    registrar_atualizacao_carteira, excluir_registros_atualizacao_antigos, construir_grafico_atualizacoes_dia,
     BrapiError,
 )
 
@@ -546,6 +548,40 @@ class CalculoPosicoesTests(TestCase):
         posicao = calcular_posicoes(self.usuario)[0]
         self.assertEqual(posicao.dias_desde_compra, 0)
 
+    def test_lucro_perda_por_dia_divide_pelos_dias_em_carteira(self):
+        Operacao.objects.create(
+            usuario=self.usuario, ativo=self.ativo, tipo=Operacao.COMPRA,
+            quantidade=10, preco_unitario=Decimal("60.00"), data_operacao=date.today() - timedelta(days=10),
+        )
+        Cotacao.objects.create(ativo=self.ativo, data=date.today(), preco_fechamento=Decimal("70.00"))
+
+        posicao = calcular_posicoes(self.usuario)[0]
+
+        self.assertEqual(posicao.lucro_perda_valor, Decimal("100.00"))
+        self.assertEqual(posicao.lucro_perda_por_dia_valor, Decimal("10.00"))
+        self.assertEqual(posicao.lucro_perda_pct, Decimal("16.67"))
+        self.assertEqual(posicao.lucro_perda_por_dia_pct, Decimal("1.67"))
+
+    def test_lucro_perda_por_dia_none_quando_comprado_hoje(self):
+        Operacao.objects.create(
+            usuario=self.usuario, ativo=self.ativo, tipo=Operacao.COMPRA,
+            quantidade=10, preco_unitario=Decimal("60.00"), data_operacao=date.today(),
+        )
+        Cotacao.objects.create(ativo=self.ativo, data=date.today(), preco_fechamento=Decimal("70.00"))
+
+        posicao = calcular_posicoes(self.usuario)[0]
+
+        self.assertIsNone(posicao.lucro_perda_por_dia_valor)
+        self.assertIsNone(posicao.lucro_perda_por_dia_pct)
+
+    def test_lucro_perda_por_dia_none_sem_cotacao(self):
+        Operacao.objects.create(
+            usuario=self.usuario, ativo=self.ativo, tipo=Operacao.COMPRA,
+            quantidade=10, preco_unitario=Decimal("60.00"), data_operacao=date.today() - timedelta(days=5),
+        )
+        posicao = calcular_posicoes(self.usuario)[0]
+        self.assertIsNone(posicao.lucro_perda_por_dia_valor)
+
     def test_posicoes_ordenadas_por_dias_em_carteira_crescente(self):
         # VALE3 (self.ativo): comprado há 5 dias
         Operacao.objects.create(
@@ -718,6 +754,36 @@ class ExportacaoPosicoesTests(TestCase):
         self.client.logout()
         resposta = self.client.get(reverse("core:posicoes_exportar_excel"))
         self.assertEqual(resposta.status_code, 302)
+
+    def test_exportar_excel_inclui_abas_de_analise(self):
+        from openpyxl import load_workbook
+        import io
+
+        resposta = self.client.get(reverse("core:posicoes_exportar_excel"))
+        wb = load_workbook(io.BytesIO(resposta.content))
+        self.assertEqual(
+            wb.sheetnames,
+            ["Posições", "Carteira x Mercado", "Concentração por setor", "Indicadores de risco"],
+        )
+
+        ws_setor = wb["Concentração por setor"]
+        linhas_setor = list(ws_setor.values)
+        self.assertEqual(linhas_setor[0], ("Setor", "Valor (R$)", "% da carteira"))
+        self.assertEqual(linhas_setor[1][0], "Sem setor")  # ativo de teste não tem setor cadastrado
+
+        ws_risco = wb["Indicadores de risco"]
+        linhas_risco = list(ws_risco.values)
+        self.assertIn("WEGE3", [row[0] for row in linhas_risco])
+
+    def test_exportar_pdf_inclui_secoes_de_analise(self):
+        from pypdf import PdfReader
+        import io
+
+        resposta = self.client.get(reverse("core:posicoes_exportar_pdf"))
+        texto = "\n".join(p.extract_text() for p in PdfReader(io.BytesIO(resposta.content)).pages)
+        self.assertIn("Sua carteira x mercado", texto)
+        self.assertIn("Concentração por setor", texto)
+        self.assertIn("Indicadores de risco", texto)
 
 
 class AnaliseTendenciaTests(TestCase):
@@ -1727,3 +1793,166 @@ class EnviarWhatsappTests(TestCase):
             gerar_alertas_para_usuario(self.usuario)
 
         mock_enviar.assert_not_called()
+
+
+class HistoricoAtualizacoesTests(TestCase):
+    """core.services: registrar_atualizacao_carteira, excluir_registros_atualizacao_antigos,
+    construir_grafico_atualizacoes_dia + tela Histórico de Atualizações."""
+
+    def setUp(self):
+        self.usuario = User.objects.create_user(username="investidor_historico", password="SenhaForte123!")
+        self.ativo = Ativo.objects.create(ticker="VALE3")
+        Operacao.objects.create(
+            usuario=self.usuario, ativo=self.ativo, tipo=Operacao.COMPRA,
+            quantidade=10, preco_unitario=Decimal("60.00"), data_operacao=date.today(),
+        )
+        Cotacao.objects.create(ativo=self.ativo, data=date.today(), preco_fechamento=Decimal("66.00"))
+
+    def test_registrar_atualizacao_carteira_grava_totais_corretos(self):
+        registro = registrar_atualizacao_carteira(self.usuario)
+
+        self.assertEqual(registro.total_ativos, 1)
+        self.assertEqual(registro.valor_investido, Decimal("600.00"))
+        self.assertEqual(registro.valor_atual, Decimal("660.00"))
+        self.assertEqual(registro.lucro_perda, Decimal("60.00"))
+        self.assertEqual(registro.lucro_perda_pct, Decimal("10.00"))
+
+    def test_registrar_atualizacao_carteira_sem_posicoes_grava_zeros(self):
+        usuario_vazio = User.objects.create_user(username="investidor_vazio", password="SenhaForte123!")
+        registro = registrar_atualizacao_carteira(usuario_vazio)
+
+        self.assertEqual(registro.total_ativos, 0)
+        self.assertEqual(registro.valor_investido, Decimal("0"))
+        self.assertIsNone(registro.lucro_perda_pct)
+
+    def test_excluir_registros_antigos_respeita_limite_de_dias(self):
+        recente = registrar_atualizacao_carteira(self.usuario)
+        antigo = registrar_atualizacao_carteira(self.usuario)
+        RegistroAtualizacaoCarteira.objects.filter(id=antigo.id).update(
+            criado_em=timezone.now() - timedelta(days=10)
+        )
+
+        excluidos = excluir_registros_atualizacao_antigos(self.usuario, dias=5)
+
+        self.assertEqual(excluidos, 1)
+        self.assertTrue(RegistroAtualizacaoCarteira.objects.filter(id=recente.id).exists())
+        self.assertFalse(RegistroAtualizacaoCarteira.objects.filter(id=antigo.id).exists())
+
+    def test_excluir_registros_antigos_nao_afeta_outro_usuario(self):
+        outro_usuario = User.objects.create_user(username="investidor_outro", password="SenhaForte123!")
+        registro_outro = registrar_atualizacao_carteira(outro_usuario)
+        RegistroAtualizacaoCarteira.objects.filter(id=registro_outro.id).update(
+            criado_em=timezone.now() - timedelta(days=10)
+        )
+
+        excluidos = excluir_registros_atualizacao_antigos(self.usuario, dias=5)
+
+        self.assertEqual(excluidos, 0)
+        self.assertTrue(RegistroAtualizacaoCarteira.objects.filter(id=registro_outro.id).exists())
+
+    def test_grafico_atualizacoes_dia_none_com_menos_de_dois_registros(self):
+        registro = registrar_atualizacao_carteira(self.usuario)
+        self.assertIsNone(construir_grafico_atualizacoes_dia([registro]))
+
+    def test_grafico_atualizacoes_dia_com_dois_registros(self):
+        r1 = registrar_atualizacao_carteira(self.usuario)
+        Cotacao.objects.filter(ativo=self.ativo, data=date.today()).update(preco_fechamento=Decimal("72.00"))
+        r2 = registrar_atualizacao_carteira(self.usuario)
+
+        grafico = construir_grafico_atualizacoes_dia([r1, r2])
+
+        self.assertIsNotNone(grafico)
+        self.assertEqual(len(grafico["pontos"]), 2)
+        self.assertTrue(grafico["tendencia_alta"])
+
+    def test_tela_historico_atualizacoes_exige_login(self):
+        resposta = self.client.get(reverse("core:historico_atualizacoes"))
+        self.assertEqual(resposta.status_code, 302)
+
+    def test_tela_historico_atualizacoes_lista_registros(self):
+        registrar_atualizacao_carteira(self.usuario)
+        self.client.login(username="investidor_historico", password="SenhaForte123!")
+
+        resposta = self.client.get(reverse("core:historico_atualizacoes"))
+
+        self.assertEqual(resposta.status_code, 200)
+        self.assertContains(resposta, "Histórico de Atualizações")
+        self.assertNotContains(resposta, "VALE3")  # a tabela mostra só os totais, não o ticker
+
+    def test_excluir_por_dias_via_view(self):
+        registro = registrar_atualizacao_carteira(self.usuario)
+        RegistroAtualizacaoCarteira.objects.filter(id=registro.id).update(
+            criado_em=timezone.now() - timedelta(days=10)
+        )
+        self.client.login(username="investidor_historico", password="SenhaForte123!")
+
+        resposta = self.client.post(reverse("core:historico_atualizacoes_excluir"), {"dias": "5"})
+
+        self.assertRedirects(resposta, reverse("core:historico_atualizacoes"))
+        self.assertFalse(RegistroAtualizacaoCarteira.objects.filter(id=registro.id).exists())
+
+    def test_excluir_por_dias_invalido_nao_exclui_nada(self):
+        registro = registrar_atualizacao_carteira(self.usuario)
+        self.client.login(username="investidor_historico", password="SenhaForte123!")
+
+        resposta = self.client.post(reverse("core:historico_atualizacoes_excluir"), {"dias": "0"})
+
+        self.assertRedirects(resposta, reverse("core:historico_atualizacoes"))
+        self.assertTrue(RegistroAtualizacaoCarteira.objects.filter(id=registro.id).exists())
+
+    def test_atualizar_cotacoes_agora_grava_registro(self):
+        self.client.login(username="investidor_historico", password="SenhaForte123!")
+        with patch("core.views.mercado_b3_aberto", return_value=True), \
+             patch("core.views.atualizar_cotacao_diaria") as mock_atualizar:
+            mock_atualizar.return_value = Cotacao.objects.filter(ativo=self.ativo).first()
+            self.client.get(reverse("core:atualizar_cotacoes"))
+
+        self.assertEqual(RegistroAtualizacaoCarteira.objects.filter(usuario=self.usuario).count(), 1)
+
+    def test_exportar_excel_historico_retorna_xlsx_com_dados(self):
+        from openpyxl import load_workbook
+        import io
+
+        registrar_atualizacao_carteira(self.usuario)
+        self.client.login(username="investidor_historico", password="SenhaForte123!")
+
+        resposta = self.client.get(reverse("core:historico_atualizacoes_exportar_excel"))
+
+        self.assertEqual(resposta.status_code, 200)
+        self.assertTrue(resposta.content.startswith(b"PK"))
+        wb = load_workbook(io.BytesIO(resposta.content))
+        ws = wb.active
+        linhas = list(ws.values)
+        self.assertEqual(
+            linhas[3],
+            ("Data/hora", "Total de ativos", "Valor investido (R$)", "Valor atual (R$)",
+             "Lucro/Perda (R$)", "Lucro/Perda (%)"),
+        )
+        self.assertEqual(linhas[4][1], 1)  # total_ativos
+
+    def test_exportar_pdf_historico_retorna_pdf_valido(self):
+        registrar_atualizacao_carteira(self.usuario)
+        self.client.login(username="investidor_historico", password="SenhaForte123!")
+
+        resposta = self.client.get(reverse("core:historico_atualizacoes_exportar_pdf"))
+
+        self.assertEqual(resposta.status_code, 200)
+        self.assertEqual(resposta["Content-Type"], "application/pdf")
+        self.assertTrue(resposta.content.startswith(b"%PDF"))
+
+    def test_exportar_sem_registros_nao_quebra(self):
+        self.client.login(username="investidor_historico", password="SenhaForte123!")
+        resposta_excel = self.client.get(reverse("core:historico_atualizacoes_exportar_excel"))
+        resposta_pdf = self.client.get(reverse("core:historico_atualizacoes_exportar_pdf"))
+        self.assertEqual(resposta_excel.status_code, 200)
+        self.assertEqual(resposta_pdf.status_code, 200)
+
+    def test_botoes_de_acesso_ao_historico_nas_telas_relacionadas(self):
+        self.client.login(username="investidor_historico", password="SenhaForte123!")
+        url_historico = reverse("core:historico_atualizacoes")
+
+        resposta_operacoes = self.client.get(reverse("core:operacao_lista"))
+        resposta_posicoes = self.client.get(reverse("core:posicoes"))
+
+        self.assertContains(resposta_operacoes, url_historico)
+        self.assertContains(resposta_posicoes, url_historico)

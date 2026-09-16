@@ -480,3 +480,33 @@ class CotacaoIndice(models.Model):
 
     def __str__(self):
         return f"{self.get_indice_display()} {self.data} = {self.valor}"
+
+
+class RegistroAtualizacaoCarteira(models.Model):
+    """
+    "Retrato" (snapshot) dos totais da carteira comprada do usuário, gravado
+    toda vez que as cotações são atualizadas - pelo botão manual "Atualizar
+    cotações agora" ou pelo comando de management "atualizar_cotacoes"
+    (inclusive em --loop). Forma o histórico usado na tela Histórico de
+    Atualizações (ver core.services.registrar_atualizacao_carteira).
+    """
+
+    usuario = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="registros_atualizacao_carteira",
+    )
+    criado_em = models.DateTimeField("Data/hora", auto_now_add=True)
+    total_ativos = models.PositiveIntegerField("Total de ativos")
+    valor_investido = models.DecimalField("Valor investido", max_digits=14, decimal_places=2)
+    valor_atual = models.DecimalField("Valor atual", max_digits=14, decimal_places=2)
+    lucro_perda = models.DecimalField("Lucro/Perda (R$)", max_digits=14, decimal_places=2)
+    lucro_perda_pct = models.DecimalField(
+        "Lucro/Perda (%)", max_digits=8, decimal_places=2, null=True, blank=True,
+    )
+
+    class Meta:
+        verbose_name = "Registro de atualização da carteira"
+        verbose_name_plural = "Registros de atualização da carteira"
+        ordering = ["-criado_em"]
+
+    def __str__(self):
+        return f"{self.usuario} - {self.criado_em:%d/%m/%Y %H:%M}"

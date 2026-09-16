@@ -34,6 +34,22 @@ urlpatterns = [
     path("cotacoes/detalhes/", views.detalhes_cotacoes, name="detalhes_cotacoes"),
     path("cotacoes/atualizar/", views.atualizar_cotacoes_agora, name="atualizar_cotacoes"),
     path("benchmarks/atualizar/", views.atualizar_benchmarks_agora, name="atualizar_benchmarks"),
+    path("historico-atualizacoes/", views.historico_atualizacoes, name="historico_atualizacoes"),
+    path(
+        "historico-atualizacoes/excluir/",
+        views.historico_atualizacoes_excluir,
+        name="historico_atualizacoes_excluir",
+    ),
+    path(
+        "historico-atualizacoes/exportar/excel/",
+        views.historico_atualizacoes_exportar_excel,
+        name="historico_atualizacoes_exportar_excel",
+    ),
+    path(
+        "historico-atualizacoes/exportar/pdf/",
+        views.historico_atualizacoes_exportar_pdf,
+        name="historico_atualizacoes_exportar_pdf",
+    ),
     path("cotacoes/consultar/", views.consultar_cotacao_avulsa, name="consultar_cotacao_avulsa"),
     path("noticias/", views.noticias, name="noticias"),
     path("noticias/atualizar/", views.noticias_atualizar, name="noticias_atualizar"),

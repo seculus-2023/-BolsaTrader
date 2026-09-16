@@ -23,7 +23,9 @@ from .forms import (
     EditarReservaForm,
     FonteNoticiaForm,
 )
-from .models import Operacao, Alerta, Ativo, Cotacao, MensagemWhatsapp, FonteNoticia, AcaoB3
+from .models import (
+    Operacao, Alerta, Ativo, Cotacao, MensagemWhatsapp, FonteNoticia, AcaoB3, RegistroAtualizacaoCarteira,
+)
 from .services import (
     calcular_posicoes,
     gerar_alertas_para_usuario,
@@ -54,6 +56,11 @@ from .services import (
     calcular_metricas_risco,
     calcular_comparativo_benchmark,
     atualizar_benchmarks,
+    registrar_atualizacao_carteira,
+    excluir_registros_atualizacao_antigos,
+    construir_grafico_atualizacoes_dia,
+    gerar_excel_historico_atualizacoes,
+    gerar_pdf_historico_atualizacoes,
 )
 
 TICKER_VALIDO = re.compile(r"^[A-Z0-9]{1,15}$")
@@ -480,8 +487,19 @@ def posicoes(request):
 
 @login_required
 def posicoes_exportar_excel(request):
-    """Exporta as posições em carteira do usuário logado como planilha .xlsx."""
-    conteudo = gerar_excel_posicoes(calcular_posicoes(request.user))
+    """
+    Exporta as posições em carteira do usuário logado como planilha .xlsx -
+    inclui, além da grid principal, as análises "Sua carteira x mercado",
+    "Concentração por setor" e "Indicadores de risco" já mostradas na tela
+    Posições em Carteira (ver core.views.posicoes).
+    """
+    lista_posicoes = calcular_posicoes(request.user)
+    conteudo = gerar_excel_posicoes(
+        lista_posicoes,
+        comparativo_benchmark=calcular_comparativo_benchmark(request.user, posicoes=lista_posicoes),
+        concentracao_setor=calcular_concentracao_setor(lista_posicoes),
+        metricas_risco=calcular_metricas_risco(lista_posicoes),
+    )
     resposta = HttpResponse(
         conteudo,
         content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -493,9 +511,21 @@ def posicoes_exportar_excel(request):
 
 @login_required
 def posicoes_exportar_pdf(request):
-    """Exporta as posições em carteira do usuário logado como PDF."""
+    """
+    Exporta as posições em carteira do usuário logado como PDF - inclui,
+    além da tabela principal, as análises "Sua carteira x mercado",
+    "Concentração por setor" e "Indicadores de risco" já mostradas na tela
+    Posições em Carteira (ver core.views.posicoes).
+    """
     nome_usuario = request.user.first_name or request.user.username
-    conteudo = gerar_pdf_posicoes(calcular_posicoes(request.user), nome_usuario)
+    lista_posicoes = calcular_posicoes(request.user)
+    conteudo = gerar_pdf_posicoes(
+        lista_posicoes,
+        nome_usuario,
+        comparativo_benchmark=calcular_comparativo_benchmark(request.user, posicoes=lista_posicoes),
+        concentracao_setor=calcular_concentracao_setor(lista_posicoes),
+        metricas_risco=calcular_metricas_risco(lista_posicoes),
+    )
     resposta = HttpResponse(conteudo, content_type="application/pdf")
     nome_arquivo = f"posicoes_{timezone.localdate().isoformat()}.pdf"
     resposta["Content-Disposition"] = f'attachment; filename="{nome_arquivo}"'
@@ -712,6 +742,7 @@ def atualizar_cotacoes_agora(request):
 
     gerar_alertas_para_usuario(request.user)
     gerar_sinais_robo_para_usuario(request.user)
+    registrar_atualizacao_carteira(request.user)
     return redirect("core:dashboard")
 
 
@@ -738,6 +769,74 @@ def atualizar_benchmarks_agora(request):
             f"CDI ({resultado['cdi']} cotação(ões) nova(s)).",
         )
     return redirect(request.GET.get("next") or "core:dashboard")
+
+
+@login_required
+def historico_atualizacoes(request):
+    """
+    Tela "Histórico de Atualizações": lista os retratos (snapshots) da
+    carteira gravados a cada atualização de cotações (ver
+    core.services.registrar_atualizacao_carteira), com um gráfico da
+    variação (%) de hoje e a opção de excluir registros antigos por dias.
+    """
+    registros = list(
+        RegistroAtualizacaoCarteira.objects.filter(usuario=request.user).order_by("-criado_em")[:500]
+    )
+    hoje = timezone.localdate()
+    registros_hoje = [r for r in registros if timezone.localtime(r.criado_em).date() == hoje]
+
+    contexto = {
+        "registros": registros,
+        "grafico_dia": construir_grafico_atualizacoes_dia(list(reversed(registros_hoje))),
+        "total_registros_hoje": len(registros_hoje),
+    }
+    return render(request, "core/historico_atualizacoes.html", contexto)
+
+
+@login_required
+@require_POST
+def historico_atualizacoes_excluir(request):
+    """Exclui os registros de atualização da carteira do usuário com mais de N dias (formulário "Excluir por dias")."""
+    try:
+        dias = int(request.POST.get("dias", ""))
+    except ValueError:
+        dias = None
+
+    if not dias or dias < 1:
+        messages.error(request, "Informe um número de dias válido (maior que zero) para excluir.")
+    else:
+        excluidos = excluir_registros_atualizacao_antigos(request.user, dias)
+        if excluidos:
+            messages.success(request, f"{excluidos} registro(s) com mais de {dias} dia(s) excluído(s).")
+        else:
+            messages.info(request, f"Nenhum registro com mais de {dias} dia(s) encontrado para excluir.")
+    return redirect("core:historico_atualizacoes")
+
+
+@login_required
+def historico_atualizacoes_exportar_excel(request):
+    """Exporta o histórico de atualizações da carteira do usuário logado como planilha .xlsx."""
+    registros = RegistroAtualizacaoCarteira.objects.filter(usuario=request.user).order_by("-criado_em")
+    conteudo = gerar_excel_historico_atualizacoes(list(registros))
+    resposta = HttpResponse(
+        conteudo,
+        content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+    nome_arquivo = f"historico_atualizacoes_{timezone.localdate().isoformat()}.xlsx"
+    resposta["Content-Disposition"] = f'attachment; filename="{nome_arquivo}"'
+    return resposta
+
+
+@login_required
+def historico_atualizacoes_exportar_pdf(request):
+    """Exporta o histórico de atualizações da carteira do usuário logado como PDF."""
+    nome_usuario = request.user.first_name or request.user.username
+    registros = RegistroAtualizacaoCarteira.objects.filter(usuario=request.user).order_by("-criado_em")
+    conteudo = gerar_pdf_historico_atualizacoes(list(registros), nome_usuario)
+    resposta = HttpResponse(conteudo, content_type="application/pdf")
+    nome_arquivo = f"historico_atualizacoes_{timezone.localdate().isoformat()}.pdf"
+    resposta["Content-Disposition"] = f'attachment; filename="{nome_arquivo}"'
+    return resposta
 
 
 def offline_view(request):

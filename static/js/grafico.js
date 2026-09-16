@@ -110,6 +110,27 @@ document.addEventListener("DOMContentLoaded", () => {
         });
     });
 
+    // Gráfico "Variações do dia" (Histórico de Atualizações): lucro/perda % da carteira a cada atualização de hoje.
+    document.querySelectorAll("svg.grafico-carteira-dia").forEach((svg) => {
+        ativarCrosshair(svg, (tooltip, ponto) => {
+            const linhaHora = document.createElement("div");
+            linhaHora.style.color = "var(--text-dim)";
+            linhaHora.textContent = ponto.hora_label;
+            tooltip.appendChild(linhaHora);
+
+            const linhaValorAtual = document.createElement("div");
+            linhaValorAtual.style.color = "var(--text-dim)";
+            linhaValorAtual.textContent = `Valor atual: ${ponto.valor_atual_label}`;
+            tooltip.appendChild(linhaValorAtual);
+
+            const linhaLucro = document.createElement("div");
+            linhaLucro.style.fontWeight = "700";
+            linhaLucro.style.color = ponto.positivo ? "var(--neon-green)" : "var(--neon-red)";
+            linhaLucro.textContent = `${ponto.lucro_perda_label} (${ponto.lucro_perda_pct_label})`;
+            tooltip.appendChild(linhaLucro);
+        });
+    });
+
     // Gráfico comparativo (posições): valor de compra x valor atual no histórico, por ativo.
     document.querySelectorAll("svg.grafico-comparativo").forEach((svg) => {
         ativarCrosshair(svg, (tooltip, ponto) => {

@@ -1,0 +1,105 @@
+{% extends "base.html" %}
+{% load static l10n %}
+{% block titulo %}Histórico de Atualizações - BolsaTrader{% endblock %}
+{% block conteudo %}
+<h1>Histórico de Atualizações</h1>
+<p style="color: var(--text-dim);">
+    Um retrato da carteira é gravado toda vez que as cotações são atualizadas &mdash; pelo botão "Atualizar
+    cotações agora" ou pela rotina automática do servidor, quando configurada. Cada registro guarda o total de
+    ativos, o valor investido, o valor atual e o lucro/perda daquele momento.
+</p>
+{% if registros %}
+<a href="{% url 'core:historico_atualizacoes_exportar_excel' %}" class="btn-futurista btn-secundario">⬇ Exportar Excel</a>
+<a href="{% url 'core:historico_atualizacoes_exportar_pdf' %}" class="btn-futurista btn-secundario">⬇ Exportar PDF</a>
+{% endif %}
+
+<h2 style="margin-top: 1.8rem;">Variações de hoje</h2>
+{% if grafico_dia %}
+<div class="card-glass">
+    <p style="color: var(--text-dim); font-size: .85rem; margin-top: -.2rem;">
+        Lucro/perda (%) da carteira em cada atualização registrada hoje ({{ total_registros_hoje }} registro{{ total_registros_hoje|pluralize }}).
+    </p>
+    <div class="grafico-wrap">
+        {% localize off %}
+        <svg viewBox="0 0 {{ grafico_dia.largura }} {{ grafico_dia.altura }}"
+             class="grafico-carteira-dia" preserveAspectRatio="none"
+             data-pontos-id="{{ grafico_dia.id_svg }}"
+             role="img" aria-label="Variação do lucro/perda da carteira ao longo das atualizações de hoje">
+            <line x1="{{ grafico_dia.x_inicio }}" y1="{{ grafico_dia.y_topo }}"
+                  x2="{{ grafico_dia.x_fim }}" y2="{{ grafico_dia.y_topo }}" class="grafico-grid" />
+            <line x1="{{ grafico_dia.x_inicio }}" y1="{{ grafico_dia.y_base }}"
+                  x2="{{ grafico_dia.x_fim }}" y2="{{ grafico_dia.y_base }}" class="grafico-grid" />
+            <path d="{{ grafico_dia.path_d }}" fill="none" class="grafico-linha {% if grafico_dia.tendencia_alta %}linha-alta{% else %}linha-baixa{% endif %}" />
+            {% for p in grafico_dia.pontos %}
+                {% if forloop.first or forloop.last %}
+                <circle cx="{{ p.x }}" cy="{{ p.y }}" r="4" class="grafico-marcador {% if grafico_dia.tendencia_alta %}linha-alta{% else %}linha-baixa{% endif %}" />
+                {% endif %}
+            {% endfor %}
+        </svg>
+        {% endlocalize %}
+        {{ grafico_dia.pontos|json_script:grafico_dia.id_svg }}
+        <div class="grafico-eixos">
+            <span>{{ grafico_dia.faixa_min_label }}</span>
+            <span>{{ grafico_dia.faixa_max_label }}</span>
+        </div>
+    </div>
+</div>
+{% else %}
+<div class="card-glass">
+    <p style="color: var(--text-dim);">
+        Ainda não há pelo menos 2 registros de hoje para montar o gráfico. Clique em "Atualizar cotações agora"
+        em qualquer tela do sistema para gerar um novo registro.
+    </p>
+</div>
+{% endif %}
+
+<h2 style="margin-top: 1.8rem;">Excluir registros antigos</h2>
+<div class="card-glass">
+    <form method="post" action="{% url 'core:historico_atualizacoes_excluir' %}" class="form-futurista"
+          style="display: flex; gap: .8rem; align-items: flex-end; flex-wrap: wrap;"
+          onsubmit="return confirm('Excluir todos os seus registros de atualização com mais de N dias? Essa ação não pode ser desfeita.');">
+        {% csrf_token %}
+        <div>
+            <label for="campo-dias-excluir" style="margin-top: 0;">Excluir registros com mais de quantos dias?</label>
+            <input type="number" min="1" name="dias" id="campo-dias-excluir" value="30" class="form-control-futurista" style="width: 140px;">
+        </div>
+        <button type="submit" class="btn-futurista btn-secundario" style="color: var(--neon-red); border-color: rgba(255, 56, 96, .4);">🗑️ Excluir</button>
+    </form>
+</div>
+
+<h2 style="margin-top: 1.8rem;">Registros ({{ registros|length }})</h2>
+<div class="card-glass">
+    {% if registros %}
+    <div class="tabela-scroll">
+    <table class="tabela-futurista">
+        <thead>
+            <tr>
+                <th>Data/hora</th>
+                <th>Total de ativos</th>
+                <th>Valor investido</th>
+                <th>Valor atual</th>
+                <th>Lucro/Perda</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for r in registros %}
+            <tr>
+                <td>{{ r.criado_em|date:"d/m/Y H:i" }}</td>
+                <td>{{ r.total_ativos }}</td>
+                <td>R$ {{ r.valor_investido }}</td>
+                <td>R$ {{ r.valor_atual }}</td>
+                <td class="{% if r.lucro_perda > 0 %}valor-positivo{% elif r.lucro_perda < 0 %}valor-negativo{% else %}valor-neutro{% endif %}">
+                    R$ {{ r.lucro_perda }}{% if r.lucro_perda_pct is not None %} ({{ r.lucro_perda_pct }}%){% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    </div>
+    {% else %}
+    <p style="color: var(--text-dim);">Nenhum registro ainda &mdash; clique em "Atualizar cotações agora" em qualquer tela do sistema.</p>
+    {% endif %}
+</div>
+
+<script src="{% static 'js/grafico.js' %}" defer></script>
+{% endblock %}

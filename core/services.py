@@ -866,6 +866,36 @@ def excluir_registros_atualizacao_antigos(usuario, dias: int) -> int:
     return excluidos
 
 
+def calcular_variacoes_historico(registros_desc: list[RegistroAtualizacaoCarteira]) -> list[dict]:
+    """
+    Para cada registro do histórico de atualizações (ordenados do mais
+    recente para o mais antigo, mesma ordem da tela), calcula a variação do
+    valor atual da carteira (R$ e %) em relação ao registro imediatamente
+    anterior no tempo - "quanto mudou desde a atualização passada". O
+    registro mais antigo da lista fica sem variação (não há um anterior pra
+    comparar), assim como quando o valor atual anterior era zero (não dá
+    pra calcular percentual sobre zero).
+
+    Retorna uma lista de dicts na mesma ordem de entrada, cada um com
+    "registro", "variacao_valor" e "variacao_pct".
+    """
+    resultado = []
+    for i, registro in enumerate(registros_desc):
+        anterior = registros_desc[i + 1] if i + 1 < len(registros_desc) else None
+        variacao_valor = None
+        variacao_pct = None
+        if anterior is not None:
+            variacao_valor = (registro.valor_atual - anterior.valor_atual).quantize(Decimal("0.01"))
+            if anterior.valor_atual:
+                variacao_pct = (variacao_valor / anterior.valor_atual * 100).quantize(Decimal("0.01"))
+        resultado.append({
+            "registro": registro,
+            "variacao_valor": variacao_valor,
+            "variacao_pct": variacao_pct,
+        })
+    return resultado
+
+
 def construir_grafico_atualizacoes_dia(
     registros_dia: list[RegistroAtualizacaoCarteira], largura: int = 640, altura: int = 200, padding: int = 40,
 ) -> dict | None:

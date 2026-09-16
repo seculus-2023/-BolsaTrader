@@ -78,18 +78,24 @@
                 <th>Total de ativos</th>
                 <th>Valor investido</th>
                 <th>Valor atual</th>
+                <th>Variação desde a atualização anterior</th>
                 <th>Lucro/Perda</th>
             </tr>
         </thead>
         <tbody>
-            {% for r in registros %}
+            {% for item in registros_com_variacao %}
             <tr>
-                <td>{{ r.criado_em|date:"d/m/Y H:i" }}</td>
-                <td>{{ r.total_ativos }}</td>
-                <td>R$ {{ r.valor_investido }}</td>
-                <td>R$ {{ r.valor_atual }}</td>
-                <td class="{% if r.lucro_perda > 0 %}valor-positivo{% elif r.lucro_perda < 0 %}valor-negativo{% else %}valor-neutro{% endif %}">
-                    R$ {{ r.lucro_perda }}{% if r.lucro_perda_pct is not None %} ({{ r.lucro_perda_pct }}%){% endif %}
+                <td>{{ item.registro.criado_em|date:"d/m/Y H:i" }}</td>
+                <td>{{ item.registro.total_ativos }}</td>
+                <td>R$ {{ item.registro.valor_investido }}</td>
+                <td>R$ {{ item.registro.valor_atual }}</td>
+                <td class="{% if item.variacao_valor > 0 %}valor-positivo{% elif item.variacao_valor < 0 %}valor-negativo{% else %}valor-neutro{% endif %}">
+                    {% if item.variacao_valor is not None %}
+                        R$ {{ item.variacao_valor }}{% if item.variacao_pct is not None %} ({{ item.variacao_pct }}%){% endif %}
+                    {% else %}&mdash;{% endif %}
+                </td>
+                <td class="{% if item.registro.lucro_perda > 0 %}valor-positivo{% elif item.registro.lucro_perda < 0 %}valor-negativo{% else %}valor-neutro{% endif %}">
+                    R$ {{ item.registro.lucro_perda }}{% if item.registro.lucro_perda_pct is not None %} ({{ item.registro.lucro_perda_pct }}%){% endif %}
                 </td>
             </tr>
             {% endfor %}

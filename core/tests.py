@@ -32,6 +32,7 @@ from .services import (
     calcular_concentracao_setor, calcular_metricas_risco,
     enviar_whatsapp, whatsapp_envio_configurado,
     registrar_atualizacao_carteira, excluir_registros_atualizacao_antigos, construir_grafico_atualizacoes_dia,
+    calcular_variacoes_historico,
     BrapiError,
 )
 
@@ -1864,6 +1865,49 @@ class HistoricoAtualizacoesTests(TestCase):
         self.assertIsNotNone(grafico)
         self.assertEqual(len(grafico["pontos"]), 2)
         self.assertTrue(grafico["tendencia_alta"])
+
+    def test_calcular_variacoes_historico_compara_com_registro_anterior(self):
+        r1 = registrar_atualizacao_carteira(self.usuario)  # valor_atual = 660.00
+        Cotacao.objects.filter(ativo=self.ativo, data=date.today()).update(preco_fechamento=Decimal("72.00"))
+        r2 = registrar_atualizacao_carteira(self.usuario)  # valor_atual = 720.00
+
+        # ordem "-criado_em" (mais recente primeiro), igual à view
+        resultado = calcular_variacoes_historico([r2, r1])
+
+        self.assertEqual(resultado[0]["registro"], r2)
+        self.assertEqual(resultado[0]["variacao_valor"], Decimal("60.00"))
+        self.assertAlmostEqual(float(resultado[0]["variacao_pct"]), 9.09, places=2)
+        self.assertIsNone(resultado[1]["variacao_valor"])  # registro mais antigo não tem anterior
+        self.assertIsNone(resultado[1]["variacao_pct"])
+
+    def test_calcular_variacoes_historico_negativa_quando_valor_cai(self):
+        r1 = registrar_atualizacao_carteira(self.usuario)  # valor_atual = 660.00
+        Cotacao.objects.filter(ativo=self.ativo, data=date.today()).update(preco_fechamento=Decimal("60.00"))
+        r2 = registrar_atualizacao_carteira(self.usuario)  # valor_atual = 600.00
+
+        resultado = calcular_variacoes_historico([r2, r1])
+
+        self.assertEqual(resultado[0]["variacao_valor"], Decimal("-60.00"))
+        self.assertTrue(resultado[0]["variacao_pct"] < 0)
+
+    def test_calcular_variacoes_historico_com_um_unico_registro(self):
+        r1 = registrar_atualizacao_carteira(self.usuario)
+        resultado = calcular_variacoes_historico([r1])
+        self.assertIsNone(resultado[0]["variacao_valor"])
+
+    def test_calcular_variacoes_historico_lista_vazia(self):
+        self.assertEqual(calcular_variacoes_historico([]), [])
+
+    def test_tela_historico_atualizacoes_mostra_coluna_variacao(self):
+        registrar_atualizacao_carteira(self.usuario)
+        Cotacao.objects.filter(ativo=self.ativo, data=date.today()).update(preco_fechamento=Decimal("72.00"))
+        registrar_atualizacao_carteira(self.usuario)
+        self.client.login(username="investidor_historico", password="SenhaForte123!")
+
+        resposta = self.client.get(reverse("core:historico_atualizacoes"))
+
+        self.assertContains(resposta, "Variação desde a atualização anterior")
+        self.assertContains(resposta, "R$ 60,00")
 
     def test_tela_historico_atualizacoes_exige_login(self):
         resposta = self.client.get(reverse("core:historico_atualizacoes"))

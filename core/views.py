@@ -58,6 +58,7 @@ from .services import (
     atualizar_benchmarks,
     registrar_atualizacao_carteira,
     excluir_registros_atualizacao_antigos,
+    calcular_variacoes_historico,
     construir_grafico_atualizacoes_dia,
     gerar_excel_historico_atualizacoes,
     gerar_pdf_historico_atualizacoes,
@@ -787,6 +788,7 @@ def historico_atualizacoes(request):
 
     contexto = {
         "registros": registros,
+        "registros_com_variacao": calcular_variacoes_historico(registros),
         "grafico_dia": construir_grafico_atualizacoes_dia(list(reversed(registros_hoje))),
         "total_registros_hoje": len(registros_hoje),
     }

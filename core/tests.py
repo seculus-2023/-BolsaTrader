@@ -7,6 +7,7 @@ Executar com:
 import hashlib
 import hmac
 import json
+import threading
 from datetime import date, datetime, timedelta, timezone as dt_timezone
 from decimal import Decimal
 from io import StringIO
@@ -22,6 +23,7 @@ from django.utils import timezone
 
 from accounts.models import PerfilUsuario
 
+from . import services as core_services
 from .forms import OperacaoForm, VendaLoteForm
 from .models import Ativo, Cotacao, Operacao, Alerta, MensagemWhatsapp, CotacaoIndice, RegistroAtualizacaoCarteira
 from .services import (
@@ -32,7 +34,7 @@ from .services import (
     calcular_concentracao_setor, calcular_metricas_risco,
     enviar_whatsapp, whatsapp_envio_configurado,
     registrar_atualizacao_carteira, excluir_registros_atualizacao_antigos, construir_grafico_atualizacoes_dia,
-    calcular_variacoes_historico,
+    calcular_variacoes_historico, executar_ciclo_atualizacao_cotacoes, iniciar_agendador_cotacoes_embutido,
     BrapiError,
 )
 
@@ -1010,6 +1012,73 @@ class ComandoAtualizarCotacoesTests(TestCase):
     def test_intervalo_zero_ou_negativo_gera_erro(self):
         with self.assertRaises(CommandError):
             call_command("atualizar_cotacoes", "--loop", "--intervalo", "0", stdout=StringIO())
+
+
+class ExecutarCicloAtualizacaoTests(TestCase):
+    """core.services.executar_ciclo_atualizacao_cotacoes - ciclo compartilhado pelo comando de management e pelo agendador embutido."""
+
+    @patch("core.services.requests.get")
+    def test_ciclo_atualiza_cotacoes_gera_alertas_e_registra_carteira(self, mock_get):
+        usuario = User.objects.create_user(username="investidor_ciclo", password="SenhaForte123!")
+        ativo = Ativo.objects.create(ticker="PETR4")
+        Operacao.objects.create(
+            usuario=usuario, ativo=ativo, tipo=Operacao.COMPRA,
+            quantidade=10, preco_unitario=Decimal("30.00"), data_operacao=date.today(),
+            meta_lucro_pct=Decimal("5.0"),
+        )
+        mock_get.return_value.raise_for_status = lambda: None
+        mock_get.return_value.json = lambda: {"results": [{"regularMarketPrice": 32.0}]}
+
+        resultado = executar_ciclo_atualizacao_cotacoes()
+
+        self.assertEqual(resultado["ativos_total"], 1)
+        self.assertEqual(resultado["ativos_atualizados"], 1)
+        self.assertEqual(resultado["ativos_falha"], 0)
+        self.assertGreaterEqual(resultado["alertas_gerados"], 1)  # meta de 5% batida (30 -> 32 = +6,67%)
+        self.assertTrue(Cotacao.objects.filter(ativo=ativo).exists())
+        self.assertTrue(RegistroAtualizacaoCarteira.objects.filter(usuario=usuario).exists())
+
+    @patch("core.services.requests.get")
+    def test_ciclo_conta_falha_sem_derrubar_o_resto(self, mock_get):
+        User.objects.create_user(username="investidor_ciclo_falha", password="SenhaForte123!")
+        ativo = Ativo.objects.create(ticker="VALE3")
+        Operacao.objects.create(
+            usuario=User.objects.get(username="investidor_ciclo_falha"), ativo=ativo, tipo=Operacao.COMPRA,
+            quantidade=5, preco_unitario=Decimal("60.00"), data_operacao=date.today(),
+        )
+        mock_get.return_value.raise_for_status = lambda: None
+        mock_get.return_value.json = lambda: {"results": [{}]}  # sem regularMarketPrice -> BrapiError
+
+        resultado = executar_ciclo_atualizacao_cotacoes()
+
+        self.assertEqual(resultado["ativos_falha"], 1)
+        self.assertEqual(resultado["ativos_atualizados"], 0)
+
+
+class AgendadorCotacoesEmbutidoTests(TestCase):
+    """core.services.iniciar_agendador_cotacoes_embutido - thread de atualização automática ligada em bolsatrader/wsgi.py."""
+
+    def setUp(self):
+        core_services._agendador_cotacoes_iniciado = False
+
+    def tearDown(self):
+        core_services._agendador_cotacoes_iniciado = False
+
+    def test_nao_inicia_com_intervalo_zero_ou_negativo(self):
+        with override_settings(COTACOES_INTERVALO_MINUTOS=0, AGENDADOR_COTACOES_EMBUTIDO=True):
+            self.assertFalse(iniciar_agendador_cotacoes_embutido())
+
+    def test_nao_inicia_quando_desligado_por_configuracao(self):
+        with override_settings(AGENDADOR_COTACOES_EMBUTIDO=False, COTACOES_INTERVALO_MINUTOS=10):
+            self.assertFalse(iniciar_agendador_cotacoes_embutido())
+
+    def test_inicia_e_e_idempotente(self):
+        with override_settings(AGENDADOR_COTACOES_EMBUTIDO=True, COTACOES_INTERVALO_MINUTOS=10):
+            self.assertTrue(iniciar_agendador_cotacoes_embutido())
+            self.assertTrue(iniciar_agendador_cotacoes_embutido())  # 2ª chamada não inicia outra thread
+
+        nomes_threads = [t.name for t in threading.enumerate()]
+        self.assertEqual(nomes_threads.count("bolsatrader-cotacoes-agendador"), 1)
 
 
 class DetalhesCotacoesTests(TestCase):
@@ -1997,6 +2066,8 @@ class HistoricoAtualizacoesTests(TestCase):
 
         resposta_operacoes = self.client.get(reverse("core:operacao_lista"))
         resposta_posicoes = self.client.get(reverse("core:posicoes"))
+        resposta_dashboard = self.client.get(reverse("core:dashboard"))
 
         self.assertContains(resposta_operacoes, url_historico)
         self.assertContains(resposta_posicoes, url_historico)
+        self.assertContains(resposta_dashboard, url_historico)

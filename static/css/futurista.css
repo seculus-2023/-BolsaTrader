@@ -272,6 +272,25 @@ table.tabela-futurista tr:hover td {
 }
 
 /*
+ * Destaque de coluna (ex: "Cotação atual" em Posições em Carteira) - realça
+ * a coluna inteira com fundo e negrito, sem depender de cor de lucro/perda,
+ * pra achar rápido o dado mais consultado na grid.
+ */
+table.tabela-futurista td.coluna-destaque {
+    background: rgba(0, 240, 255, 0.09);
+    color: var(--neon-cyan);
+    font-weight: 700;
+}
+
+table.tabela-futurista th.coluna-destaque {
+    background: rgba(0, 240, 255, 0.16);
+}
+
+table.tabela-futurista tr:hover td.coluna-destaque {
+    background: rgba(0, 240, 255, 0.16);
+}
+
+/*
  * Linha destacada quando a meta de lucro foi atingida - sinaliza "considere
  * vender". Usa dourado/âmbar (não o verde de "valor-positivo") para não se
  * confundir com o simples fato de estar no lucro - aqui é um chamado à ação.

@@ -192,10 +192,28 @@ LOGOUT_REDIRECT_URL = "accounts:login"
 BRAPI_BASE_URL = config("BRAPI_BASE_URL", default="https://brapi.dev/api")
 BRAPI_TOKEN = config("BRAPI_TOKEN", default="v2rExiL92yBndDgQxdSUT9")  # opcional, ver manual de instalação
 
-# De quantos em quantos minutos o comando "atualizar_cotacoes --loop" busca as
-# cotações de novo (ver core/management/commands/atualizar_cotacoes.py). Não
-# afeta o botão "Atualizar cotações agora" do site, que é sempre manual/na hora.
+# De quantos em quantos minutos as cotações são buscadas de novo sozinhas -
+# tanto pelo agendador embutido no próprio processo do servidor (ver
+# AGENDADOR_COTACOES_EMBUTIDO logo abaixo e core.services.
+# iniciar_agendador_cotacoes_embutido, ligado em bolsatrader/wsgi.py) quanto
+# pelo comando "atualizar_cotacoes --loop" rodado à parte, se preferir esse
+# caminho em vez do agendador embutido. Não afeta o botão "Atualizar
+# cotações agora" do site, que é sempre manual/na hora.
 COTACOES_INTERVALO_MINUTOS = config("COTACOES_INTERVALO_MINUTOS", default=60, cast=int)
+
+# Liga (padrão) ou desliga o agendador embutido de cotações: uma thread em
+# segundo plano, iniciada junto com o próprio servidor web (bolsatrader/
+# wsgi.py), que atualiza cotações/alertas/robô sozinha a cada
+# COTACOES_INTERVALO_MINUTOS minutos - sem precisar deixar um processo
+# separado ("atualizar_cotacoes --loop") rodando à parte.
+#
+# Desligue (AGENDADOR_COTACOES_EMBUTIDO=False) em deploys com mais de um
+# processo worker atrás do mesmo servidor (ex: gunicorn/Docker com
+# --workers > 1) - cada worker chamaria o agendador e duplicaria o
+# trabalho (cotações buscadas 2x, alertas e histórico da carteira
+# duplicados). Nesse cenário, prefira rodar "atualizar_cotacoes --loop" à
+# parte, em um único processo dedicado.
+AGENDADOR_COTACOES_EMBUTIDO = config("AGENDADOR_COTACOES_EMBUTIDO", default=True, cast=bool)
 
 # Parâmetros padrão para avisos de lucro/perda quando o usuário não define
 META_LUCRO_PADRAO = config("META_LUCRO_PADRAO", default=5.0, cast=float)   # %

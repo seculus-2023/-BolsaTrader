@@ -102,7 +102,7 @@
                 <th>Qtd.</th>
                 <th>Preço médio</th>
                 <th>Valor investido</th>
-                <th>Cotação atual</th>
+                <th class="coluna-destaque">Cotação atual</th>
                 <th>Valor atual</th>
                 <th>Meta lucro / perda</th>
                 <th>Tendência</th>
@@ -142,7 +142,7 @@
                 <td>{{ p.quantidade }}</td>
                 <td>R$ {{ p.preco_medio }}</td>
                 <td>R$ {{ p.valor_investido }}</td>
-                <td>{% if p.preco_atual %}R$ {{ p.preco_atual }}{% else %}&mdash;{% endif %}</td>
+                <td class="coluna-destaque">{% if p.preco_atual %}R$ {{ p.preco_atual }}{% else %}&mdash;{% endif %}</td>
                 <td>{% if p.valor_atual %}R$ {{ p.valor_atual }}{% else %}&mdash;{% endif %}</td>
                 <td>
                     {% if p.meta_lucro_pct %}+{{ p.meta_lucro_pct }}%{% else %}padrão{% endif %}
@@ -170,7 +170,7 @@
             <tr>
                 <th>Ativo</th>
                 <th>Preço pretendido</th>
-                <th>Cotação atual</th>
+                <th class="coluna-destaque">Cotação atual</th>
                 <th>Variação desde a reserva</th>
                 <th>Meta lucro / perda</th>
                 <th>Tendência</th>
@@ -187,7 +187,7 @@
                     {% endif %}
                 </td>
                 <td>R$ {{ p.preco_medio }}</td>
-                <td>{% if p.preco_atual %}R$ {{ p.preco_atual }}{% else %}&mdash;{% endif %}</td>
+                <td class="coluna-destaque">{% if p.preco_atual %}R$ {{ p.preco_atual }}{% else %}&mdash;{% endif %}</td>
                 <td class="{% if p.variacao_pct_reserva > 0 %}valor-positivo{% elif p.variacao_pct_reserva < 0 %}valor-negativo{% else %}valor-neutro{% endif %}">
                     {% if p.variacao_pct_reserva is not None %}{{ p.variacao_pct_reserva }}%{% else %}&mdash;{% endif %}
                 </td>
@@ -228,7 +228,7 @@
             <tr>
                 <th>Ativo</th>
                 <th>Preço pretendido</th>
-                <th>Cotação atual</th>
+                <th class="coluna-destaque">Cotação atual</th>
                 <th>Variação desde a reserva</th>
                 <th>Meta lucro / perda</th>
                 <th>Tendência</th>
@@ -246,7 +246,7 @@
                     {% endif %}
                 </td>
                 <td>R$ {{ p.preco_medio }}</td>
-                <td>{% if p.preco_atual %}R$ {{ p.preco_atual }}{% else %}&mdash;{% endif %}</td>
+                <td class="coluna-destaque">{% if p.preco_atual %}R$ {{ p.preco_atual }}{% else %}&mdash;{% endif %}</td>
                 <td class="{% if p.variacao_pct_reserva > 0 %}valor-positivo{% elif p.variacao_pct_reserva < 0 %}valor-negativo{% else %}valor-neutro{% endif %}">
                     {% if p.variacao_pct_reserva is not None %}{{ p.variacao_pct_reserva }}%{% else %}&mdash;{% endif %}
                 </td>

@@ -3,16 +3,20 @@ Comando de management para atualizar as cotações diárias de todos os ativos
 que possuem alguma operação registrada no sistema, gerar os alertas de
 lucro/perda/tendência correspondentes e rodar o "robô consultor" (sinais de
 compra/venda a partir de RSI/MACD/tendência - ver
-core.services.gerar_sinais_robo_para_usuario). É o mesmo comando que faz o
-robô funcionar em segundo plano, já que o sinal técnico depende da cotação
-recém-atualizada.
+core.services.gerar_sinais_robo_para_usuario). É o mesmo ciclo que roda
+sozinho em segundo plano dentro do próprio processo do servidor web (ver
+core.services.iniciar_agendador_cotacoes_embutido, ligado em
+bolsatrader/wsgi.py) - normalmente não é preciso rodar este comando à parte,
+a menos que o agendador embutido esteja desligado (AGENDADOR_COTACOES_
+EMBUTIDO=False no .env, usado em deploys com mais de um processo worker).
 
 Uso manual (roda uma vez e termina):
     python manage.py atualizar_cotacoes
 
-Uso em loop contínuo (fica rodando e atualiza de N em N minutos, sem precisar
-de cron/Task Scheduler externo). N vem de COTACOES_INTERVALO_MINUTOS no .env
-por padrão, ou pode ser informado na hora com --intervalo:
+Uso em loop contínuo (alternativa ao agendador embutido, útil quando ele está
+desligado): fica rodando e atualiza de N em N minutos. N vem de
+COTACOES_INTERVALO_MINUTOS no .env por padrão, ou pode ser informado na hora
+com --intervalo:
     python manage.py atualizar_cotacoes --loop
     python manage.py atualizar_cotacoes --loop --intervalo 15
 
@@ -24,17 +28,9 @@ do pregão via cron no servidor) - ver manual de instalação, exemplo:
 import time
 
 from django.conf import settings
-from django.contrib.auth import get_user_model
 from django.core.management.base import BaseCommand, CommandError
 
-from core.models import Ativo
-from core.services import (
-    atualizar_cotacao_diaria,
-    gerar_alertas_para_usuario,
-    gerar_sinais_robo_para_usuario,
-    registrar_atualizacao_carteira,
-    BrapiError,
-)
+from core.services import executar_ciclo_atualizacao_cotacoes
 
 
 class Command(BaseCommand):
@@ -77,38 +73,15 @@ class Command(BaseCommand):
             self.stdout.write(self.style.WARNING("Interrompido pelo usuário."))
 
     def _atualizar_tudo(self):
-        ativos = Ativo.objects.filter(operacoes__isnull=False).distinct()
-        total = ativos.count()
-        atualizados = 0
-        falhas = 0
-
-        self.stdout.write(f"Atualizando cotações de {total} ativo(s)...")
-
-        for ativo in ativos:
-            try:
-                cotacao = atualizar_cotacao_diaria(ativo)
-                atualizados += 1
-                self.stdout.write(
-                    self.style.SUCCESS(f"  OK  {ativo.ticker}: R$ {cotacao.preco_fechamento}")
-                )
-            except BrapiError as exc:
-                falhas += 1
-                self.stdout.write(self.style.WARNING(f"  FALHA {ativo.ticker}: {exc}"))
-
-        self.stdout.write(f"Cotações atualizadas: {atualizados} | Falhas: {falhas}")
-
-        self.stdout.write("Gerando alertas de lucro/perda/tendência e sinais do robô consultor...")
-        total_alertas = 0
-        total_sinais_robo = 0
-        for usuario in get_user_model().objects.filter(operacoes__isnull=False).distinct():
-            novos = gerar_alertas_para_usuario(usuario)
-            total_alertas += len(novos)
-            novos_sinais = gerar_sinais_robo_para_usuario(usuario)
-            total_sinais_robo += len(novos_sinais)
-            registrar_atualizacao_carteira(usuario)
-
+        self.stdout.write("Atualizando cotações, alertas e sinais do robô consultor...")
+        resultado = executar_ciclo_atualizacao_cotacoes()
+        self.stdout.write(
+            f"Cotações atualizadas: {resultado['ativos_atualizados']}/{resultado['ativos_total']} "
+            f"| Falhas: {resultado['ativos_falha']}"
+        )
         self.stdout.write(
             self.style.SUCCESS(
-                f"Concluído. {total_alertas} alerta(s) e {total_sinais_robo} sinal(is) do robô gerado(s)."
+                f"Concluído. {resultado['alertas_gerados']} alerta(s) e "
+                f"{resultado['sinais_robo_gerados']} sinal(is) do robô gerado(s)."
             )
         )

@@ -12,7 +12,10 @@ tanto pelas views quanto pelos comandos de management (cron).
 
 from __future__ import annotations
 
+import logging
 import statistics
+import threading
+import time
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone as dt_timezone
@@ -22,9 +25,12 @@ from urllib.parse import urljoin
 import requests
 from bs4 import BeautifulSoup
 from django.conf import settings
+from django.contrib.auth import get_user_model
 from django.core.exceptions import ObjectDoesNotExist
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
+
+logger = logging.getLogger(__name__)
 
 from .models import (
     Ativo, Cotacao, Operacao, Alerta, FonteNoticia, Noticia, AcaoB3, CotacaoIndice,
@@ -255,6 +261,107 @@ def atualizar_cotacao_diaria(ativo: Ativo, dados_api: dict | None = None) -> Cot
         },
     )
     return cotacao
+
+
+# --------------------------------------------------------------------------
+# Ciclo completo de atualização automática (cotações + alertas + robô +
+# histórico da carteira) - lógica compartilhada entre o comando de
+# management "atualizar_cotacoes" (--loop) e o agendador embutido no
+# próprio processo do servidor (ver iniciar_agendador_cotacoes_embutido,
+# ligado em bolsatrader/wsgi.py) - um único lugar pra não duplicar a regra
+# entre os dois "chamadores".
+# --------------------------------------------------------------------------
+def executar_ciclo_atualizacao_cotacoes() -> dict:
+    """
+    Atualiza a cotação de todos os ativos com alguma operação registrada,
+    depois gera os alertas de lucro/perda/tendência, roda o robô consultor e
+    grava o retrato da carteira (ver registrar_atualizacao_carteira) de
+    cada usuário com operações. Retorna um resumo numérico do que foi feito.
+    """
+    ativos = Ativo.objects.filter(operacoes__isnull=False).distinct()
+    atualizados, falhas = 0, 0
+    for ativo in ativos:
+        try:
+            atualizar_cotacao_diaria(ativo)
+            atualizados += 1
+        except BrapiError:
+            falhas += 1
+
+    total_alertas, total_sinais_robo = 0, 0
+    for usuario in get_user_model().objects.filter(operacoes__isnull=False).distinct():
+        total_alertas += len(gerar_alertas_para_usuario(usuario))
+        total_sinais_robo += len(gerar_sinais_robo_para_usuario(usuario))
+        registrar_atualizacao_carteira(usuario)
+
+    return {
+        "ativos_total": ativos.count(),
+        "ativos_atualizados": atualizados,
+        "ativos_falha": falhas,
+        "alertas_gerados": total_alertas,
+        "sinais_robo_gerados": total_sinais_robo,
+    }
+
+
+_agendador_cotacoes_lock = threading.Lock()
+_agendador_cotacoes_iniciado = False
+
+
+def iniciar_agendador_cotacoes_embutido() -> bool:
+    """
+    Inicia, numa thread em segundo plano dentro do próprio processo do
+    servidor web, o mesmo ciclo do comando "atualizar_cotacoes --loop" -
+    repete a cada COTACOES_INTERVALO_MINUTOS minutos (.env), sem precisar
+    manter um processo/terminal separado rodando esse comando à parte.
+
+    Ligado em bolsatrader/wsgi.py (só quando um servidor WSGI de verdade
+    carrega o app - Waitress/gunicorn -, nunca durante "manage.py migrate",
+    "test" etc., já que esses comandos não importam o módulo wsgi).
+    Idempotente (chamar mais de uma vez não inicia uma segunda thread) e
+    desligado por padrão quando COTACOES_INTERVALO_MINUTOS é zero/negativo,
+    ou explicitamente via AGENDADOR_COTACOES_EMBUTIDO=False no .env (usado
+    em deploys com múltiplos processos worker - Docker/gunicorn com
+    --workers > 1 -, onde cada worker chamaria isto e duplicaria o
+    trabalho; nesse caso, use o comando "atualizar_cotacoes --loop" à parte,
+    em um único processo, em vez do agendador embutido).
+
+    Retorna True se a thread foi (ou já estava) iniciada, False se está
+    desligado por configuração.
+    """
+    global _agendador_cotacoes_iniciado
+
+    if not getattr(settings, "AGENDADOR_COTACOES_EMBUTIDO", True):
+        return False
+
+    intervalo = getattr(settings, "COTACOES_INTERVALO_MINUTOS", 0)
+    if not intervalo or intervalo <= 0:
+        return False
+
+    with _agendador_cotacoes_lock:
+        if _agendador_cotacoes_iniciado:
+            return True
+        _agendador_cotacoes_iniciado = True
+
+    def _loop():
+        # dorme antes do primeiro ciclo (em vez de rodar na hora) de propósito:
+        # a thread é iniciada na importação de bolsatrader/wsgi.py, junto com
+        # a subida do processo do servidor - rodar um ciclo completo (rede +
+        # banco, para todos os usuários) nesse instante competiria com o
+        # próprio servidor terminando de subir. Quem precisa de uma
+        # atualização imediata usa o botão "Atualizar cotações agora".
+        while True:
+            time.sleep(intervalo * 60)
+            try:
+                resultado = executar_ciclo_atualizacao_cotacoes()
+                logger.info(
+                    "Atualização automática de cotações: %s/%s ativo(s), %s alerta(s), %s sinal(is) do robô.",
+                    resultado["ativos_atualizados"], resultado["ativos_total"],
+                    resultado["alertas_gerados"], resultado["sinais_robo_gerados"],
+                )
+            except Exception:
+                logger.exception("Falha na atualização automática de cotações (agendador embutido).")
+
+    threading.Thread(target=_loop, name="bolsatrader-cotacoes-agendador", daemon=True).start()
+    return True
 
 
 # --------------------------------------------------------------------------

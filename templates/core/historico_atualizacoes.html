@@ -65,6 +65,21 @@
         </div>
         <button type="submit" class="btn-futurista btn-secundario" style="color: var(--neon-red); border-color: rgba(255, 56, 96, .4);">🗑️ Excluir</button>
     </form>
+
+    <form method="post" action="{% url 'core:historico_atualizacoes_excluir_por_periodo' %}" class="form-futurista"
+          style="display: flex; gap: .8rem; align-items: flex-end; flex-wrap: wrap; margin-top: 1.2rem; padding-top: 1.2rem; border-top: 1px solid rgba(0, 240, 255, .12);"
+          onsubmit="return confirm('Excluir todos os seus registros de atualização nesse período? Essa ação não pode ser desfeita.');">
+        {% csrf_token %}
+        <div>
+            <label for="campo-data-inicio-excluir" style="margin-top: 0;">Excluir registros de</label>
+            <input type="date" name="data_inicio" id="campo-data-inicio-excluir" value="{% now 'Y-m-d' %}" class="form-control-futurista">
+        </div>
+        <div>
+            <label for="campo-data-fim-excluir" style="margin-top: 0;">até</label>
+            <input type="date" name="data_fim" id="campo-data-fim-excluir" value="{% now 'Y-m-d' %}" class="form-control-futurista">
+        </div>
+        <button type="submit" class="btn-futurista btn-secundario" style="color: var(--neon-red); border-color: rgba(255, 56, 96, .4);">🗑️ Excluir período</button>
+    </form>
 </div>
 
 <h2 style="margin-top: 1.8rem;">Registros ({{ registros|length }})</h2>

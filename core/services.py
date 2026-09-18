@@ -91,6 +91,27 @@ class BrapiError(Exception):
     """Erro ao consultar a API de cotações."""
 
 
+def _mensagem_falha_api(exc: requests.RequestException, contexto: str) -> str:
+    """
+    Mensagem amigável para falhas de rede numa API externa (brapi.dev ou
+    Banco Central), sem embutir a exceção crua na mensagem - o texto de uma
+    requests.RequestException inclui a URL completa da requisição, e para a
+    brapi.dev isso significa expor o BRAPI_TOKEN em texto puro. Essas
+    mensagens às vezes chegam até a tela do usuário (ver
+    core.views.consultar_cotacao_avulsa, acoes_b3_atualizar,
+    atualizar_benchmarks_agora), então vazar o token ali seria uma falha de
+    segurança desnecessária.
+
+    Trata especificamente o limite de requisições (HTTP 429) com uma
+    mensagem própria, já que é a causa mais comum na prática (plano
+    gratuito da brapi.dev).
+    """
+    status = getattr(getattr(exc, "response", None), "status_code", None)
+    if status == 429:
+        return f"Limite de consultas da API atingido para {contexto}. Tente novamente em alguns minutos."
+    return f"Falha ao consultar a API para {contexto}. Tente novamente em instantes."
+
+
 def buscar_cotacao_atual(ticker: str) -> dict:
     """
     Consulta a cotação atual de um ticker na API brapi.dev.
@@ -110,13 +131,80 @@ def buscar_cotacao_atual(ticker: str) -> dict:
         resposta.raise_for_status()
         dados = resposta.json()
     except requests.RequestException as exc:
-        raise BrapiError(f"Falha ao consultar a API de cotações para {ticker}: {exc}") from exc
+        raise BrapiError(_mensagem_falha_api(exc, f"o ticker {ticker}")) from exc
 
     resultados = dados.get("results") or []
     if not resultados:
         raise BrapiError(f"Ticker {ticker} não encontrado na API de cotações.")
 
     return resultados[0]
+
+
+# brapi.dev aceita vários tickers separados por vírgula no mesmo endpoint de
+# cotação avulsa (ex: /quote/PETR4,VALE3,ITUB4) - agrupar em lotes assim, em
+# vez de uma requisição HTTP por ativo, reduz drasticamente o número de
+# chamadas à API e ajuda a evitar o erro 429 ("Too Many Requests") do plano
+# gratuito quando há muitos ativos acompanhados. Tamanho conservador (a API
+# não documenta um limite máximo de tickers por chamada).
+_TAMANHO_LOTE_COTACOES = 15
+
+
+def buscar_cotacoes_em_lote(tickers: list[str]) -> dict[str, dict]:
+    """
+    Busca a cotação atual de vários tickers de uma vez (ver
+    _TAMANHO_LOTE_COTACOES), em lotes de tamanho fixo. Retorna um dict
+    {TICKER: dados_da_api} só com os tickers efetivamente encontrados -
+    tickers não encontrados ou cujo lote falhou (erro de rede, 429 etc.)
+    simplesmente não aparecem no retorno; cabe ao chamador (ver
+    atualizar_cotacoes_ativos) tratar a ausência como falha por ativo, sem
+    que a falha de um lote derrube os demais lotes que deram certo.
+    """
+    resultado = {}
+    for inicio in range(0, len(tickers), _TAMANHO_LOTE_COTACOES):
+        lote = tickers[inicio:inicio + _TAMANHO_LOTE_COTACOES]
+        url = f"{settings.BRAPI_BASE_URL}/quote/{','.join(t.upper() for t in lote)}"
+        params = {}
+        if settings.BRAPI_TOKEN:
+            params["token"] = settings.BRAPI_TOKEN
+
+        try:
+            resposta = requests.get(url, params=params, timeout=15)
+            resposta.raise_for_status()
+            dados = resposta.json()
+        except requests.RequestException:
+            continue  # esse lote falhou - os tickers dele ficam de fora do resultado
+
+        for item in dados.get("results") or []:
+            simbolo = (item.get("symbol") or "").upper()
+            if simbolo:
+                resultado[simbolo] = item
+
+    return resultado
+
+
+def atualizar_cotacoes_ativos(ativos) -> tuple[int, int]:
+    """
+    Atualiza a cotação de uma lista/queryset de ativos com uma (ou poucas,
+    ver _TAMANHO_LOTE_COTACOES) chamada(s) em lote à API, em vez de uma
+    requisição HTTP por ativo - usado tanto pelo botão "Atualizar cotações
+    agora" quanto pelo ciclo automático (ver
+    executar_ciclo_atualizacao_cotacoes). Retorna (atualizados, falhas).
+    """
+    ativos = list(ativos)
+    lote = buscar_cotacoes_em_lote([a.ticker for a in ativos])
+
+    atualizados, falhas = 0, 0
+    for ativo in ativos:
+        dados_api = lote.get(ativo.ticker.upper())
+        try:
+            if dados_api is None:
+                raise BrapiError(f"Ticker {ativo.ticker} não encontrado na consulta em lote.")
+            atualizar_cotacao_diaria(ativo, dados_api=dados_api)
+            atualizados += 1
+        except BrapiError:
+            falhas += 1
+
+    return atualizados, falhas
 
 
 def buscar_maiores_variacoes(limite: int = 5) -> tuple[list[dict], list[dict]]:
@@ -137,7 +225,7 @@ def buscar_maiores_variacoes(limite: int = 5) -> tuple[list[dict], list[dict]]:
             resposta.raise_for_status()
             dados = resposta.json()
         except requests.RequestException as exc:
-            raise BrapiError(f"Falha ao consultar as maiores variações do dia: {exc}") from exc
+            raise BrapiError(_mensagem_falha_api(exc, "as maiores variações do dia")) from exc
         return dados.get("stocks") or []
 
     maiores_altas = _consultar("desc")
@@ -175,7 +263,7 @@ def sincronizar_acoes_b3() -> int:
         resposta.raise_for_status()
         dados = resposta.json()
     except requests.RequestException as exc:
-        raise BrapiError(f"Falha ao consultar a lista de ações da B3: {exc}") from exc
+        raise BrapiError(_mensagem_falha_api(exc, "a lista de ações da B3")) from exc
 
     acoes = dados.get("stocks") or []
     if not acoes:
@@ -279,13 +367,7 @@ def executar_ciclo_atualizacao_cotacoes() -> dict:
     cada usuário com operações. Retorna um resumo numérico do que foi feito.
     """
     ativos = Ativo.objects.filter(operacoes__isnull=False).distinct()
-    atualizados, falhas = 0, 0
-    for ativo in ativos:
-        try:
-            atualizar_cotacao_diaria(ativo)
-            atualizados += 1
-        except BrapiError:
-            falhas += 1
+    atualizados, falhas = atualizar_cotacoes_ativos(ativos)
 
     total_alertas, total_sinais_robo = 0, 0
     for usuario in get_user_model().objects.filter(operacoes__isnull=False).distinct():
@@ -350,18 +432,31 @@ def iniciar_agendador_cotacoes_embutido() -> bool:
         # atualização imediata usa o botão "Atualizar cotações agora".
         while True:
             time.sleep(intervalo * 60)
-            try:
-                resultado = executar_ciclo_atualizacao_cotacoes()
-                logger.info(
-                    "Atualização automática de cotações: %s/%s ativo(s), %s alerta(s), %s sinal(is) do robô.",
-                    resultado["ativos_atualizados"], resultado["ativos_total"],
-                    resultado["alertas_gerados"], resultado["sinais_robo_gerados"],
-                )
-            except Exception:
-                logger.exception("Falha na atualização automática de cotações (agendador embutido).")
+            _ciclo_agendador_embutido()
 
     threading.Thread(target=_loop, name="bolsatrader-cotacoes-agendador", daemon=True).start()
     return True
+
+
+def _ciclo_agendador_embutido() -> None:
+    """
+    Um "tick" do agendador embutido (ver iniciar_agendador_cotacoes_embutido):
+    só executa o ciclo de atualização dentro do horário de negociação da B3
+    (B3_HORARIO_ABERTURA/FECHAMENTO no .env) - fora do pregão o preço não
+    muda, então não há nada de novo pra buscar. Extraído à parte pra poder
+    ser testado sem precisar controlar a thread/sleep de verdade.
+    """
+    if not mercado_b3_aberto():
+        return
+    try:
+        resultado = executar_ciclo_atualizacao_cotacoes()
+        logger.info(
+            "Atualização automática de cotações: %s/%s ativo(s), %s alerta(s), %s sinal(is) do robô.",
+            resultado["ativos_atualizados"], resultado["ativos_total"],
+            resultado["alertas_gerados"], resultado["sinais_robo_gerados"],
+        )
+    except Exception:
+        logger.exception("Falha na atualização automática de cotações (agendador embutido).")
 
 
 # --------------------------------------------------------------------------
@@ -435,7 +530,7 @@ def buscar_historico_precos(ticker: str, dias: int = 180) -> list[dict]:
         resposta.raise_for_status()
         dados = resposta.json()
     except requests.RequestException as exc:
-        raise BrapiError(f"Falha ao consultar o histórico de {ticker}: {exc}") from exc
+        raise BrapiError(_mensagem_falha_api(exc, f"o histórico de {ticker}")) from exc
 
     resultados = dados.get("results") or []
     if not resultados:
@@ -531,7 +626,7 @@ def buscar_historico_cdi(dias: int = 180) -> list[dict]:
         resposta.raise_for_status()
         dados = resposta.json()
     except requests.RequestException as exc:
-        raise BrapiError(f"Falha ao consultar o histórico do CDI no Banco Central: {exc}") from exc
+        raise BrapiError(_mensagem_falha_api(exc, "o histórico do CDI no Banco Central")) from exc
 
     historico = []
     for item in dados or []:
@@ -969,6 +1064,22 @@ def excluir_registros_atualizacao_antigos(usuario, dias: int) -> int:
     limite = timezone.now() - timedelta(days=dias)
     excluidos, _ = RegistroAtualizacaoCarteira.objects.filter(
         usuario=usuario, criado_em__lt=limite,
+    ).delete()
+    return excluidos
+
+
+def excluir_registros_atualizacao_por_periodo(usuario, data_inicio: date, data_fim: date) -> int:
+    """
+    Exclui os registros de atualização da carteira do usuário com data/hora
+    entre `data_inicio` e `data_fim` (ambas incluídas) - usado no formulário
+    "Excluir por período" da tela Histórico de Atualizações, alternativa ao
+    "Excluir por dias" quando o usuário quer limpar uma janela específica em
+    vez de "tudo mais antigo que N dias".
+    """
+    inicio = timezone.make_aware(datetime.combine(data_inicio, datetime.min.time()))
+    fim = timezone.make_aware(datetime.combine(data_fim, datetime.max.time()))
+    excluidos, _ = RegistroAtualizacaoCarteira.objects.filter(
+        usuario=usuario, criado_em__gte=inicio, criado_em__lte=fim,
     ).delete()
     return excluidos
 

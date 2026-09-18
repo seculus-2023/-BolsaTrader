@@ -33,12 +33,18 @@ urlpatterns = [
     path("whatsapp/", views.mensagens_whatsapp, name="mensagens_whatsapp"),
     path("cotacoes/detalhes/", views.detalhes_cotacoes, name="detalhes_cotacoes"),
     path("cotacoes/atualizar/", views.atualizar_cotacoes_agora, name="atualizar_cotacoes"),
+    path("cotacoes/verificar/", views.verificar_atualizacao_cotacoes, name="verificar_atualizacao_cotacoes"),
     path("benchmarks/atualizar/", views.atualizar_benchmarks_agora, name="atualizar_benchmarks"),
     path("historico-atualizacoes/", views.historico_atualizacoes, name="historico_atualizacoes"),
     path(
         "historico-atualizacoes/excluir/",
         views.historico_atualizacoes_excluir,
         name="historico_atualizacoes_excluir",
+    ),
+    path(
+        "historico-atualizacoes/excluir-por-periodo/",
+        views.historico_atualizacoes_excluir_por_periodo,
+        name="historico_atualizacoes_excluir_por_periodo",
     ),
     path(
         "historico-atualizacoes/exportar/excel/",

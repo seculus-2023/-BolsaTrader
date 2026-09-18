@@ -8,6 +8,7 @@ from decimal import Decimal
 from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
+from django.db.models import Max
 from django.http import HttpResponse, HttpResponseNotAllowed, JsonResponse
 from django.shortcuts import render, redirect, get_object_or_404
 from django.utils import timezone
@@ -34,6 +35,7 @@ from .services import (
     limpar_alertas_antigos,
     mercado_b3_aberto,
     atualizar_cotacao_diaria,
+    atualizar_cotacoes_ativos,
     analisar_indicadores_tecnicos,
     buscar_cotacao_atual,
     buscar_maiores_variacoes,
@@ -58,6 +60,7 @@ from .services import (
     atualizar_benchmarks,
     registrar_atualizacao_carteira,
     excluir_registros_atualizacao_antigos,
+    excluir_registros_atualizacao_por_periodo,
     calcular_variacoes_historico,
     construir_grafico_atualizacoes_dia,
     gerar_excel_historico_atualizacoes,
@@ -483,6 +486,7 @@ def posicoes(request):
         "metricas_risco": calcular_metricas_risco(lista_posicoes),
         "comparativo_benchmark": calcular_comparativo_benchmark(request.user, posicoes=lista_posicoes),
     }
+    contexto.update(_contexto_historico_atualizacoes(request.user, limite=20))
     return render(request, "core/posicoes.html", contexto)
 
 
@@ -728,13 +732,7 @@ def atualizar_cotacoes_agora(request):
         return redirect("core:dashboard")
 
     ativos = Ativo.objects.filter(operacoes__usuario=request.user).distinct()
-    atualizados, falhas = 0, 0
-    for ativo in ativos:
-        try:
-            atualizar_cotacao_diaria(ativo)
-            atualizados += 1
-        except BrapiError:
-            falhas += 1
+    atualizados, falhas = atualizar_cotacoes_ativos(ativos)
 
     if atualizados:
         messages.success(request, f"{atualizados} cotação(ões) atualizada(s) com sucesso.")
@@ -745,6 +743,21 @@ def atualizar_cotacoes_agora(request):
     gerar_sinais_robo_para_usuario(request.user)
     registrar_atualizacao_carteira(request.user)
     return redirect("core:dashboard")
+
+
+@login_required
+def verificar_atualizacao_cotacoes(request):
+    """
+    Endpoint leve (JSON) consultado por polling pela tela Posições em
+    Carteira - permite ao navegador perceber quando as cotações foram
+    atualizadas em segundo plano (pelo agendador embutido no servidor, ver
+    core.services.iniciar_agendador_cotacoes_embutido, ou pelo comando
+    "atualizar_cotacoes --loop") e recarregar a tela sozinha, sem o usuário
+    precisar apertar F5 manualmente pra ver o resultado.
+    """
+    ultima = Ativo.objects.filter(operacoes__usuario=request.user).aggregate(Max("atualizado_em"))
+    ultima_atualizacao = ultima["atualizado_em__max"]
+    return JsonResponse({"ultima_atualizacao": ultima_atualizacao.isoformat() if ultima_atualizacao else None})
 
 
 @login_required
@@ -772,6 +785,29 @@ def atualizar_benchmarks_agora(request):
     return redirect(request.GET.get("next") or "core:dashboard")
 
 
+def _contexto_historico_atualizacoes(usuario, limite=500):
+    """
+    Monta o gráfico "Variações de hoje" e a lista de registros (com variação
+    entre atualizações) do Histórico de Atualizações de um usuário - usado
+    tanto pela tela dedicada (core.views.historico_atualizacoes) quanto pela
+    aba "Histórico de Atualizações" embutida em Posições em Carteira
+    (core.views.posicoes), essa última com um `limite` menor pra não pesar
+    a tela principal.
+    """
+    registros = list(
+        RegistroAtualizacaoCarteira.objects.filter(usuario=usuario).order_by("-criado_em")[:limite]
+    )
+    hoje = timezone.localdate()
+    registros_hoje = [r for r in registros if timezone.localtime(r.criado_em).date() == hoje]
+
+    return {
+        "registros": registros,
+        "registros_com_variacao": calcular_variacoes_historico(registros),
+        "grafico_dia": construir_grafico_atualizacoes_dia(list(reversed(registros_hoje))),
+        "total_registros_hoje": len(registros_hoje),
+    }
+
+
 @login_required
 def historico_atualizacoes(request):
     """
@@ -780,19 +816,9 @@ def historico_atualizacoes(request):
     core.services.registrar_atualizacao_carteira), com um gráfico da
     variação (%) de hoje e a opção de excluir registros antigos por dias.
     """
-    registros = list(
-        RegistroAtualizacaoCarteira.objects.filter(usuario=request.user).order_by("-criado_em")[:500]
+    return render(
+        request, "core/historico_atualizacoes.html", _contexto_historico_atualizacoes(request.user),
     )
-    hoje = timezone.localdate()
-    registros_hoje = [r for r in registros if timezone.localtime(r.criado_em).date() == hoje]
-
-    contexto = {
-        "registros": registros,
-        "registros_com_variacao": calcular_variacoes_historico(registros),
-        "grafico_dia": construir_grafico_atualizacoes_dia(list(reversed(registros_hoje))),
-        "total_registros_hoje": len(registros_hoje),
-    }
-    return render(request, "core/historico_atualizacoes.html", contexto)
 
 
 @login_required
@@ -812,6 +838,27 @@ def historico_atualizacoes_excluir(request):
             messages.success(request, f"{excluidos} registro(s) com mais de {dias} dia(s) excluído(s).")
         else:
             messages.info(request, f"Nenhum registro com mais de {dias} dia(s) encontrado para excluir.")
+    return redirect("core:historico_atualizacoes")
+
+
+@login_required
+@require_POST
+def historico_atualizacoes_excluir_por_periodo(request):
+    """Exclui os registros de atualização da carteira do usuário entre duas datas (formulário "Excluir por período")."""
+    data_inicio = parse_date(request.POST.get("data_inicio", ""))
+    data_fim = parse_date(request.POST.get("data_fim", ""))
+
+    if not data_inicio or not data_fim:
+        messages.error(request, "Informe a data de início e a data de fim para excluir por período.")
+    elif data_inicio > data_fim:
+        messages.error(request, "A data de início não pode ser depois da data de fim.")
+    else:
+        excluidos = excluir_registros_atualizacao_por_periodo(request.user, data_inicio, data_fim)
+        periodo_label = f"{data_inicio.strftime('%d/%m/%Y')} a {data_fim.strftime('%d/%m/%Y')}"
+        if excluidos:
+            messages.success(request, f"{excluidos} registro(s) entre {periodo_label} excluído(s).")
+        else:
+            messages.info(request, f"Nenhum registro entre {periodo_label} encontrado para excluir.")
     return redirect("core:historico_atualizacoes")
 
 

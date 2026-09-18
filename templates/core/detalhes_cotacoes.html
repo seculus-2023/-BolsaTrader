@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% load humanize %}
+{% load humanize l10n %}
 {% block titulo %}Detalhes de Cotações - BolsaTrader{% endblock %}
 {% block conteudo %}
 <h1>Detalhes de Cotações</h1>
@@ -47,6 +47,18 @@
             <span style="color: var(--text-dim); font-size: .95rem;">sem cotação ainda</span>
             {% endif %}
         </div>
+        {% if cot %}
+        <div class="cotacao-calculadora-alvo">
+            <label style="margin-top: .6rem; display: block; font-size: .85rem; color: var(--text-dim);">
+                Preço alvo (R$) &mdash; qual seria o lucro/perda?
+            </label>
+            <div style="display: flex; gap: .6rem; align-items: center; flex-wrap: wrap; margin-top: .3rem;">
+                <input type="number" step="0.01" min="0" class="campo-preco-alvo form-control-futurista"
+                       data-preco-atual="{% localize off %}{{ cot.preco_fechamento }}{% endlocalize %}" placeholder="Ex.: 11.44" style="max-width: 140px;">
+                <strong class="resultado-preco-alvo valor-neutro">&mdash;</strong>
+            </div>
+        </div>
+        {% endif %}
         {% endwith %}
 
         <div class="cotacao-grid-campos">
@@ -154,6 +166,16 @@
                             formatarReal(dados.preco) +
                             ' <span class="' + classeVariacao(variacaoPct) + '">' + variacaoLabel + '</span>' +
                         '</div>' +
+                        '<div class="cotacao-calculadora-alvo">' +
+                            '<label style="margin-top: .6rem; display: block; font-size: .85rem; color: var(--text-dim);">' +
+                                'Preço alvo (R$) &mdash; qual seria o lucro/perda?' +
+                            '</label>' +
+                            '<div style="display: flex; gap: .6rem; align-items: center; flex-wrap: wrap; margin-top: .3rem;">' +
+                                '<input type="number" step="0.01" min="0" class="campo-preco-alvo form-control-futurista" ' +
+                                       'data-preco-atual="' + dados.preco + '" placeholder="Ex.: 11.44" style="max-width: 140px;">' +
+                                '<strong class="resultado-preco-alvo valor-neutro">&mdash;</strong>' +
+                            '</div>' +
+                        '</div>' +
                         '<div class="cotacao-grid-campos">' +
                             '<div><span>Máxima do dia</span><strong>' + formatarReal(dados.maxima_dia) + '</strong></div>' +
                             '<div><span>Mínima do dia</span><strong>' + formatarReal(dados.minima_dia) + '</strong></div>' +
@@ -175,6 +197,41 @@
         }
 
         form.addEventListener("submit", pesquisar);
+    })();
+
+    (function () {
+        // Calculadora de lucro/perda por preço alvo: funciona tanto nos cards
+        // dos ativos acompanhados (renderizados pelo servidor) quanto no card
+        // da consulta avulsa (montado por JS acima) - delegação de evento no
+        // documento, então não precisa religar o listener quando o card da
+        // consulta avulsa é recriado a cada pesquisa.
+        function formatarPercentual(valor) {
+            var sinal = valor > 0 ? "+" : "";
+            return sinal + valor.toFixed(2).replace(".", ",") + "%";
+        }
+
+        document.addEventListener("input", function (evento) {
+            if (!evento.target.classList.contains("campo-preco-alvo")) return;
+            var campo = evento.target;
+            var resultado = campo.parentElement.querySelector(".resultado-preco-alvo");
+            if (!resultado) return;
+
+            var precoAtual = parseFloat(campo.dataset.precoAtual);
+            var precoAlvo = parseFloat(campo.value.replace(",", "."));
+
+            if (!precoAtual || isNaN(precoAlvo)) {
+                resultado.textContent = "—";
+                resultado.className = "resultado-preco-alvo valor-neutro";
+                return;
+            }
+
+            var percentual = ((precoAlvo - precoAtual) / precoAtual) * 100;
+            var rotulo = percentual > 0 ? "lucro" : percentual < 0 ? "perda" : "sem variação";
+            resultado.textContent = formatarPercentual(percentual) + " de " + rotulo;
+            resultado.className = "resultado-preco-alvo " + (
+                percentual > 0 ? "valor-positivo" : percentual < 0 ? "valor-negativo" : "valor-neutro"
+            );
+        });
     })();
 </script>
 {% endblock %}

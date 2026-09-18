@@ -14,6 +14,7 @@ from io import StringIO
 from unittest.mock import Mock, patch
 
 import requests
+from django.conf import settings
 from django.contrib.auth.models import User
 from django.core.management import call_command
 from django.core.management.base import CommandError
@@ -33,8 +34,12 @@ from .services import (
     buscar_historico_cdi, calcular_comparativo_benchmark, _retorno_indice_periodo, _retorno_cdi_periodo,
     calcular_concentracao_setor, calcular_metricas_risco,
     enviar_whatsapp, whatsapp_envio_configurado,
-    registrar_atualizacao_carteira, excluir_registros_atualizacao_antigos, construir_grafico_atualizacoes_dia,
+    registrar_atualizacao_carteira, excluir_registros_atualizacao_antigos,
+    excluir_registros_atualizacao_por_periodo, construir_grafico_atualizacoes_dia,
     calcular_variacoes_historico, executar_ciclo_atualizacao_cotacoes, iniciar_agendador_cotacoes_embutido,
+    buscar_cotacoes_em_lote, atualizar_cotacoes_ativos,
+    _ciclo_agendador_embutido, _mensagem_falha_api,
+    buscar_cotacao_atual,
     BrapiError,
 )
 
@@ -124,8 +129,11 @@ class OperacaoTipoReservarTests(TestCase):
             usuario=usuario, ativo=ativo, tipo=Operacao.RESERVAR,
             quantidade=1, preco_unitario=Decimal("16.00"), data_operacao=date.today(),
         )
-        with patch("core.services.buscar_cotacao_atual") as mock_busca:
-            mock_busca.return_value = {"regularMarketPrice": 16.5, "regularMarketChangePercent": 1.1}
+        with patch("core.services.requests.get") as mock_get:
+            mock_get.return_value.raise_for_status = lambda: None
+            mock_get.return_value.json = lambda: {
+                "results": [{"symbol": "CSMG3", "regularMarketPrice": 16.5, "regularMarketChangePercent": 1.1}]
+            }
             self.client.get(reverse("core:atualizar_cotacoes"))
         self.assertTrue(Cotacao.objects.filter(ativo=ativo).exists())
 
@@ -970,7 +978,7 @@ class ComandoAtualizarCotacoesTests(TestCase):
             quantidade=10, preco_unitario=Decimal("30.00"), data_operacao=date.today(),
         )
         mock_get.return_value.raise_for_status = lambda: None
-        mock_get.return_value.json = lambda: {"results": [{"regularMarketPrice": 32.0}]}
+        mock_get.return_value.json = lambda: {"results": [{"symbol": "PETR4", "regularMarketPrice": 32.0}]}
 
         saida = StringIO()
         call_command("atualizar_cotacoes", stdout=saida)
@@ -1013,6 +1021,183 @@ class ComandoAtualizarCotacoesTests(TestCase):
         with self.assertRaises(CommandError):
             call_command("atualizar_cotacoes", "--loop", "--intervalo", "0", stdout=StringIO())
 
+    @patch("core.management.commands.atualizar_cotacoes.time.sleep")
+    @patch("core.management.commands.atualizar_cotacoes.mercado_b3_aberto", return_value=False)
+    @patch("core.services.requests.get")
+    def test_loop_pula_o_ciclo_com_b3_fechada(self, mock_get, mock_mercado, mock_sleep):
+        ativo = Ativo.objects.create(ticker="PETR4")
+        Operacao.objects.create(
+            usuario=User.objects.create_user(username="investidor_b3_fechada", password="SenhaForte123!"),
+            ativo=ativo, tipo=Operacao.COMPRA, quantidade=10, preco_unitario=Decimal("30.00"),
+            data_operacao=date.today(),
+        )
+        mock_sleep.side_effect = KeyboardInterrupt()
+
+        saida = StringIO()
+        call_command("atualizar_cotacoes", "--loop", stdout=saida)
+
+        self.assertIn("B3 fechada agora - pulando este ciclo.", saida.getvalue())
+        mock_get.assert_not_called()
+        self.assertFalse(Cotacao.objects.filter(ativo=ativo).exists())
+
+    @patch("core.management.commands.atualizar_cotacoes.time.sleep")
+    @patch("core.management.commands.atualizar_cotacoes.mercado_b3_aberto", return_value=True)
+    @patch("core.services.requests.get")
+    def test_loop_roda_o_ciclo_com_b3_aberta(self, mock_get, mock_mercado, mock_sleep):
+        ativo = Ativo.objects.create(ticker="PETR4")
+        Operacao.objects.create(
+            usuario=User.objects.create_user(username="investidor_b3_aberta", password="SenhaForte123!"),
+            ativo=ativo, tipo=Operacao.COMPRA, quantidade=10, preco_unitario=Decimal("30.00"),
+            data_operacao=date.today(),
+        )
+        mock_get.return_value.raise_for_status = lambda: None
+        mock_get.return_value.json = lambda: {"results": [{"symbol": "PETR4", "regularMarketPrice": 32.0}]}
+        mock_sleep.side_effect = KeyboardInterrupt()
+
+        saida = StringIO()
+        call_command("atualizar_cotacoes", "--loop", stdout=saida)
+
+        self.assertNotIn("pulando este ciclo", saida.getvalue())
+        self.assertTrue(Cotacao.objects.filter(ativo=ativo).exists())
+
+
+class MensagemFalhaApiTests(TestCase):
+    """
+    core.services._mensagem_falha_api - mensagem amigável para falhas de API,
+    sem vazar a URL da requisição (que inclui BRAPI_TOKEN) nem para o
+    usuário nem para o 429 especificamente.
+    """
+
+    def _http_error(self, status_code):
+        resposta = Mock()
+        resposta.status_code = status_code
+        erro = requests.exceptions.HTTPError(response=resposta)
+        return erro
+
+    def test_429_gera_mensagem_de_limite_de_consultas(self):
+        mensagem = _mensagem_falha_api(self._http_error(429), "o ticker PETR4")
+        self.assertIn("Limite de consultas", mensagem)
+        self.assertIn("o ticker PETR4", mensagem)
+
+    def test_outros_erros_geram_mensagem_generica(self):
+        mensagem = _mensagem_falha_api(self._http_error(500), "o ticker PETR4")
+        self.assertIn("Falha ao consultar a API", mensagem)
+
+    def test_mensagem_nunca_expoe_o_token_da_api(self):
+        # a exceção "de verdade" da requests inclui a URL completa (com
+        # ?token=...) no __str__ - a mensagem amigável não pode repassar isso.
+        url_com_token = f"{settings.BRAPI_BASE_URL}/quote/PETR4?token=segredo-super-secreto"
+        exc = requests.exceptions.ConnectionError(f"Falha de conexão: {url_com_token}")
+        mensagem = _mensagem_falha_api(exc, "o ticker PETR4")
+        self.assertNotIn("segredo-super-secreto", mensagem)
+        self.assertNotIn("token=", mensagem)
+
+    @patch("core.services.requests.get")
+    def test_buscar_cotacao_atual_nao_vaza_token_quando_api_falha(self, mock_get):
+        resposta_429 = Mock()
+        resposta_429.status_code = 429
+        mock_get.return_value.raise_for_status = Mock(
+            side_effect=requests.exceptions.HTTPError(response=resposta_429)
+        )
+
+        with override_settings(BRAPI_TOKEN="token-secreto-de-teste"):
+            with self.assertRaises(BrapiError) as contexto:
+                buscar_cotacao_atual("PETR4")
+
+        mensagem = str(contexto.exception)
+        self.assertNotIn("token-secreto-de-teste", mensagem)
+        self.assertNotIn("token=", mensagem)
+        self.assertIn("Limite de consultas", mensagem)
+
+    def test_consultar_cotacao_avulsa_nao_vaza_token_na_resposta_json(self):
+        usuario = User.objects.create_user(username="investidor_sem_vazamento", password="SenhaForte123!")
+        self.client.login(username="investidor_sem_vazamento", password="SenhaForte123!")
+
+        resposta_429 = Mock()
+        resposta_429.status_code = 429
+        with override_settings(BRAPI_TOKEN="token-secreto-de-teste"):
+            with patch("core.services.requests.get") as mock_get:
+                mock_get.return_value.raise_for_status = Mock(
+                    side_effect=requests.exceptions.HTTPError(response=resposta_429)
+                )
+                resposta = self.client.get(reverse("core:consultar_cotacao_avulsa"), {"ticker": "AXIA3"})
+
+        self.assertNotIn(b"token-secreto-de-teste", resposta.content)
+        self.assertNotIn(b"token=", resposta.content)
+
+
+class BuscarCotacoesEmLoteTests(TestCase):
+    """core.services.buscar_cotacoes_em_lote / atualizar_cotacoes_ativos - consulta em lote (evita 429 da brapi.dev)."""
+
+    @patch("core.services.requests.get")
+    def test_um_unico_lote_para_poucos_tickers(self, mock_get):
+        mock_get.return_value.raise_for_status = lambda: None
+        mock_get.return_value.json = lambda: {
+            "results": [
+                {"symbol": "PETR4", "regularMarketPrice": 32.0},
+                {"symbol": "VALE3", "regularMarketPrice": 68.0},
+            ]
+        }
+
+        resultado = buscar_cotacoes_em_lote(["PETR4", "VALE3"])
+
+        mock_get.assert_called_once()
+        url_chamada = mock_get.call_args[0][0]
+        self.assertIn("PETR4,VALE3", url_chamada)
+        self.assertEqual(resultado["PETR4"]["regularMarketPrice"], 32.0)
+        self.assertEqual(resultado["VALE3"]["regularMarketPrice"], 68.0)
+
+    @patch("core.services.requests.get")
+    def test_divide_em_varios_lotes_quando_excede_o_tamanho_maximo(self, mock_get):
+        tickers = [f"T{i}" for i in range(32)]  # mais que 2x o tamanho do lote (15)
+        mock_get.return_value.raise_for_status = lambda: None
+        mock_get.return_value.json = lambda: {"results": [{"symbol": "T0", "regularMarketPrice": 10.0}]}
+
+        buscar_cotacoes_em_lote(tickers)
+
+        self.assertEqual(mock_get.call_count, 3)  # 15 + 15 + 2
+
+    @patch("core.services.requests.get")
+    def test_falha_em_um_lote_nao_derruba_os_demais(self, mock_get):
+        chamada = {"n": 0}
+
+        def _resposta(url, params=None, timeout=None):
+            chamada["n"] += 1
+            if chamada["n"] == 1:
+                raise requests.RequestException("falha de rede simulada")
+            resposta = Mock()
+            resposta.raise_for_status = lambda: None
+            resposta.json = lambda: {"results": [{"symbol": "T20", "regularMarketPrice": 20.0}]}
+            return resposta
+
+        mock_get.side_effect = _resposta
+        tickers = [f"T{i}" for i in range(20)] + ["T20"]  # 21 tickers -> 2 lotes (15 + 6)
+
+        resultado = buscar_cotacoes_em_lote(tickers)
+
+        self.assertNotIn("T0", resultado)  # 1º lote falhou
+        self.assertEqual(resultado["T20"]["regularMarketPrice"], 20.0)  # 2º lote deu certo
+
+    @patch("core.services.requests.get")
+    def test_atualizar_cotacoes_ativos_grava_cotacao_e_conta_falha_de_ticker_ausente(self, mock_get):
+        ativo_ok = Ativo.objects.create(ticker="PETR4")
+        ativo_ausente = Ativo.objects.create(ticker="FANTASMA9")
+        mock_get.return_value.raise_for_status = lambda: None
+        mock_get.return_value.json = lambda: {"results": [{"symbol": "PETR4", "regularMarketPrice": 32.0}]}
+
+        atualizados, falhas = atualizar_cotacoes_ativos([ativo_ok, ativo_ausente])
+
+        self.assertEqual(atualizados, 1)
+        self.assertEqual(falhas, 1)
+        self.assertTrue(Cotacao.objects.filter(ativo=ativo_ok).exists())
+        self.assertFalse(Cotacao.objects.filter(ativo=ativo_ausente).exists())
+
+    def test_atualizar_cotacoes_ativos_lista_vazia_nao_chama_api(self):
+        with patch("core.services.requests.get") as mock_get:
+            atualizados, falhas = atualizar_cotacoes_ativos([])
+        mock_get.assert_not_called()
+        self.assertEqual((atualizados, falhas), (0, 0))
+
 
 class ExecutarCicloAtualizacaoTests(TestCase):
     """core.services.executar_ciclo_atualizacao_cotacoes - ciclo compartilhado pelo comando de management e pelo agendador embutido."""
@@ -1027,7 +1212,7 @@ class ExecutarCicloAtualizacaoTests(TestCase):
             meta_lucro_pct=Decimal("5.0"),
         )
         mock_get.return_value.raise_for_status = lambda: None
-        mock_get.return_value.json = lambda: {"results": [{"regularMarketPrice": 32.0}]}
+        mock_get.return_value.json = lambda: {"results": [{"symbol": "PETR4", "regularMarketPrice": 32.0}]}
 
         resultado = executar_ciclo_atualizacao_cotacoes()
 
@@ -1080,6 +1265,83 @@ class AgendadorCotacoesEmbutidoTests(TestCase):
         nomes_threads = [t.name for t in threading.enumerate()]
         self.assertEqual(nomes_threads.count("bolsatrader-cotacoes-agendador"), 1)
 
+    @patch("core.services.mercado_b3_aberto", return_value=False)
+    @patch("core.services.executar_ciclo_atualizacao_cotacoes")
+    def test_ciclo_do_agendador_nao_roda_com_b3_fechada(self, mock_executar, mock_mercado):
+        _ciclo_agendador_embutido()
+        mock_executar.assert_not_called()
+
+    @patch("core.services.mercado_b3_aberto", return_value=True)
+    @patch("core.services.executar_ciclo_atualizacao_cotacoes")
+    def test_ciclo_do_agendador_roda_com_b3_aberta(self, mock_executar, mock_mercado):
+        mock_executar.return_value = {
+            "ativos_total": 1, "ativos_atualizados": 1, "ativos_falha": 0,
+            "alertas_gerados": 0, "sinais_robo_gerados": 0,
+        }
+        _ciclo_agendador_embutido()
+        mock_executar.assert_called_once()
+
+    @patch("core.services.mercado_b3_aberto", return_value=True)
+    @patch("core.services.executar_ciclo_atualizacao_cotacoes", side_effect=RuntimeError("falha simulada"))
+    def test_ciclo_do_agendador_nao_propaga_excecao(self, mock_executar, mock_mercado):
+        _ciclo_agendador_embutido()  # não deve levantar - a thread não pode morrer por uma falha pontual
+
+
+class VerificarAtualizacaoCotacoesTests(TestCase):
+    """core.views.verificar_atualizacao_cotacoes - endpoint de polling usado pela tela Posições em Carteira."""
+
+    def setUp(self):
+        self.usuario = User.objects.create_user(username="investidor_polling", password="SenhaForte123!")
+        self.client.login(username="investidor_polling", password="SenhaForte123!")
+        self.ativo = Ativo.objects.create(ticker="ITSA4")
+        Operacao.objects.create(
+            usuario=self.usuario, ativo=self.ativo, tipo=Operacao.COMPRA,
+            quantidade=10, preco_unitario=Decimal("9.00"), data_operacao=date.today(),
+        )
+
+    def test_exige_login(self):
+        self.client.logout()
+        resposta = self.client.get(reverse("core:verificar_atualizacao_cotacoes"))
+        self.assertEqual(resposta.status_code, 302)
+
+    def test_retorna_nulo_para_usuario_sem_ativos(self):
+        User.objects.create_user(username="sem_ativos_polling", password="SenhaForte123!")
+        self.client.login(username="sem_ativos_polling", password="SenhaForte123!")
+
+        resposta = self.client.get(reverse("core:verificar_atualizacao_cotacoes"))
+
+        self.assertEqual(resposta.status_code, 200)
+        self.assertIsNone(resposta.json()["ultima_atualizacao"])
+
+    def test_retorna_timestamp_iso_do_ativo_do_usuario(self):
+        self.ativo.refresh_from_db()
+
+        resposta = self.client.get(reverse("core:verificar_atualizacao_cotacoes"))
+
+        self.assertEqual(resposta.json()["ultima_atualizacao"], self.ativo.atualizado_em.isoformat())
+
+    def test_nao_enxerga_atualizacao_de_ativo_de_outro_usuario(self):
+        outro_usuario = User.objects.create_user(username="outro_polling", password="SenhaForte123!")
+        outro_ativo = Ativo.objects.create(ticker="BBAS3")
+        Operacao.objects.create(
+            usuario=outro_usuario, ativo=outro_ativo, tipo=Operacao.COMPRA,
+            quantidade=5, preco_unitario=Decimal("20.00"), data_operacao=date.today(),
+        )
+        # .update() não passa pelo auto_now do save() - dá pra forçar um
+        # timestamp bem mais recente que o do ativo do usuário logado, pra
+        # garantir que um eventual vazamento entre usuários apareceria aqui.
+        Ativo.objects.filter(id=outro_ativo.id).update(atualizado_em=timezone.now())
+        self.ativo.refresh_from_db()
+
+        resposta = self.client.get(reverse("core:verificar_atualizacao_cotacoes"))
+
+        self.assertEqual(resposta.json()["ultima_atualizacao"], self.ativo.atualizado_em.isoformat())
+
+    def test_tela_posicoes_tem_marcador_e_script_de_polling(self):
+        resposta = self.client.get(reverse("core:posicoes"))
+        self.assertContains(resposta, 'id="marcador-ultima-atualizacao"')
+        self.assertContains(resposta, reverse("core:verificar_atualizacao_cotacoes"))
+
 
 class DetalhesCotacoesTests(TestCase):
     def setUp(self):
@@ -1118,6 +1380,54 @@ class DetalhesCotacoesTests(TestCase):
         self.assertContains(resposta, "B3 SA - Brasil, Bolsa, Balcao")
         self.assertContains(resposta, "14,70")
         self.assertContains(resposta, "5.689.600")
+
+    def test_calculadora_de_preco_alvo_aparece_quando_ha_cotacao(self):
+        ativo = Ativo.objects.create(ticker="B3SA3")
+        Operacao.objects.create(
+            usuario=self.usuario, ativo=ativo, tipo=Operacao.COMPRA,
+            quantidade=10, preco_unitario=Decimal("14.00"), data_operacao=date.today(),
+        )
+        Cotacao.objects.create(ativo=ativo, data=date.today(), preco_fechamento=Decimal("10.35"))
+
+        resposta = self.client.get(reverse("core:detalhes_cotacoes"))
+
+        self.assertContains(resposta, "Preço alvo (R$)")
+        # o atributo com um valor numérico de verdade só existe no card
+        # renderizado pelo servidor - o <script> da consulta avulsa (sempre
+        # presente na página) tem esse mesmo texto, mas como código-fonte JS
+        # (`data-preco-atual="' + dados.preco + '"`), não um valor numérico.
+        self.assertRegex(resposta.content.decode(), r'data-preco-atual="10\.35"')
+
+    def test_calculadora_de_preco_alvo_nao_aparece_sem_cotacao(self):
+        ativo = Ativo.objects.create(ticker="B3SA3")  # sem Cotacao - ultima_cotacao() é None
+        Operacao.objects.create(
+            usuario=self.usuario, ativo=ativo, tipo=Operacao.COMPRA,
+            quantidade=10, preco_unitario=Decimal("14.00"), data_operacao=date.today(),
+        )
+
+        resposta = self.client.get(reverse("core:detalhes_cotacoes"))
+
+        # sem cotação, o bloco "Preço alvo" nem é renderizado pro card - só
+        # sobra o texto-fonte do <script> da consulta avulsa, sem um valor
+        # numérico real no atributo.
+        self.assertNotRegex(resposta.content.decode(), r'data-preco-atual="[\d.]+"')
+
+    def test_data_preco_atual_usa_ponto_decimal_nao_virgula(self):
+        # regressão: {{ cot.preco_fechamento }} com LANGUAGE_CODE=pt-br vira "10,35"
+        # em vez de "10.35" - isso quebrava o parseFloat() da calculadora de
+        # lucro/perda em JS, que lê data-preco-atual e para no primeiro caractere
+        # não numérico (parseFloat("10,35") === 10, não 10.35).
+        ativo = Ativo.objects.create(ticker="B3SA3")
+        Operacao.objects.create(
+            usuario=self.usuario, ativo=ativo, tipo=Operacao.COMPRA,
+            quantidade=10, preco_unitario=Decimal("14.00"), data_operacao=date.today(),
+        )
+        Cotacao.objects.create(ativo=ativo, data=date.today(), preco_fechamento=Decimal("10.35"))
+
+        resposta = self.client.get(reverse("core:detalhes_cotacoes"))
+
+        self.assertContains(resposta, 'data-preco-atual="10.35"')
+        self.assertNotContains(resposta, 'data-preco-atual="10,35"')
 
 
 class GraficoCotacoesTests(TestCase):
@@ -1920,6 +2230,30 @@ class HistoricoAtualizacoesTests(TestCase):
         self.assertEqual(excluidos, 0)
         self.assertTrue(RegistroAtualizacaoCarteira.objects.filter(id=registro_outro.id).exists())
 
+    def test_excluir_por_periodo_inclui_as_bordas_do_intervalo(self):
+        hoje = timezone.localdate()
+        registro_no_inicio = registrar_atualizacao_carteira(self.usuario)
+        RegistroAtualizacaoCarteira.objects.filter(id=registro_no_inicio.id).update(
+            criado_em=timezone.make_aware(datetime.combine(hoje - timedelta(days=5), datetime.min.time()))
+        )
+        registro_no_fim = registrar_atualizacao_carteira(self.usuario)
+        RegistroAtualizacaoCarteira.objects.filter(id=registro_no_fim.id).update(
+            criado_em=timezone.make_aware(datetime.combine(hoje - timedelta(days=3), datetime.max.time()))
+        )
+        registro_antes = registrar_atualizacao_carteira(self.usuario)
+        RegistroAtualizacaoCarteira.objects.filter(id=registro_antes.id).update(
+            criado_em=timezone.make_aware(datetime.combine(hoje - timedelta(days=6), datetime.min.time()))
+        )
+
+        excluidos = excluir_registros_atualizacao_por_periodo(
+            self.usuario, hoje - timedelta(days=5), hoje - timedelta(days=3),
+        )
+
+        self.assertEqual(excluidos, 2)
+        self.assertFalse(RegistroAtualizacaoCarteira.objects.filter(id=registro_no_inicio.id).exists())
+        self.assertFalse(RegistroAtualizacaoCarteira.objects.filter(id=registro_no_fim.id).exists())
+        self.assertTrue(RegistroAtualizacaoCarteira.objects.filter(id=registro_antes.id).exists())
+
     def test_grafico_atualizacoes_dia_none_com_menos_de_dois_registros(self):
         registro = registrar_atualizacao_carteira(self.usuario)
         self.assertIsNone(construir_grafico_atualizacoes_dia([registro]))
@@ -1992,6 +2326,19 @@ class HistoricoAtualizacoesTests(TestCase):
         self.assertContains(resposta, "Histórico de Atualizações")
         self.assertNotContains(resposta, "VALE3")  # a tabela mostra só os totais, não o ticker
 
+    def test_campos_de_data_do_formulario_de_periodo_vem_com_hoje_preenchido(self):
+        self.client.login(username="investidor_historico", password="SenhaForte123!")
+
+        resposta = self.client.get(reverse("core:historico_atualizacoes"))
+
+        hoje = timezone.localdate().isoformat()
+        self.assertContains(
+            resposta, f'id="campo-data-inicio-excluir" value="{hoje}"',
+        )
+        self.assertContains(
+            resposta, f'id="campo-data-fim-excluir" value="{hoje}"',
+        )
+
     def test_excluir_por_dias_via_view(self):
         registro = registrar_atualizacao_carteira(self.usuario)
         RegistroAtualizacaoCarteira.objects.filter(id=registro.id).update(
@@ -2012,6 +2359,65 @@ class HistoricoAtualizacoesTests(TestCase):
 
         self.assertRedirects(resposta, reverse("core:historico_atualizacoes"))
         self.assertTrue(RegistroAtualizacaoCarteira.objects.filter(id=registro.id).exists())
+
+    def test_excluir_por_periodo_via_view(self):
+        registro_dentro = registrar_atualizacao_carteira(self.usuario)
+        RegistroAtualizacaoCarteira.objects.filter(id=registro_dentro.id).update(
+            criado_em=timezone.now() - timedelta(days=5)
+        )
+        registro_fora = registrar_atualizacao_carteira(self.usuario)
+        RegistroAtualizacaoCarteira.objects.filter(id=registro_fora.id).update(
+            criado_em=timezone.now() - timedelta(days=30)
+        )
+        self.client.login(username="investidor_historico", password="SenhaForte123!")
+
+        resposta = self.client.post(reverse("core:historico_atualizacoes_excluir_por_periodo"), {
+            "data_inicio": (date.today() - timedelta(days=7)).isoformat(),
+            "data_fim": (date.today() - timedelta(days=3)).isoformat(),
+        })
+
+        self.assertRedirects(resposta, reverse("core:historico_atualizacoes"))
+        self.assertFalse(RegistroAtualizacaoCarteira.objects.filter(id=registro_dentro.id).exists())
+        self.assertTrue(RegistroAtualizacaoCarteira.objects.filter(id=registro_fora.id).exists())
+
+    def test_excluir_por_periodo_sem_datas_nao_exclui_nada(self):
+        registro = registrar_atualizacao_carteira(self.usuario)
+        self.client.login(username="investidor_historico", password="SenhaForte123!")
+
+        resposta = self.client.post(reverse("core:historico_atualizacoes_excluir_por_periodo"), {
+            "data_inicio": "", "data_fim": "",
+        })
+
+        self.assertRedirects(resposta, reverse("core:historico_atualizacoes"))
+        self.assertTrue(RegistroAtualizacaoCarteira.objects.filter(id=registro.id).exists())
+
+    def test_excluir_por_periodo_data_inicio_depois_da_data_fim_nao_exclui_nada(self):
+        registro = registrar_atualizacao_carteira(self.usuario)
+        self.client.login(username="investidor_historico", password="SenhaForte123!")
+
+        resposta = self.client.post(reverse("core:historico_atualizacoes_excluir_por_periodo"), {
+            "data_inicio": date.today().isoformat(),
+            "data_fim": (date.today() - timedelta(days=1)).isoformat(),
+        })
+
+        self.assertRedirects(resposta, reverse("core:historico_atualizacoes"))
+        self.assertTrue(RegistroAtualizacaoCarteira.objects.filter(id=registro.id).exists())
+
+    def test_excluir_por_periodo_nao_afeta_outro_usuario(self):
+        outro_usuario = User.objects.create_user(username="investidor_historico_outro", password="SenhaForte123!")
+        registro_outro = registrar_atualizacao_carteira(outro_usuario)
+        RegistroAtualizacaoCarteira.objects.filter(id=registro_outro.id).update(
+            criado_em=timezone.now() - timedelta(days=5)
+        )
+        self.client.login(username="investidor_historico", password="SenhaForte123!")
+
+        resposta = self.client.post(reverse("core:historico_atualizacoes_excluir_por_periodo"), {
+            "data_inicio": (date.today() - timedelta(days=7)).isoformat(),
+            "data_fim": date.today().isoformat(),
+        })
+
+        self.assertRedirects(resposta, reverse("core:historico_atualizacoes"))
+        self.assertTrue(RegistroAtualizacaoCarteira.objects.filter(id=registro_outro.id).exists())
 
     def test_atualizar_cotacoes_agora_grava_registro(self):
         self.client.login(username="investidor_historico", password="SenhaForte123!")
@@ -2071,3 +2477,41 @@ class HistoricoAtualizacoesTests(TestCase):
         self.assertContains(resposta_operacoes, url_historico)
         self.assertContains(resposta_posicoes, url_historico)
         self.assertContains(resposta_dashboard, url_historico)
+
+    def test_posicoes_tem_aba_compradas_primeiro_e_ativa_por_padrao(self):
+        self.client.login(username="investidor_historico", password="SenhaForte123!")
+
+        resposta = self.client.get(reverse("core:posicoes"))
+        html = resposta.content.decode("utf-8")
+
+        self.assertContains(resposta, 'data-alvo="painel-historico-atualizacoes"')
+        self.assertContains(resposta, 'id="painel-historico-atualizacoes"')
+        # a aba "Compradas" vem antes da aba do histórico na ordem do HTML
+        self.assertLess(
+            html.index('data-alvo="painel-compradas"'), html.index("painel-historico-atualizacoes"),
+        )
+        # e é a aba ativa por padrão (a do histórico passa a vir escondida)
+        self.assertContains(resposta, 'id="painel-historico-atualizacoes" role="tabpanel" hidden')
+
+    def test_posicoes_exibe_grafico_e_registros_do_historico(self):
+        r1 = registrar_atualizacao_carteira(self.usuario)
+        Cotacao.objects.filter(ativo=self.ativo, data=date.today()).update(preco_fechamento=Decimal("72.00"))
+        r2 = registrar_atualizacao_carteira(self.usuario)
+        self.client.login(username="investidor_historico", password="SenhaForte123!")
+
+        resposta = self.client.get(reverse("core:posicoes"))
+
+        self.assertContains(resposta, "Variações de hoje")
+        self.assertContains(resposta, "grafico-carteira-dia")
+        self.assertContains(resposta, "Registros recentes")
+        self.assertContains(resposta, "R$ 660,00")  # valor_atual de r1 (formatação pt-br, vírgula decimal)
+        self.assertContains(resposta, "R$ 720,00")  # valor_atual de r2
+
+    def test_posicoes_nao_mostra_registro_de_outro_usuario_na_aba_historico(self):
+        outro_usuario = User.objects.create_user(username="investidor_historico_isolado", password="SenhaForte123!")
+        registrar_atualizacao_carteira(outro_usuario)
+        self.client.login(username="investidor_historico", password="SenhaForte123!")
+
+        resposta = self.client.get(reverse("core:posicoes"))
+
+        self.assertContains(resposta, "Nenhum registro ainda")

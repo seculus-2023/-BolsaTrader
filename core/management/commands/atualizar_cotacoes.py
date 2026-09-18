@@ -30,7 +30,7 @@ import time
 from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
 
-from core.services import executar_ciclo_atualizacao_cotacoes
+from core.services import executar_ciclo_atualizacao_cotacoes, mercado_b3_aberto
 
 
 class Command(BaseCommand):
@@ -63,10 +63,17 @@ class Command(BaseCommand):
         if intervalo <= 0:
             raise CommandError("--intervalo precisa ser maior que zero.")
 
-        self.stdout.write(f"Modo contínuo: atualizando a cada {intervalo} minuto(s). Ctrl+C para parar.")
+        self.stdout.write(
+            f"Modo contínuo: atualizando a cada {intervalo} minuto(s), só durante o horário de negociação "
+            f"da B3 ({settings.B3_HORARIO_ABERTURA} às {settings.B3_HORARIO_FECHAMENTO}, dias úteis). "
+            "Ctrl+C para parar."
+        )
         try:
             while True:
-                self._atualizar_tudo()
+                if mercado_b3_aberto():
+                    self._atualizar_tudo()
+                else:
+                    self.stdout.write("B3 fechada agora - pulando este ciclo.")
                 self.stdout.write(f"Próxima atualização em {intervalo} minuto(s)...\n")
                 time.sleep(intervalo * 60)
         except KeyboardInterrupt:

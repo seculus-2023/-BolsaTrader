@@ -198,6 +198,17 @@ a:hover { color: var(--neon-magenta); }
     align-items: start;
 }
 
+/*
+ * Sem min-width:0, o track "1fr" do grid usa como mínimo o min-content da
+ * coluna (minmax(auto,1fr) é o padrão) - a tabela de posições, com
+ * white-space:nowrap dentro de .tabela-scroll (rolagem própria), tem um
+ * min-content bem largo, e sem isso ela "estoura" a largura da coluna
+ * inteira, empurra a coluna lateral pra fora da tela e cria uma barra de
+ * rolagem horizontal na página toda - o Painel parecia "descentralizado"
+ * porque na prática a página ficava mais larga que a tela.
+ */
+.coluna-principal { min-width: 0; }
+
 .coluna-lateral .card-glass { position: sticky; top: 1.5rem; }
 
 @media (max-width: 900px) {

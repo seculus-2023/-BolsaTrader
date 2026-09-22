@@ -1,0 +1,127 @@
+{% extends "base.html" %}
+{% block titulo %}Conta Corrente - BolsaTrader{% endblock %}
+{% block conteudo %}
+<h1>Conta Corrente</h1>
+<p style="color: var(--text-dim);">
+    O caixa das suas operações de bolsa: informe o saldo inicial da conta, e cada compra debita e cada venda
+    credita automaticamente &mdash; com o nome do ativo na descrição do lançamento. Use "Nova transferência" para
+    registrar dinheiro que entrou ou saiu para outra conta (Nubank, corretora etc).
+</p>
+
+<div class="grid-stats" style="margin-top: 1rem;">
+    <div class="stat-tile">
+        <div class="label">Saldo inicial</div>
+        <div class="value">R$ {{ conta.saldo_inicial }}</div>
+    </div>
+    <div class="stat-tile">
+        <div class="label">Saldo atual</div>
+        <div class="value {% if saldo_atual > 0 %}valor-positivo{% elif saldo_atual < 0 %}valor-negativo{% else %}valor-neutro{% endif %}">
+            R$ {{ saldo_atual }}
+        </div>
+    </div>
+</div>
+
+<div style="display: flex; gap: 1.2rem; flex-wrap: wrap; margin-top: 1.5rem;">
+    <div class="card-glass" style="flex: 1 1 320px;">
+        <h2 style="margin-top: 0;">Saldo inicial da conta</h2>
+        <form method="post" action="{% url 'core:conta_corrente_definir_saldo' %}" class="form-futurista">
+            {% csrf_token %}
+            {{ form_saldo_inicial.saldo_inicial.label_tag }}
+            {{ form_saldo_inicial.saldo_inicial }}
+            <button type="submit" class="btn-futurista" style="margin-top: .8rem;">Salvar saldo inicial</button>
+        </form>
+    </div>
+
+    <div class="card-glass" style="flex: 1 1 380px;">
+        <h2 style="margin-top: 0;">Nova transferência</h2>
+        <p style="color: var(--text-dim); font-size: .85rem; margin-top: -.4rem;">
+            Ex: transferência recebida do Nubank (crédito) ou dinheiro enviado da conta corrente para outra conta (débito).
+        </p>
+        <form method="post" action="{% url 'core:conta_corrente_transferencia_nova' %}" class="form-futurista">
+            {% csrf_token %}
+            <div style="display: flex; gap: .8rem; flex-wrap: wrap;">
+                <div>
+                    {{ form_transferencia.tipo.label_tag }}
+                    {{ form_transferencia.tipo }}
+                </div>
+                <div>
+                    {{ form_transferencia.valor.label_tag }}
+                    {{ form_transferencia.valor }}
+                </div>
+                <div>
+                    {{ form_transferencia.data.label_tag }}
+                    {{ form_transferencia.data }}
+                </div>
+            </div>
+            <div style="margin-top: .8rem;">
+                {{ form_transferencia.descricao.label_tag }}
+                {{ form_transferencia.descricao }}
+            </div>
+            <button type="submit" class="btn-futurista" style="margin-top: .8rem;">Registrar transferência</button>
+        </form>
+    </div>
+</div>
+
+<h2 style="margin-top: 1.8rem;">Extrato por período</h2>
+<div class="card-glass">
+    <form method="get" class="form-futurista" style="display: flex; gap: .8rem; align-items: flex-end; flex-wrap: wrap;">
+        <div>
+            <label for="id_data_de_extrato" style="margin-top: 0;">De</label>
+            <input type="date" id="id_data_de_extrato" name="data_de_extrato" value="{{ data_de_extrato }}" class="form-control-futurista">
+        </div>
+        <div>
+            <label for="id_data_ate_extrato" style="margin-top: 0;">até</label>
+            <input type="date" id="id_data_ate_extrato" name="data_ate_extrato" value="{{ data_ate_extrato }}" class="form-control-futurista">
+        </div>
+        <button type="submit" class="btn-futurista">Filtrar</button>
+        <a href="{% url 'core:conta_corrente' %}?data_de_extrato=&data_ate_extrato=" class="btn-futurista btn-secundario">Limpar filtro</a>
+        <a href="{% url 'core:conta_corrente_exportar_excel' %}?data_de_extrato={{ data_de_extrato }}&data_ate_extrato={{ data_ate_extrato }}" class="btn-futurista btn-secundario">⬇ Exportar Excel</a>
+        <a href="{% url 'core:conta_corrente_exportar_pdf' %}?data_de_extrato={{ data_de_extrato }}&data_ate_extrato={{ data_ate_extrato }}" class="btn-futurista btn-secundario">⬇ Exportar PDF</a>
+    </form>
+</div>
+
+<div class="card-glass" style="margin-top: 1rem;">
+    {% if linhas %}
+    <div class="tabela-scroll">
+    <table class="tabela-futurista">
+        <thead>
+            <tr>
+                <th>Data</th>
+                <th>Tipo</th>
+                <th>Origem</th>
+                <th>Descrição</th>
+                <th>Valor</th>
+                <th>Saldo após</th>
+                <th>Ação</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for item in linhas %}
+            <tr>
+                <td>{{ item.lancamento.data|date:"d/m/Y" }}</td>
+                <td>{{ item.lancamento.get_tipo_display }}</td>
+                <td>{{ item.lancamento.get_origem_display }}</td>
+                <td>{{ item.lancamento.descricao }}</td>
+                <td class="{% if item.lancamento.tipo == 'CREDITO' %}valor-positivo{% else %}valor-negativo{% endif %}">
+                    {% if item.lancamento.tipo == 'CREDITO' %}+{% else %}-{% endif %}R$ {{ item.lancamento.valor }}
+                </td>
+                <td>R$ {{ item.saldo_apos }}</td>
+                <td>
+                    {% if item.lancamento.origem == 'TRANSFERENCIA' %}
+                    <form method="post" action="{% url 'core:conta_corrente_lancamento_excluir' item.lancamento.id %}"
+                          onsubmit="return confirm('Excluir esta transferência?');">
+                        {% csrf_token %}
+                        <button type="submit" class="btn-futurista btn-secundario" style="padding: .25rem .6rem; font-size: .78rem; color: var(--neon-red); border-color: rgba(255, 56, 96, .4);">🗑️ Excluir</button>
+                    </form>
+                    {% else %}&mdash;{% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    </div>
+    {% else %}
+    <p style="color: var(--text-dim);">Nenhum lançamento nesse período.</p>
+    {% endif %}
+</div>
+{% endblock %}

@@ -63,4 +63,30 @@ urlpatterns = [
     path("noticias/fontes/<int:fonte_id>/excluir/", views.noticia_fonte_excluir, name="noticia_fonte_excluir"),
     path("acoes-b3/", views.acoes_b3, name="acoes_b3"),
     path("acoes-b3/atualizar/", views.acoes_b3_atualizar, name="acoes_b3_atualizar"),
+    path("conta-corrente/", views.conta_corrente, name="conta_corrente"),
+    path(
+        "conta-corrente/saldo-inicial/",
+        views.conta_corrente_definir_saldo,
+        name="conta_corrente_definir_saldo",
+    ),
+    path(
+        "conta-corrente/transferencia/nova/",
+        views.conta_corrente_transferencia_nova,
+        name="conta_corrente_transferencia_nova",
+    ),
+    path(
+        "conta-corrente/lancamentos/<int:lancamento_id>/excluir/",
+        views.conta_corrente_lancamento_excluir,
+        name="conta_corrente_lancamento_excluir",
+    ),
+    path(
+        "conta-corrente/exportar/excel/",
+        views.conta_corrente_exportar_excel,
+        name="conta_corrente_exportar_excel",
+    ),
+    path(
+        "conta-corrente/exportar/pdf/",
+        views.conta_corrente_exportar_pdf,
+        name="conta_corrente_exportar_pdf",
+    ),
 ]

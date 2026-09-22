@@ -46,7 +46,7 @@
             <button id="btn-instalar-pwa" class="btn-futurista btn-secundario" style="display:none; padding:.4rem .8rem; font-size:.85rem; margin-right:.6rem;">
                 ⬇ Instalar app
             </button>
-            <span style="color: var(--text-dim); margin-right: .6rem;">Olá, {{ user.first_name|default:user.username }}</span>
+            <span class="nav-usuario-logado" title="Usuário logado: {{ user.username }}">👤 {{ user.get_full_name|default:user.username }}</span>
             <form method="post" action="{% url 'accounts:logout' %}" style="display: inline;">
                 {% csrf_token %}
                 <button type="submit" class="link-botao">Sair</button>

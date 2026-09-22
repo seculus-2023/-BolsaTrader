@@ -1,8 +1,10 @@
+from decimal import Decimal
+
 from django import forms
 from django.conf import settings
 from django.utils import timezone
 
-from .models import Operacao, Ativo, FonteNoticia
+from .models import Operacao, Ativo, FonteNoticia, ContaCorrente, LancamentoContaCorrente
 from .services import ativos_distintos_comprados
 
 
@@ -366,6 +368,47 @@ class FonteNoticiaForm(forms.ModelForm):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        for name, field in self.fields.items():
+            css = field.widget.attrs.get("class", "")
+            field.widget.attrs["class"] = (css + " form-control-futurista").strip()
+
+
+class SaldoInicialContaCorrenteForm(forms.ModelForm):
+    """Define/corrige o saldo inicial da conta corrente do usuário."""
+
+    class Meta:
+        model = ContaCorrente
+        fields = ["saldo_inicial"]
+        labels = {"saldo_inicial": "Saldo inicial da conta (R$)"}
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        for name, field in self.fields.items():
+            css = field.widget.attrs.get("class", "")
+            field.widget.attrs["class"] = (css + " form-control-futurista").strip()
+
+
+class TransferenciaContaCorrenteForm(forms.Form):
+    """
+    Lançamento manual de transferência de/para outra conta (ex: Nubank,
+    corretora) - crédito quando o dinheiro entra na conta corrente do
+    sistema, débito quando sai dela para outro lugar.
+    """
+
+    tipo = forms.ChoiceField(label="Tipo", choices=LancamentoContaCorrente.TIPO_CHOICES)
+    valor = forms.DecimalField(label="Valor (R$)", max_digits=14, decimal_places=2, min_value=Decimal("0.01"))
+    descricao = forms.CharField(
+        label="Descrição", max_length=255,
+        widget=forms.TextInput(attrs={"placeholder": "Ex: Transferência recebida do Nubank"}),
+    )
+    data = forms.DateField(
+        label="Data", widget=forms.DateInput(attrs={"type": "date"}, format="%Y-%m-%d"),
+    )
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if not self.initial.get("data"):
+            self.initial["data"] = timezone.localdate()
         for name, field in self.fields.items():
             css = field.widget.attrs.get("class", "")
             field.widget.attrs["class"] = (css + " form-control-futurista").strip()

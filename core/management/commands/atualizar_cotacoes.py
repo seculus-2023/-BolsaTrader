@@ -30,7 +30,10 @@ import time
 from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
 
-from core.services import executar_ciclo_atualizacao_cotacoes, mercado_b3_aberto
+from core.services import (
+    consumo_api_ultimos_30_dias, executar_ciclo_atualizacao_cotacoes, limite_automatico_api,
+    mercado_b3_aberto, orcamento_automatico_disponivel,
+)
 
 
 class Command(BaseCommand):
@@ -70,10 +73,16 @@ class Command(BaseCommand):
         )
         try:
             while True:
-                if mercado_b3_aberto():
-                    self._atualizar_tudo()
-                else:
+                if not mercado_b3_aberto():
                     self.stdout.write("B3 fechada agora - pulando este ciclo.")
+                elif not orcamento_automatico_disponivel():
+                    self.stdout.write(self.style.WARNING(
+                        f"Orçamento de requisições à API atingiu o limite automático "
+                        f"({consumo_api_ultimos_30_dias()}/{limite_automatico_api()} nos últimos 30 dias) - "
+                        "pulando este ciclo."
+                    ))
+                else:
+                    self._atualizar_tudo()
                 self.stdout.write(f"Próxima atualização em {intervalo} minuto(s)...\n")
                 time.sleep(intervalo * 60)
         except KeyboardInterrupt:

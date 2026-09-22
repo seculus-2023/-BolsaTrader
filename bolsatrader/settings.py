@@ -192,6 +192,23 @@ LOGOUT_REDIRECT_URL = "accounts:login"
 BRAPI_BASE_URL = config("BRAPI_BASE_URL", default="https://brapi.dev/api")
 BRAPI_TOKEN = config("BRAPI_TOKEN", default="v2rExiL92yBndDgQxdSUT9")  # opcional, ver manual de instalação
 
+# Quantos tickers no máximo por requisição em lote de cotações (ver
+# core.services.buscar_cotacoes_em_lote) - depende do PLANO contratado na
+# brapi.dev, não é fixo: gratuito e Startup permitem 10, Pro permite 20.
+# Pedir mais que o limite do plano não dá erro 429, dá 400
+# "QUOTES_PER_REQUEST_EXCEEDED" e o lote inteiro falha - ajuste este valor
+# se fizer upgrade (ou downgrade) de plano na brapi.dev.
+BRAPI_TICKERS_POR_LOTE = config("BRAPI_TICKERS_POR_LOTE", default=10, cast=int)
+
+# Orçamento de requisições à brapi.dev (ver core.services.consumo_api_*): o
+# plano tem um limite por ciclo de 30 dias (Startup = 150.000) e estourar
+# deixa o sistema sem cotações até a renovação. O sistema conta cada
+# requisição num contador diário e: (1) pausa o ciclo AUTOMÁTICO ao chegar em
+# LIMITE * (1 - MARGEM%) - a margem fica reservada para consultas manuais e
+# imprevistos; (2) bloqueia QUALQUER requisição ao chegar em 95% do limite.
+BRAPI_LIMITE_MENSAL = config("BRAPI_LIMITE_MENSAL", default=150000, cast=int)
+BRAPI_MARGEM_SEGURANCA_PCT = config("BRAPI_MARGEM_SEGURANCA_PCT", default=30, cast=int)
+
 # De quantos em quantos minutos as cotações são buscadas de novo sozinhas -
 # tanto pelo agendador embutido no próprio processo do servidor (ver
 # AGENDADOR_COTACOES_EMBUTIDO logo abaixo e core.services.

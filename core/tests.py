@@ -7,6 +7,8 @@ Executar com:
 import hashlib
 import hmac
 import json
+import os
+import sys
 import threading
 from datetime import date, datetime, timedelta, timezone as dt_timezone
 from decimal import Decimal
@@ -14,6 +16,7 @@ from io import StringIO
 from unittest.mock import Mock, patch
 
 import requests
+from django.apps import apps as django_apps
 from django.conf import settings
 from django.contrib.auth.models import User
 from django.core.management import call_command
@@ -26,7 +29,10 @@ from accounts.models import PerfilUsuario
 
 from . import services as core_services
 from .forms import OperacaoForm, VendaLoteForm
-from .models import Ativo, Cotacao, Operacao, Alerta, MensagemWhatsapp, CotacaoIndice, RegistroAtualizacaoCarteira
+from .models import (
+    Ativo, Cotacao, Operacao, Alerta, MensagemWhatsapp, CotacaoIndice, RegistroAtualizacaoCarteira,
+    ContaCorrente, LancamentoContaCorrente,
+)
 from .services import (
     calcular_posicoes, analisar_tendencia, gerar_alertas_para_usuario, construir_comparativo_valores,
     analisar_indicadores_tecnicos, analisar_indicadores_tecnicos_precos,
@@ -37,10 +43,13 @@ from .services import (
     registrar_atualizacao_carteira, excluir_registros_atualizacao_antigos,
     excluir_registros_atualizacao_por_periodo, construir_grafico_atualizacoes_dia,
     calcular_variacoes_historico, executar_ciclo_atualizacao_cotacoes, iniciar_agendador_cotacoes_embutido,
-    buscar_cotacoes_em_lote, atualizar_cotacoes_ativos,
+    buscar_cotacoes_em_lote, atualizar_cotacoes_ativos, buscar_cotacao_atual_com_historico,
     _ciclo_agendador_embutido, _mensagem_falha_api,
     buscar_cotacao_atual,
     BrapiError,
+    obter_ou_criar_conta_corrente, saldo_conta_corrente, sincronizar_lancamento_compra,
+    sincronizar_lancamento_venda, registrar_transferencia_conta_corrente, extrato_conta_corrente,
+    gerar_excel_extrato_conta_corrente, gerar_pdf_extrato_conta_corrente,
 )
 
 
@@ -1079,6 +1088,33 @@ class MensagemFalhaApiTests(TestCase):
         self.assertIn("Limite de consultas", mensagem)
         self.assertIn("o ticker PETR4", mensagem)
 
+    def test_429_de_limite_mensal_esgotado_gera_mensagem_com_data_de_renovacao(self):
+        # a brapi.dev também responde 429 quando a cota MENSAL do plano
+        # gratuito acaba - nesse caso "tente novamente em instantes" seria
+        # enganoso (só volta a funcionar na próxima virada do ciclo, ver
+        # code=MONTHLY_LIMIT_EXCEEDED no corpo da resposta).
+        resposta = Mock()
+        resposta.status_code = 429
+        resposta.json = lambda: {
+            "error": True,
+            "code": "MONTHLY_LIMIT_EXCEEDED",
+            "details": {"usage": {"current": 15000, "limit": 15000, "resetsAt": "2026-10-17T14:00:11.000Z"}},
+        }
+        erro = requests.exceptions.HTTPError(response=resposta)
+
+        mensagem = _mensagem_falha_api(erro, "o ticker PETR4")
+
+        self.assertIn("Limite mensal", mensagem)
+        self.assertIn("17/10/2026", mensagem)
+        self.assertNotIn("Tente novamente em alguns minutos", mensagem)
+
+    def test_429_generico_sem_corpo_reconhecivel_usa_mensagem_padrao(self):
+        # response.json() de um Mock() genérico não é um dict de verdade -
+        # _detalhe_limite_brapi precisa degradar pra mensagem padrão, não
+        # quebrar com AttributeError/TypeError.
+        mensagem = _mensagem_falha_api(self._http_error(429), "o ticker PETR4")
+        self.assertIn("Tente novamente em alguns minutos", mensagem)
+
     def test_outros_erros_geram_mensagem_generica(self):
         mensagem = _mensagem_falha_api(self._http_error(500), "o ticker PETR4")
         self.assertIn("Falha ao consultar a API", mensagem)
@@ -1148,12 +1184,39 @@ class BuscarCotacoesEmLoteTests(TestCase):
         self.assertEqual(resultado["VALE3"]["regularMarketPrice"], 68.0)
 
     @patch("core.services.requests.get")
+    def test_tamanho_padrao_do_lote_e_10(self, mock_get):
+        # regressão: o plano Startup (e o gratuito) da brapi.dev aceita no
+        # máximo 10 tickers por requisição - pedir mais não dá 429, dá 400
+        # "QUOTES_PER_REQUEST_EXCEEDED" e o lote inteiro falha em silêncio.
+        # O padrão daqui NUNCA pode voltar a ser maior que 10 sem checar o
+        # plano contratado primeiro.
+        tickers = [f"T{i}" for i in range(11)]
+        mock_get.return_value.raise_for_status = lambda: None
+        mock_get.return_value.json = lambda: {"results": []}
+
+        buscar_cotacoes_em_lote(tickers)
+
+        self.assertEqual(mock_get.call_count, 2)  # 10 + 1, não 1 chamada só
+
+    @patch("core.services.requests.get")
+    def test_tamanho_do_lote_respeita_configuracao(self, mock_get):
+        tickers = [f"T{i}" for i in range(7)]
+        mock_get.return_value.raise_for_status = lambda: None
+        mock_get.return_value.json = lambda: {"results": []}
+
+        with override_settings(BRAPI_TICKERS_POR_LOTE=3):
+            buscar_cotacoes_em_lote(tickers)
+
+        self.assertEqual(mock_get.call_count, 3)  # 3 + 3 + 1
+
+    @patch("core.services.requests.get")
     def test_divide_em_varios_lotes_quando_excede_o_tamanho_maximo(self, mock_get):
-        tickers = [f"T{i}" for i in range(32)]  # mais que 2x o tamanho do lote (15)
+        tickers = [f"T{i}" for i in range(32)]  # mais que 2x o tamanho do lote
         mock_get.return_value.raise_for_status = lambda: None
         mock_get.return_value.json = lambda: {"results": [{"symbol": "T0", "regularMarketPrice": 10.0}]}
 
-        buscar_cotacoes_em_lote(tickers)
+        with override_settings(BRAPI_TICKERS_POR_LOTE=15):
+            buscar_cotacoes_em_lote(tickers)
 
         self.assertEqual(mock_get.call_count, 3)  # 15 + 15 + 2
 
@@ -1238,6 +1301,58 @@ class ExecutarCicloAtualizacaoTests(TestCase):
 
         self.assertEqual(resultado["ativos_falha"], 1)
         self.assertEqual(resultado["ativos_atualizados"], 0)
+
+
+class CoreConfigReadyTests(TestCase):
+    """
+    core.apps.CoreConfig.ready() - liga o agendador embutido de cotações
+    também sob "manage.py runserver" (antes só nascia via wsgi.py, então
+    quem roda o site só com runserver nunca tinha atualização automática de
+    verdade, mesmo com COTACOES_INTERVALO_MINUTOS configurado).
+    """
+
+    def setUp(self):
+        self.argv_original = sys.argv[:]
+        self.run_main_original = os.environ.get("RUN_MAIN")
+        self.config = django_apps.get_app_config("core")
+
+    def tearDown(self):
+        sys.argv[:] = self.argv_original
+        if self.run_main_original is None:
+            os.environ.pop("RUN_MAIN", None)
+        else:
+            os.environ["RUN_MAIN"] = self.run_main_original
+
+    def _chamar_ready(self, argv, run_main=None):
+        sys.argv[:] = argv
+        if run_main is None:
+            os.environ.pop("RUN_MAIN", None)
+        else:
+            os.environ["RUN_MAIN"] = run_main
+        self.config.ready()
+
+    @patch("core.services.iniciar_agendador_cotacoes_embutido")
+    def test_nao_inicia_para_comandos_que_nao_sao_runserver(self, mock_iniciar):
+        self._chamar_ready(["manage.py", "test"])
+        mock_iniciar.assert_not_called()
+
+    @patch("core.services.iniciar_agendador_cotacoes_embutido")
+    def test_nao_inicia_no_processo_pai_do_autoreload(self, mock_iniciar):
+        # runserver com autoreload (padrão): o processo "pai" (só observa
+        # arquivos) não tem RUN_MAIN definida.
+        self._chamar_ready(["manage.py", "runserver"])
+        mock_iniciar.assert_not_called()
+
+    @patch("core.services.iniciar_agendador_cotacoes_embutido")
+    def test_inicia_no_processo_filho_do_autoreload(self, mock_iniciar):
+        self._chamar_ready(["manage.py", "runserver"], run_main="true")
+        mock_iniciar.assert_called_once()
+
+    @patch("core.services.iniciar_agendador_cotacoes_embutido")
+    def test_inicia_com_noreload_mesmo_sem_run_main(self, mock_iniciar):
+        # com --noreload existe um processo só, e RUN_MAIN nunca é definida
+        self._chamar_ready(["manage.py", "runserver", "--noreload"])
+        mock_iniciar.assert_called_once()
 
 
 class AgendadorCotacoesEmbutidoTests(TestCase):
@@ -1344,44 +1459,40 @@ class VerificarAtualizacaoCotacoesTests(TestCase):
 
 
 class DetalhesCotacoesTests(TestCase):
+    """
+    Tela Detalhes de Cotações - só a consulta avulsa (a grid com a cotação
+    de cada ativo em carteira foi removida a pedido; quem quiser acompanhar
+    os ativos comprados usa Posições em Carteira).
+    """
+
     def setUp(self):
         self.usuario = User.objects.create_user(username="investidor_detalhes", password="SenhaForte123!")
-        self.outro_usuario = User.objects.create_user(username="outro_detalhes", password="SenhaForte123!")
         self.client.login(username="investidor_detalhes", password="SenhaForte123!")
 
-    def test_mostra_apenas_ativos_do_usuario_logado(self):
-        meu_ativo = Ativo.objects.create(ticker="B3SA3", nome_longo="B3 SA")
-        Operacao.objects.create(
-            usuario=self.usuario, ativo=meu_ativo, tipo=Operacao.COMPRA,
-            quantidade=10, preco_unitario=Decimal("14.00"), data_operacao=date.today(),
-        )
-        ativo_do_outro = Ativo.objects.create(ticker="RENT3")
-        Operacao.objects.create(
-            usuario=self.outro_usuario, ativo=ativo_do_outro, tipo=Operacao.COMPRA,
-            quantidade=5, preco_unitario=Decimal("50.00"), data_operacao=date.today(),
-        )
+    def test_exige_login(self):
+        self.client.logout()
+        resposta = self.client.get(reverse("core:detalhes_cotacoes"))
+        self.assertEqual(resposta.status_code, 302)
 
+    def test_pagina_mostra_a_consulta_avulsa(self):
         resposta = self.client.get(reverse("core:detalhes_cotacoes"))
         self.assertEqual(resposta.status_code, 200)
-        self.assertContains(resposta, "B3SA3")
-        self.assertNotContains(resposta, "RENT3")
+        self.assertContains(resposta, "Consultar cotação avulsa")
+        self.assertContains(resposta, 'id="campo-ticker-avulso"')
+        self.assertContains(resposta, "Preço alvo (R$)")  # calculadora de lucro/perda do card da consulta
 
-    def test_pagina_mostra_campos_detalhados(self):
-        ativo = Ativo.objects.create(
-            ticker="B3SA3", nome_longo="B3 SA - Brasil, Bolsa, Balcao",
-            maxima_dia=Decimal("14.70"), minima_dia=Decimal("14.31"),
-            volume=5689600, valor_mercado=Decimal("70010885753.00"),
-        )
-        Operacao.objects.create(
-            usuario=self.usuario, ativo=ativo, tipo=Operacao.COMPRA,
-            quantidade=10, preco_unitario=Decimal("14.00"), data_operacao=date.today(),
-        )
+    def test_pagina_mostra_explicacao_do_ifr(self):
         resposta = self.client.get(reverse("core:detalhes_cotacoes"))
-        self.assertContains(resposta, "B3 SA - Brasil, Bolsa, Balcao")
-        self.assertContains(resposta, "14,70")
-        self.assertContains(resposta, "5.689.600")
+        self.assertContains(resposta, "O que é o IFR (RSI)?")
+        self.assertContains(resposta, "IFR = 100")
+        self.assertContains(resposta, "Sobrecomprado")
+        self.assertContains(resposta, "Sobrevendido")
+        self.assertContains(resposta, "Divergência altista")
+        self.assertContains(resposta, "Divergência baixista")
 
-    def test_calculadora_de_preco_alvo_aparece_quando_ha_cotacao(self):
+    def test_pagina_nao_mostra_mais_a_grid_de_ativos_acompanhados(self):
+        # a grid antiga (um card por ativo em carteira, com botão "Atualizar
+        # cotações agora") foi removida - só sobra a consulta avulsa.
         ativo = Ativo.objects.create(ticker="B3SA3")
         Operacao.objects.create(
             usuario=self.usuario, ativo=ativo, tipo=Operacao.COMPRA,
@@ -1391,43 +1502,135 @@ class DetalhesCotacoesTests(TestCase):
 
         resposta = self.client.get(reverse("core:detalhes_cotacoes"))
 
-        self.assertContains(resposta, "Preço alvo (R$)")
-        # o atributo com um valor numérico de verdade só existe no card
-        # renderizado pelo servidor - o <script> da consulta avulsa (sempre
-        # presente na página) tem esse mesmo texto, mas como código-fonte JS
-        # (`data-preco-atual="' + dados.preco + '"`), não um valor numérico.
-        self.assertRegex(resposta.content.decode(), r'data-preco-atual="10\.35"')
-
-    def test_calculadora_de_preco_alvo_nao_aparece_sem_cotacao(self):
-        ativo = Ativo.objects.create(ticker="B3SA3")  # sem Cotacao - ultima_cotacao() é None
+        self.assertNotContains(resposta, "grid-cotacoes")
+        self.assertNotContains(resposta, 'class="btn-futurista btn-atualizar-cotacoes"')
+    def test_seletor_lista_apenas_os_ativos_comprados_do_usuario(self):
+        comprado = Ativo.objects.create(ticker="B3SA3")
         Operacao.objects.create(
-            usuario=self.usuario, ativo=ativo, tipo=Operacao.COMPRA,
+            usuario=self.usuario, ativo=comprado, tipo=Operacao.COMPRA,
             quantidade=10, preco_unitario=Decimal("14.00"), data_operacao=date.today(),
+        )
+        so_reservado = Ativo.objects.create(ticker="ITSA4")
+        Operacao.objects.create(
+            usuario=self.usuario, ativo=so_reservado, tipo=Operacao.RESERVAR,
+            quantidade=1, preco_unitario=Decimal("9.00"), data_operacao=date.today(),
+        )
+        de_outro = Ativo.objects.create(ticker="RENT3")
+        Operacao.objects.create(
+            usuario=User.objects.create_user(username="outro_seletor", password="SenhaForte123!"),
+            ativo=de_outro, tipo=Operacao.COMPRA, quantidade=5, preco_unitario=Decimal("50.00"),
+            data_operacao=date.today(),
         )
 
         resposta = self.client.get(reverse("core:detalhes_cotacoes"))
 
-        # sem cotação, o bloco "Preço alvo" nem é renderizado pro card - só
-        # sobra o texto-fonte do <script> da consulta avulsa, sem um valor
-        # numérico real no atributo.
-        self.assertNotRegex(resposta.content.decode(), r'data-preco-atual="[\d.]+"')
+        self.assertContains(resposta, '<option value="B3SA3">')
+        self.assertNotContains(resposta, "ITSA4")  # reserva não é ativo comprado
+        self.assertNotContains(resposta, "RENT3")  # ativo de outro usuário
 
-    def test_data_preco_atual_usa_ponto_decimal_nao_virgula(self):
-        # regressão: {{ cot.preco_fechamento }} com LANGUAGE_CODE=pt-br vira "10,35"
-        # em vez de "10.35" - isso quebrava o parseFloat() da calculadora de
-        # lucro/perda em JS, que lê data-preco-atual e para no primeiro caractere
-        # não numérico (parseFloat("10,35") === 10, não 10.35).
-        ativo = Ativo.objects.create(ticker="B3SA3")
-        Operacao.objects.create(
-            usuario=self.usuario, ativo=ativo, tipo=Operacao.COMPRA,
-            quantidade=10, preco_unitario=Decimal("14.00"), data_operacao=date.today(),
-        )
-        Cotacao.objects.create(ativo=ativo, data=date.today(), preco_fechamento=Decimal("10.35"))
-
+    def test_sem_ativos_comprados_nao_mostra_o_seletor_mas_mantem_a_busca_avulsa(self):
         resposta = self.client.get(reverse("core:detalhes_cotacoes"))
+        self.assertNotContains(resposta, 'id="campo-ativo-comprado"')
+        self.assertContains(resposta, 'id="campo-ticker-avulso"')
 
-        self.assertContains(resposta, 'data-preco-atual="10.35"')
-        self.assertNotContains(resposta, 'data-preco-atual="10,35"')
+
+class BuscarCotacaoAtualComHistoricoTests(TestCase):
+    """core.services.buscar_cotacao_atual_com_historico - cotação + histórico numa única chamada (usado para o IFR/RSI da consulta avulsa)."""
+
+    def _payload(self, pontos_historico):
+        return {
+            "results": [{
+                "symbol": "PETR4",
+                "regularMarketPrice": 32.0,
+                "shortName": "PETR4",
+                "historicalDataPrice": pontos_historico,
+            }]
+        }
+
+    @patch("core.services.requests.get")
+    def test_retorna_dados_atuais_e_precos_em_ordem_cronologica(self, mock_get):
+        base = int(datetime(2026, 1, 1, tzinfo=dt_timezone.utc).timestamp())
+        mock_get.return_value.raise_for_status = lambda: None
+        mock_get.return_value.json = lambda: self._payload([
+            {"date": base + 2 * 86400, "close": 30.0},
+            {"date": base, "close": 28.0},  # fora de ordem de propósito
+            {"date": base + 86400, "close": 29.0},
+        ])
+
+        dados, precos = buscar_cotacao_atual_com_historico("PETR4")
+
+        self.assertEqual(dados["regularMarketPrice"], 32.0)
+        self.assertEqual(precos, [28.0, 29.0, 30.0])  # do mais antigo pro mais recente
+
+    @patch("core.services.requests.get")
+    def test_ignora_pontos_sem_fechamento_ou_data_duplicada(self, mock_get):
+        base = int(datetime(2026, 1, 1, tzinfo=dt_timezone.utc).timestamp())
+        mock_get.return_value.raise_for_status = lambda: None
+        mock_get.return_value.json = lambda: self._payload([
+            {"date": base, "close": 28.0},
+            {"date": base, "close": 99.0},  # mesma data - ignorado
+            {"date": base + 86400, "close": None},  # sem fechamento - ignorado
+        ])
+
+        _, precos = buscar_cotacao_atual_com_historico("PETR4")
+
+        self.assertEqual(precos, [28.0])
+
+    @patch("core.services.requests.get")
+    def test_ticker_nao_encontrado_gera_brapierror(self, mock_get):
+        mock_get.return_value.raise_for_status = lambda: None
+        mock_get.return_value.json = lambda: {"results": []}
+
+        with self.assertRaises(BrapiError):
+            buscar_cotacao_atual_com_historico("FANTASMA9")
+
+
+class ConsultarCotacaoAvulsaTests(TestCase):
+    """core.views.consultar_cotacao_avulsa - inclui o IFR/RSI calculado a partir do histórico retornado pela API."""
+
+    def setUp(self):
+        self.usuario = User.objects.create_user(username="investidor_avulso_rsi", password="SenhaForte123!")
+        self.client.login(username="investidor_avulso_rsi", password="SenhaForte123!")
+
+    def _payload_com_historico(self, precos_fechamento):
+        base = int(datetime(2026, 1, 1, tzinfo=dt_timezone.utc).timestamp())
+        pontos = [{"date": base + i * 86400, "close": preco} for i, preco in enumerate(precos_fechamento)]
+        return {
+            "results": [{
+                "symbol": "PETR4",
+                "shortName": "PETR4",
+                "regularMarketPrice": 32.0,
+                "regularMarketChangePercent": 1.5,
+                "historicalDataPrice": pontos,
+            }]
+        }
+
+    @patch("core.services.requests.get")
+    def test_retorna_rsi_com_historico_suficiente(self, mock_get):
+        # 15 fechamentos subindo direto -> RSI deve vir alto (sobrecomprado)
+        precos = [20.0 + i for i in range(15)]
+        mock_get.return_value.raise_for_status = lambda: None
+        mock_get.return_value.json = lambda: self._payload_com_historico(precos)
+
+        resposta = self.client.get(reverse("core:consultar_cotacao_avulsa"), {"ticker": "PETR4"})
+        dados = resposta.json()
+
+        self.assertTrue(dados["ok"])
+        self.assertIsNotNone(dados["rsi"])
+        self.assertEqual(dados["rsi_classe"], "baixa")  # RSI_CLASSES["SOBRECOMPRADO"] == "baixa"
+        self.assertIn("Sobrecomprado", dados["rsi_label"])
+
+    @patch("core.services.requests.get")
+    def test_rsi_nulo_com_historico_insuficiente(self, mock_get):
+        mock_get.return_value.raise_for_status = lambda: None
+        mock_get.return_value.json = lambda: self._payload_com_historico([20.0, 21.0])  # só 2 pontos
+
+        resposta = self.client.get(reverse("core:consultar_cotacao_avulsa"), {"ticker": "PETR4"})
+        dados = resposta.json()
+
+        self.assertTrue(dados["ok"])
+        self.assertIsNone(dados["rsi"])
+        self.assertIn("Aguardando histórico", dados["rsi_label"])
 
 
 class GraficoCotacoesTests(TestCase):
@@ -2478,6 +2681,44 @@ class HistoricoAtualizacoesTests(TestCase):
         self.assertContains(resposta_posicoes, url_historico)
         self.assertContains(resposta_dashboard, url_historico)
 
+    def test_posicoes_compradas_tem_acoes_vender_alterar_excluir_por_lote(self):
+        # mesmas ações de Minhas Operações > Em carteira, uma linha por lote
+        lote1 = Operacao.objects.get(usuario=self.usuario, ativo=self.ativo)
+        lote2 = Operacao.objects.create(
+            usuario=self.usuario, ativo=self.ativo, tipo=Operacao.COMPRA,
+            quantidade=5, preco_unitario=Decimal("62.00"), data_operacao=date.today(),
+        )
+        self.client.login(username="investidor_historico", password="SenhaForte123!")
+
+        resposta = self.client.get(reverse("core:posicoes"))
+
+        for lote in (lote1, lote2):
+            self.assertContains(resposta, reverse("core:operacao_vender", args=[lote.id]))
+            self.assertContains(resposta, reverse("core:operacao_editar", args=[lote.id]))
+            self.assertContains(resposta, reverse("core:operacao_excluir", args=[lote.id]))
+
+    def test_posicoes_nao_oferece_acoes_para_lote_ja_vendido(self):
+        lote_vendido = Operacao.objects.get(usuario=self.usuario, ativo=self.ativo)
+        Operacao.objects.filter(id=lote_vendido.id).update(
+            quantidade_vendida=lote_vendido.quantidade, preco_venda=Decimal("70.00"), data_venda=date.today(),
+        )
+        self.client.login(username="investidor_historico", password="SenhaForte123!")
+
+        resposta = self.client.get(reverse("core:posicoes"))
+
+        self.assertNotContains(resposta, reverse("core:operacao_vender", args=[lote_vendido.id]))
+
+    def test_excluir_compra_a_partir_de_posicoes_volta_para_posicoes(self):
+        lote = Operacao.objects.get(usuario=self.usuario, ativo=self.ativo)
+        self.client.login(username="investidor_historico", password="SenhaForte123!")
+
+        resposta = self.client.post(
+            reverse("core:operacao_excluir", args=[lote.id]), {"next": reverse("core:posicoes")},
+        )
+
+        self.assertRedirects(resposta, reverse("core:posicoes"))
+        self.assertFalse(Operacao.objects.filter(id=lote.id).exists())
+
     def test_posicoes_tem_aba_compradas_primeiro_e_ativa_por_padrao(self):
         self.client.login(username="investidor_historico", password="SenhaForte123!")
 
@@ -2515,3 +2756,416 @@ class HistoricoAtualizacoesTests(TestCase):
         resposta = self.client.get(reverse("core:posicoes"))
 
         self.assertContains(resposta, "Nenhum registro ainda")
+
+
+class NomeDoUsuarioLogadoTests(TestCase):
+    """base.html - o nome do usuário logado aparece no cabeçalho de todas as telas autenticadas."""
+
+    def setUp(self):
+        self.usuario = User.objects.create_user(
+            username="maria_investe", password="SenhaForte123!", first_name="Maria", last_name="Silva",
+        )
+        self.client.login(username="maria_investe", password="SenhaForte123!")
+
+    def test_nome_completo_aparece_em_varias_telas(self):
+        for nome_url in ("core:dashboard", "core:menu", "core:operacao_lista", "core:posicoes",
+                         "core:detalhes_cotacoes", "core:alertas", "core:noticias"):
+            resposta = self.client.get(reverse(nome_url))
+            self.assertContains(resposta, "nav-usuario-logado", msg_prefix=nome_url)
+            self.assertContains(resposta, "Maria Silva", msg_prefix=nome_url)
+
+    def test_sem_nome_cadastrado_mostra_o_username(self):
+        User.objects.create_user(username="sem_nome", password="SenhaForte123!")
+        self.client.login(username="sem_nome", password="SenhaForte123!")
+        resposta = self.client.get(reverse("core:dashboard"))
+        self.assertContains(resposta, "👤 sem_nome")
+
+
+class OrcamentoApiBrapiTests(TestCase):
+    """Controle de orçamento de requisições à brapi.dev (contador, teto automático/absoluto, projeção)."""
+
+    @patch("core.services.requests.get")
+    def test_cada_requisicao_a_brapi_e_contada(self, mock_get):
+        mock_get.return_value.raise_for_status = lambda: None
+        mock_get.return_value.json = lambda: {"results": [{"symbol": "PETR4", "regularMarketPrice": 32.0}]}
+
+        buscar_cotacao_atual("PETR4")
+        buscar_cotacoes_em_lote(["PETR4", "VALE3"])
+
+        self.assertEqual(core_services.consumo_api_ultimos_30_dias(), 2)
+
+    def test_consumo_considera_so_os_ultimos_30_dias(self):
+        from .models import ConsumoApiBrapi
+        ConsumoApiBrapi.objects.create(data=timezone.localdate(), requisicoes=100)
+        ConsumoApiBrapi.objects.create(data=timezone.localdate() - timedelta(days=29), requisicoes=50)
+        ConsumoApiBrapi.objects.create(data=timezone.localdate() - timedelta(days=30), requisicoes=9999)
+        self.assertEqual(core_services.consumo_api_ultimos_30_dias(), 150)
+
+    @override_settings(BRAPI_LIMITE_MENSAL=1000, BRAPI_MARGEM_SEGURANCA_PCT=30)
+    def test_limites_automatico_e_absoluto(self):
+        self.assertEqual(core_services.limite_automatico_api(), 700)
+        self.assertEqual(core_services.limite_absoluto_api(), 950)
+
+    @override_settings(BRAPI_LIMITE_MENSAL=1000, BRAPI_MARGEM_SEGURANCA_PCT=30)
+    def test_ciclo_automatico_pausa_ao_atingir_o_limite_automatico(self):
+        from .models import ConsumoApiBrapi
+        ConsumoApiBrapi.objects.create(data=timezone.localdate(), requisicoes=700)
+        with patch("core.services.mercado_b3_aberto", return_value=True), \
+             patch("core.services.executar_ciclo_atualizacao_cotacoes") as mock_ciclo:
+            _ciclo_agendador_embutido()
+        mock_ciclo.assert_not_called()
+
+    @override_settings(BRAPI_LIMITE_MENSAL=1000, BRAPI_MARGEM_SEGURANCA_PCT=30)
+    def test_ciclo_automatico_roda_abaixo_do_limite_automatico(self):
+        from .models import ConsumoApiBrapi
+        ConsumoApiBrapi.objects.create(data=timezone.localdate(), requisicoes=699)
+        with patch("core.services.mercado_b3_aberto", return_value=True), \
+             patch("core.services.executar_ciclo_atualizacao_cotacoes") as mock_ciclo:
+            mock_ciclo.return_value = {
+                "ativos_total": 0, "ativos_atualizados": 0, "ativos_falha": 0,
+                "alertas_gerados": 0, "sinais_robo_gerados": 0,
+            }
+            _ciclo_agendador_embutido()
+        mock_ciclo.assert_called_once()
+
+    @override_settings(BRAPI_LIMITE_MENSAL=1000)
+    @patch("core.services.requests.get")
+    def test_acima_do_teto_absoluto_nenhuma_requisicao_e_feita(self, mock_get):
+        from .models import ConsumoApiBrapi
+        ConsumoApiBrapi.objects.create(data=timezone.localdate(), requisicoes=950)
+
+        with self.assertRaises(BrapiError):
+            buscar_cotacao_atual("PETR4")
+
+        mock_get.assert_not_called()
+        self.assertEqual(core_services.consumo_api_ultimos_30_dias(), 950)  # bloqueada não é contada
+
+    @override_settings(BRAPI_LIMITE_MENSAL=1000)
+    @patch("core.services.requests.get")
+    def test_atualizacao_em_lote_conta_tudo_como_falha_quando_bloqueada(self, mock_get):
+        from .models import ConsumoApiBrapi
+        ConsumoApiBrapi.objects.create(data=timezone.localdate(), requisicoes=950)
+        ativo = Ativo.objects.create(ticker="PETR4")
+
+        atualizados, falhas = atualizar_cotacoes_ativos([ativo])
+
+        self.assertEqual((atualizados, falhas), (0, 1))
+        mock_get.assert_not_called()
+
+    @override_settings(
+        BRAPI_LIMITE_MENSAL=150000, BRAPI_MARGEM_SEGURANCA_PCT=30, BRAPI_TICKERS_POR_LOTE=10,
+        B3_HORARIO_ABERTURA="10:00", B3_HORARIO_FECHAMENTO="17:00",
+    )
+    def test_projecao_com_27_ativos_e_intervalo_de_10_minutos_cabe_folgado(self):
+        p = core_services.projetar_consumo_mensal(27, 10)
+        self.assertEqual(p["requisicoes_por_ciclo"], 3)  # 27 ativos / 10 por lote
+        self.assertEqual(p["ciclos_dia"], 43)  # 420 min / 10 + 1
+        self.assertEqual(p["requisicoes_mes"], 43 * 3 * 22)
+        self.assertTrue(p["cabe_no_orcamento"])
+        self.assertLess(p["percentual_do_limite"], 5)
+
+    @override_settings(BRAPI_LIMITE_MENSAL=150000, BRAPI_MARGEM_SEGURANCA_PCT=30, BRAPI_TICKERS_POR_LOTE=1)
+    def test_projecao_avisa_quando_o_intervalo_nao_cabe(self):
+        p = core_services.projetar_consumo_mensal(200, 1)  # 1 ativo por lote, ciclo a cada minuto
+        self.assertFalse(p["cabe_no_orcamento"])
+
+    def test_tela_mostra_consumo_e_projecao(self):
+        User.objects.create_user(username="orcamento_tela", password="SenhaForte123!")
+        self.client.login(username="orcamento_tela", password="SenhaForte123!")
+        resposta = self.client.get(reverse("core:detalhes_cotacoes"))
+        self.assertContains(resposta, "Consumo da API de cotações")
+        self.assertContains(resposta, "Projeção do ciclo automático")
+
+
+class ContaCorrenteServicosTests(TestCase):
+    """core.services: obter_ou_criar_conta_corrente, saldo_conta_corrente,
+    sincronizar_lancamento_compra/venda, registrar_transferencia_conta_corrente, extrato_conta_corrente."""
+
+    def setUp(self):
+        self.usuario = User.objects.create_user(username="investidor_cc", password="SenhaForte123!")
+        self.ativo = Ativo.objects.create(ticker="VALE3")
+
+    def test_obter_ou_criar_conta_corrente_cria_uma_so_vez(self):
+        conta1 = obter_ou_criar_conta_corrente(self.usuario)
+        conta2 = obter_ou_criar_conta_corrente(self.usuario)
+        self.assertEqual(conta1.id, conta2.id)
+        self.assertEqual(conta1.saldo_inicial, Decimal("0"))
+
+    def test_saldo_conta_corrente_soma_saldo_inicial_creditos_e_debitos(self):
+        conta = obter_ou_criar_conta_corrente(self.usuario)
+        conta.saldo_inicial = Decimal("1000.00")
+        conta.save()
+        LancamentoContaCorrente.objects.create(
+            conta=conta, tipo=LancamentoContaCorrente.CREDITO,
+            origem=LancamentoContaCorrente.ORIGEM_TRANSFERENCIA, valor=Decimal("200.00"), descricao="Depósito",
+        )
+        LancamentoContaCorrente.objects.create(
+            conta=conta, tipo=LancamentoContaCorrente.DEBITO,
+            origem=LancamentoContaCorrente.ORIGEM_TRANSFERENCIA, valor=Decimal("50.00"), descricao="Saque",
+        )
+        self.assertEqual(saldo_conta_corrente(conta), Decimal("1150.00"))
+
+    def test_sincronizar_lancamento_compra_cria_debito_com_nome_do_ativo(self):
+        operacao = Operacao.objects.create(
+            usuario=self.usuario, ativo=self.ativo, tipo=Operacao.COMPRA,
+            quantidade=10, preco_unitario=Decimal("60.00"), data_operacao=date(2026, 1, 5),
+        )
+        sincronizar_lancamento_compra(operacao)
+
+        lancamento = LancamentoContaCorrente.objects.get(operacao=operacao, origem=LancamentoContaCorrente.ORIGEM_COMPRA)
+        self.assertEqual(lancamento.tipo, LancamentoContaCorrente.DEBITO)
+        self.assertEqual(lancamento.valor, Decimal("600.00"))
+        self.assertIn("VALE3", lancamento.descricao)
+        self.assertEqual(lancamento.data, date(2026, 1, 5))
+
+    def test_sincronizar_lancamento_compra_ignora_reserva(self):
+        reserva = Operacao.objects.create(
+            usuario=self.usuario, ativo=self.ativo, tipo=Operacao.RESERVAR,
+            quantidade=1, preco_unitario=Decimal("60.00"), data_operacao=date.today(),
+        )
+        sincronizar_lancamento_compra(reserva)
+        self.assertFalse(LancamentoContaCorrente.objects.filter(operacao=reserva).exists())
+
+    def test_sincronizar_lancamento_compra_atualiza_valor_ao_reeditar(self):
+        operacao = Operacao.objects.create(
+            usuario=self.usuario, ativo=self.ativo, tipo=Operacao.COMPRA,
+            quantidade=10, preco_unitario=Decimal("60.00"), data_operacao=date.today(),
+        )
+        sincronizar_lancamento_compra(operacao)
+
+        operacao.quantidade = 20
+        operacao.save()
+        sincronizar_lancamento_compra(operacao)
+
+        lancamentos = LancamentoContaCorrente.objects.filter(operacao=operacao, origem=LancamentoContaCorrente.ORIGEM_COMPRA)
+        self.assertEqual(lancamentos.count(), 1)
+        self.assertEqual(lancamentos.first().valor, Decimal("1200.00"))
+
+    def test_sincronizar_lancamento_venda_cria_credito_com_valor_liquido(self):
+        operacao = Operacao.objects.create(
+            usuario=self.usuario, ativo=self.ativo, tipo=Operacao.COMPRA,
+            quantidade=10, preco_unitario=Decimal("60.00"), data_operacao=date.today(),
+            quantidade_vendida=10, preco_venda=Decimal("70.00"), data_venda=date(2026, 2, 10),
+            percentual_corretora=Decimal("1.00"),
+        )
+        sincronizar_lancamento_venda(operacao)
+
+        lancamento = LancamentoContaCorrente.objects.get(operacao=operacao, origem=LancamentoContaCorrente.ORIGEM_VENDA)
+        self.assertEqual(lancamento.tipo, LancamentoContaCorrente.CREDITO)
+        self.assertEqual(lancamento.valor, operacao.valor_liquido_vendido)
+        self.assertIn("VALE3", lancamento.descricao)
+        self.assertEqual(lancamento.data, date(2026, 2, 10))
+
+    def test_sincronizar_lancamento_venda_remove_lancamento_quando_venda_desfeita(self):
+        operacao = Operacao.objects.create(
+            usuario=self.usuario, ativo=self.ativo, tipo=Operacao.COMPRA,
+            quantidade=10, preco_unitario=Decimal("60.00"), data_operacao=date.today(),
+            quantidade_vendida=5, preco_venda=Decimal("70.00"), data_venda=date.today(),
+        )
+        sincronizar_lancamento_venda(operacao)
+        self.assertTrue(LancamentoContaCorrente.objects.filter(operacao=operacao, origem=LancamentoContaCorrente.ORIGEM_VENDA).exists())
+
+        operacao.quantidade_vendida = 0
+        operacao.preco_venda = None
+        operacao.data_venda = None
+        operacao.save()
+        sincronizar_lancamento_venda(operacao)
+
+        self.assertFalse(LancamentoContaCorrente.objects.filter(operacao=operacao, origem=LancamentoContaCorrente.ORIGEM_VENDA).exists())
+
+    def test_excluir_operacao_remove_lancamentos_junto(self):
+        operacao = Operacao.objects.create(
+            usuario=self.usuario, ativo=self.ativo, tipo=Operacao.COMPRA,
+            quantidade=10, preco_unitario=Decimal("60.00"), data_operacao=date.today(),
+            quantidade_vendida=10, preco_venda=Decimal("70.00"), data_venda=date.today(),
+        )
+        sincronizar_lancamento_compra(operacao)
+        sincronizar_lancamento_venda(operacao)
+        self.assertEqual(LancamentoContaCorrente.objects.filter(operacao=operacao).count(), 2)
+
+        operacao.delete()
+
+        self.assertEqual(LancamentoContaCorrente.objects.filter(operacao_id=operacao.id).count(), 0)
+
+    def test_registrar_transferencia_cria_lancamento_manual(self):
+        registrar_transferencia_conta_corrente(
+            self.usuario, LancamentoContaCorrente.CREDITO, Decimal("500.00"), "Recebido do Nubank", date(2026, 3, 1),
+        )
+        conta = obter_ou_criar_conta_corrente(self.usuario)
+        lancamento = conta.lancamentos.get()
+        self.assertEqual(lancamento.origem, LancamentoContaCorrente.ORIGEM_TRANSFERENCIA)
+        self.assertEqual(lancamento.tipo, LancamentoContaCorrente.CREDITO)
+        self.assertEqual(lancamento.valor, Decimal("500.00"))
+        self.assertEqual(lancamento.descricao, "Recebido do Nubank")
+        self.assertEqual(lancamento.data, date(2026, 3, 1))
+        self.assertIsNone(lancamento.operacao)
+
+    def test_extrato_filtra_por_periodo_e_mantem_saldo_acumulado_correto(self):
+        conta = obter_ou_criar_conta_corrente(self.usuario)
+        conta.saldo_inicial = Decimal("100.00")
+        conta.save()
+        registrar_transferencia_conta_corrente(
+            self.usuario, LancamentoContaCorrente.CREDITO, Decimal("50.00"), "Antes do período", date(2026, 1, 1),
+        )
+        registrar_transferencia_conta_corrente(
+            self.usuario, LancamentoContaCorrente.DEBITO, Decimal("30.00"), "Dentro do período", date(2026, 1, 10),
+        )
+        registrar_transferencia_conta_corrente(
+            self.usuario, LancamentoContaCorrente.CREDITO, Decimal("999.00"), "Depois do período", date(2026, 2, 1),
+        )
+
+        linhas = extrato_conta_corrente(conta, date(2026, 1, 5), date(2026, 1, 20))
+
+        self.assertEqual(len(linhas), 1)
+        self.assertEqual(linhas[0]["lancamento"].descricao, "Dentro do período")
+        # saldo_apos = 100 (inicial) + 50 (antes, incorporado ao saldo de entrada) - 30 (dentro do período)
+        self.assertEqual(linhas[0]["saldo_apos"], Decimal("120.00"))
+
+    def test_extrato_sem_filtro_traz_tudo_do_mais_recente_para_o_mais_antigo(self):
+        conta = obter_ou_criar_conta_corrente(self.usuario)
+        registrar_transferencia_conta_corrente(
+            self.usuario, LancamentoContaCorrente.CREDITO, Decimal("10.00"), "Primeira", date(2026, 1, 1),
+        )
+        registrar_transferencia_conta_corrente(
+            self.usuario, LancamentoContaCorrente.CREDITO, Decimal("20.00"), "Segunda", date(2026, 1, 2),
+        )
+
+        linhas = extrato_conta_corrente(conta)
+
+        self.assertEqual([item["lancamento"].descricao for item in linhas], ["Segunda", "Primeira"])
+
+    def test_gerar_excel_extrato_produz_arquivo_xlsx_valido(self):
+        conta = obter_ou_criar_conta_corrente(self.usuario)
+        registrar_transferencia_conta_corrente(
+            self.usuario, LancamentoContaCorrente.CREDITO, Decimal("100.00"), "Depósito", date.today(),
+        )
+        linhas = extrato_conta_corrente(conta)
+        conteudo = gerar_excel_extrato_conta_corrente(linhas, conta.saldo_inicial, saldo_conta_corrente(conta))
+        self.assertTrue(conteudo.startswith(b"PK"))  # assinatura do formato .xlsx (zip)
+
+    def test_gerar_pdf_extrato_produz_arquivo_pdf_valido(self):
+        conta = obter_ou_criar_conta_corrente(self.usuario)
+        linhas = extrato_conta_corrente(conta)
+        conteudo = gerar_pdf_extrato_conta_corrente(linhas, conta.saldo_inicial, saldo_conta_corrente(conta), "Período: todos", "Investidor")
+        self.assertTrue(conteudo.startswith(b"%PDF"))
+
+
+class ContaCorrenteViewsTests(TestCase):
+    """Views da tela Conta Corrente: fluxo completo via formulários (saldo inicial, transferência, extrato, exclusão)."""
+
+    def setUp(self):
+        self.usuario = User.objects.create_user(username="investidor_cc_view", password="SenhaForte123!")
+        self.client.login(username="investidor_cc_view", password="SenhaForte123!")
+        self.ativo = Ativo.objects.create(ticker="PETR4")
+
+    def test_compra_gera_debito_automatico_na_conta_corrente(self):
+        resposta = self.client.post(reverse("core:operacao_nova"), {
+            "ticker": "PETR4", "nome_ativo": "", "tipo": Operacao.COMPRA, "quantidade": "10",
+            "preco_unitario": "30.00", "data_operacao": date.today().isoformat(),
+            "meta_lucro_pct": "", "meta_perda_pct": "", "observacao": "",
+        })
+        self.assertEqual(resposta.status_code, 302)
+
+        conta = obter_ou_criar_conta_corrente(self.usuario)
+        lancamento = conta.lancamentos.get(origem=LancamentoContaCorrente.ORIGEM_COMPRA)
+        self.assertEqual(lancamento.tipo, LancamentoContaCorrente.DEBITO)
+        self.assertEqual(lancamento.valor, Decimal("300.00"))
+        self.assertEqual(saldo_conta_corrente(conta), Decimal("-300.00"))
+
+    def test_venda_gera_credito_automatico_na_conta_corrente(self):
+        operacao = Operacao.objects.create(
+            usuario=self.usuario, ativo=self.ativo, tipo=Operacao.COMPRA,
+            quantidade=10, preco_unitario=Decimal("30.00"), data_operacao=date.today(),
+        )
+        resposta = self.client.post(reverse("core:operacao_vender", args=[operacao.id]), {
+            "quantidade_vendida": "10", "preco_venda": "35.00",
+            "data_venda": date.today().isoformat(), "percentual_corretora": "0",
+        })
+        self.assertEqual(resposta.status_code, 302)
+
+        conta = obter_ou_criar_conta_corrente(self.usuario)
+        lancamento = conta.lancamentos.get(origem=LancamentoContaCorrente.ORIGEM_VENDA)
+        self.assertEqual(lancamento.tipo, LancamentoContaCorrente.CREDITO)
+        self.assertEqual(lancamento.valor, Decimal("350.00"))
+
+    def test_excluir_operacao_remove_lancamento_da_tela(self):
+        operacao = Operacao.objects.create(
+            usuario=self.usuario, ativo=self.ativo, tipo=Operacao.COMPRA,
+            quantidade=10, preco_unitario=Decimal("30.00"), data_operacao=date.today(),
+        )
+        sincronizar_lancamento_compra(operacao)
+
+        self.client.post(reverse("core:operacao_excluir", args=[operacao.id]))
+
+        conta = obter_ou_criar_conta_corrente(self.usuario)
+        self.assertEqual(conta.lancamentos.count(), 0)
+
+    def test_tela_conta_corrente_abre_e_mostra_saldo(self):
+        resposta = self.client.get(reverse("core:conta_corrente"))
+        self.assertEqual(resposta.status_code, 200)
+        self.assertContains(resposta, "Conta Corrente")
+
+    def test_definir_saldo_inicial(self):
+        resposta = self.client.post(reverse("core:conta_corrente_definir_saldo"), {"saldo_inicial": "1000.00"})
+        self.assertEqual(resposta.status_code, 302)
+        conta = obter_ou_criar_conta_corrente(self.usuario)
+        self.assertEqual(conta.saldo_inicial, Decimal("1000.00"))
+
+    def test_nova_transferencia_credito(self):
+        resposta = self.client.post(reverse("core:conta_corrente_transferencia_nova"), {
+            "tipo": LancamentoContaCorrente.CREDITO, "valor": "250.00",
+            "descricao": "Transferência recebida do Nubank", "data": date.today().isoformat(),
+        })
+        self.assertEqual(resposta.status_code, 302)
+        conta = obter_ou_criar_conta_corrente(self.usuario)
+        lancamento = conta.lancamentos.get(origem=LancamentoContaCorrente.ORIGEM_TRANSFERENCIA)
+        self.assertEqual(lancamento.valor, Decimal("250.00"))
+        self.assertIn("Nubank", lancamento.descricao)
+
+    def test_excluir_transferencia_manual(self):
+        lancamento = registrar_transferencia_conta_corrente(
+            self.usuario, LancamentoContaCorrente.CREDITO, Decimal("100.00"), "Depósito", date.today(),
+        )
+        resposta = self.client.post(reverse("core:conta_corrente_lancamento_excluir", args=[lancamento.id]))
+        self.assertEqual(resposta.status_code, 302)
+        self.assertFalse(LancamentoContaCorrente.objects.filter(id=lancamento.id).exists())
+
+    def test_nao_pode_excluir_lancamento_automatico_de_compra(self):
+        operacao = Operacao.objects.create(
+            usuario=self.usuario, ativo=self.ativo, tipo=Operacao.COMPRA,
+            quantidade=10, preco_unitario=Decimal("30.00"), data_operacao=date.today(),
+        )
+        sincronizar_lancamento_compra(operacao)
+        lancamento = LancamentoContaCorrente.objects.get(operacao=operacao)
+
+        resposta = self.client.post(reverse("core:conta_corrente_lancamento_excluir", args=[lancamento.id]))
+
+        self.assertEqual(resposta.status_code, 404)
+        self.assertTrue(LancamentoContaCorrente.objects.filter(id=lancamento.id).exists())
+
+    def test_usuario_nao_ve_nem_exclui_lancamento_de_outro_usuario(self):
+        outro_usuario = User.objects.create_user(username="investidor_cc_outro", password="SenhaForte123!")
+        lancamento_outro = registrar_transferencia_conta_corrente(
+            outro_usuario, LancamentoContaCorrente.CREDITO, Decimal("999.00"), "De outra pessoa", date.today(),
+        )
+
+        resposta = self.client.post(reverse("core:conta_corrente_lancamento_excluir", args=[lancamento_outro.id]))
+
+        self.assertEqual(resposta.status_code, 404)
+        self.assertTrue(LancamentoContaCorrente.objects.filter(id=lancamento_outro.id).exists())
+
+    def test_exportar_excel_conta_corrente(self):
+        resposta = self.client.get(reverse("core:conta_corrente_exportar_excel"))
+        self.assertEqual(resposta.status_code, 200)
+        self.assertEqual(
+            resposta["Content-Type"], "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+
+    def test_exportar_pdf_conta_corrente(self):
+        resposta = self.client.get(reverse("core:conta_corrente_exportar_pdf"))
+        self.assertEqual(resposta.status_code, 200)
+        self.assertEqual(resposta["Content-Type"], "application/pdf")
+
+    def test_menu_tem_link_para_conta_corrente(self):
+        resposta = self.client.get(reverse("core:menu"))
+        self.assertContains(resposta, reverse("core:conta_corrente"))

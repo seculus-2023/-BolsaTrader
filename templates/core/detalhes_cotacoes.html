@@ -1,23 +1,33 @@
 {% extends "base.html" %}
-{% load humanize l10n %}
 {% block titulo %}Detalhes de Cotações - BolsaTrader{% endblock %}
 {% block conteudo %}
 <h1>Detalhes de Cotações</h1>
 <p style="color: var(--text-dim);">
-    Retrato mais recente da cotação de cada ativo que você já comprou ou vendeu &mdash; preço, máxima/mínima do dia,
-    abertura, fechamento anterior, volume, valor de mercado e faixa de 52 semanas. Só muda quando você atualiza as cotações.
+    Consulte a cotação atual de qualquer ação, na hora, direto da API &mdash; preço, IFR (RSI), máxima/mínima do dia,
+    abertura, fechamento anterior, volume, valor de mercado, faixa de 52 semanas e o percentual de lucro/perda para
+    um preço alvo.
 </p>
-<a href="{% url 'core:atualizar_cotacoes' %}" class="btn-futurista btn-atualizar-cotacoes" data-overlay-texto="Atualizando cotações...">Atualizar cotações agora</a>
 
 <div class="card-glass" style="margin: 1.5rem 0 2rem;">
     <h3 style="margin-top: 0;">Consultar cotação avulsa</h3>
     <p style="color: var(--text-dim); font-size: .9rem;">
-        Digite o ticker de qualquer ação (ex.: PETR4) para ver a cotação atual, na hora, direto da API &mdash;
-        sem precisar tê-la na carteira.
+        Escolha um dos seus ativos comprados ou digite o ticker de qualquer ação (ex.: PETR4) para ver a cotação
+        atual, na hora, direto da API &mdash; sem precisar tê-la na carteira.
     </p>
     <form id="form-consulta-avulsa" class="form-futurista" style="display: flex; gap: .8rem; align-items: flex-end; flex-wrap: wrap;">
+        {% if tickers_comprados %}
+        <div style="min-width: 200px;">
+            <label for="campo-ativo-comprado" style="margin-top: 0;">Meus ativos comprados</label>
+            <select id="campo-ativo-comprado" class="form-control-futurista">
+                <option value="">Selecione...</option>
+                {% for ticker in tickers_comprados %}
+                <option value="{{ ticker }}">{{ ticker }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        {% endif %}
         <div style="flex: 1; min-width: 180px;">
-            <label for="campo-ticker-avulso" style="margin-top: 0;">Ticker</label>
+            <label for="campo-ticker-avulso" style="margin-top: 0;">Ou digite o ticker</label>
             <input type="text" id="campo-ticker-avulso" placeholder="Ex.: PETR4" autocomplete="off" maxlength="15" style="text-transform: uppercase;">
         </div>
         <button type="submit" id="btn-consultar-avulso" class="btn-futurista">Pesquisar cotação</button>
@@ -25,74 +35,100 @@
     <div id="resultado-consulta-avulsa" style="margin-top: 1.2rem;"></div>
 </div>
 
-<div class="grid-cotacoes">
-    {% for ativo in ativos %}
-    <div class="card-glass cotacao-card">
-        <div class="cotacao-cabecalho">
-            {% if ativo.logo_url %}<img src="{{ ativo.logo_url }}" alt="" class="cotacao-logo">{% endif %}
-            <div>
-                <h3>{{ ativo.ticker }}</h3>
-                <small style="color: var(--text-dim);">{{ ativo.nome_longo|default:ativo.nome|default:"—" }}</small>
-            </div>
+<div class="card-glass" style="margin: 1.5rem 0 2rem;">
+    <h3 style="margin-top: 0;">Consumo da API de cotações (últimos 30 dias)</h3>
+    <div class="grid-stats">
+        <div class="stat-tile">
+            <div class="label">Requisições usadas</div>
+            <div class="value">{{ consumo_api.usado }} <small style="font-size: .8rem; color: var(--text-dim);">de {{ consumo_api.limite }} ({{ consumo_api.percentual }}%)</small></div>
         </div>
-
-        {% with cot=ativo.ultima_cotacao %}
-        <div class="cotacao-preco">
-            {% if cot %}
-            R$ {{ cot.preco_fechamento }}
-            <span class="{% if cot.variacao_dia_pct > 0 %}valor-positivo{% elif cot.variacao_dia_pct < 0 %}valor-negativo{% else %}valor-neutro{% endif %}">
-                {% if cot.variacao_dia_pct is not None %}({{ cot.variacao_dia_pct }}%){% endif %}
-            </span>
-            {% else %}
-            <span style="color: var(--text-dim); font-size: .95rem;">sem cotação ainda</span>
-            {% endif %}
-        </div>
-        {% if cot %}
-        <div class="cotacao-calculadora-alvo">
-            <label style="margin-top: .6rem; display: block; font-size: .85rem; color: var(--text-dim);">
-                Preço alvo (R$) &mdash; qual seria o lucro/perda?
-            </label>
-            <div style="display: flex; gap: .6rem; align-items: center; flex-wrap: wrap; margin-top: .3rem;">
-                <input type="number" step="0.01" min="0" class="campo-preco-alvo form-control-futurista"
-                       data-preco-atual="{% localize off %}{{ cot.preco_fechamento }}{% endlocalize %}" placeholder="Ex.: 11.44" style="max-width: 140px;">
-                <strong class="resultado-preco-alvo valor-neutro">&mdash;</strong>
+        <div class="stat-tile">
+            <div class="label">Projeção do ciclo automático / mês</div>
+            <div class="value {% if consumo_api.projecao.cabe_no_orcamento %}valor-positivo{% else %}valor-negativo{% endif %}">
+                {{ consumo_api.projecao.requisicoes_mes }} <small style="font-size: .8rem; color: var(--text-dim);">({{ consumo_api.projecao.percentual_do_limite }}% do limite)</small>
             </div>
-        </div>
-        {% endif %}
-        {% endwith %}
-
-        <div class="cotacao-grid-campos">
-            <div><span>Máxima do dia</span><strong>{% if ativo.maxima_dia %}R$ {{ ativo.maxima_dia }}{% else %}&mdash;{% endif %}</strong></div>
-            <div><span>Mínima do dia</span><strong>{% if ativo.minima_dia %}R$ {{ ativo.minima_dia }}{% else %}&mdash;{% endif %}</strong></div>
-            <div><span>Abertura</span><strong>{% if ativo.abertura %}R$ {{ ativo.abertura }}{% else %}&mdash;{% endif %}</strong></div>
-            <div><span>Fech. anterior</span><strong>{% if ativo.fechamento_anterior %}R$ {{ ativo.fechamento_anterior }}{% else %}&mdash;{% endif %}</strong></div>
-            <div>
-                <span>Variação (R$)</span>
-                <strong class="{% if ativo.variacao_dia_valor > 0 %}valor-positivo{% elif ativo.variacao_dia_valor < 0 %}valor-negativo{% endif %}">
-                    {% if ativo.variacao_dia_valor is not None %}R$ {{ ativo.variacao_dia_valor }}{% else %}&mdash;{% endif %}
-                </strong>
-            </div>
-            <div><span>Volume</span><strong>{% if ativo.volume %}{{ ativo.volume|intcomma }}{% else %}&mdash;{% endif %}</strong></div>
-            <div><span>Valor de mercado</span><strong>{% if ativo.valor_mercado %}R$ {{ ativo.valor_mercado|intword }}{% else %}&mdash;{% endif %}</strong></div>
-            <div><span>Moeda</span><strong>{{ ativo.moeda|default:"—" }}</strong></div>
-            <div>
-                <span>Faixa 52 semanas</span>
-                <strong>
-                    {% if ativo.minima_52_semanas and ativo.maxima_52_semanas %}
-                        R$ {{ ativo.minima_52_semanas }} &ndash; R$ {{ ativo.maxima_52_semanas }}
-                    {% else %}&mdash;{% endif %}
-                </strong>
-            </div>
-        </div>
-
-        <div class="cotacao-rodape">
-            {% if ativo.hora_cotacao %}<span>Cotação de: {{ ativo.hora_cotacao|date:"d/m/Y H:i" }}</span>{% endif %}
-            {% if ativo.atualizado_em %}<span>Atualizado em: {{ ativo.atualizado_em|date:"d/m/Y H:i" }}</span>{% endif %}
         </div>
     </div>
-    {% empty %}
-    <div class="card-glass"><p style="color: var(--text-dim);">Você ainda não possui ativos cadastrados. <a href="{% url 'core:operacao_nova' %}">Registrar uma compra</a>.</p></div>
-    {% endfor %}
+    <p style="color: var(--text-dim); font-size: .85rem; margin-bottom: 0;">
+        {{ consumo_api.total_ativos }} ativo(s) acompanhado(s), atualização a cada {{ consumo_api.intervalo_minutos }} min
+        só durante o pregão &rarr; {{ consumo_api.projecao.requisicoes_por_ciclo }} requisição(ões) por ciclo,
+        {{ consumo_api.projecao.ciclos_dia }} ciclos/dia. O ciclo automático pausa em {{ consumo_api.limite_automatico }}
+        requisições (margem de segurança) e nenhuma consulta é feita acima de {{ consumo_api.limite_absoluto }}.
+        {% if consumo_api.automatico_pausado %}<strong style="color: var(--neon-red);">⚠ Atualização automática pausada: orçamento atingido.</strong>{% endif %}
+        {% if not consumo_api.projecao.cabe_no_orcamento %}<strong style="color: var(--neon-red);">⚠ A projeção passa do limite automático - aumente COTACOES_INTERVALO_MINUTOS.</strong>{% endif %}
+    </p>
+</div>
+
+<div class="card-glass" style="margin: 1.5rem 0 2rem;">
+    <h3 style="margin-top: 0;">O que é o IFR (RSI)?</h3>
+    <p style="color: var(--text-dim);">
+        O Índice de Força Relativa (IFR), desenvolvido por J. Welles Wilder Jr., é um oscilador de momentum que mede
+        a velocidade e a magnitude dos movimentos de preço. Oscila entre 0 e 100 e é essencial para identificar
+        condições de sobrecompra e sobrevenda &mdash; extremamente útil no volátil mercado brasileiro.
+    </p>
+
+    <h4 style="margin-bottom: .4rem;">A fórmula do IFR</h4>
+    <p style="background: rgba(0, 240, 255, .06); border: 1px solid var(--glass-border); border-radius: 10px; padding: .8rem 1rem; font-family: 'Rajdhani', sans-serif; color: var(--text-dim);">
+        IFR = 100 &minus; [100 / (1 + FR)], onde FR = Ganho Médio / Perda Média (em n períodos)
+    </p>
+
+    <h4 style="margin-bottom: .6rem;">Faixa de 0 a 100</h4>
+    <div style="height: 14px; border-radius: 7px; overflow: hidden; display: flex; margin-bottom: .3rem;">
+        <div style="width: 30%; background: linear-gradient(90deg, var(--neon-green), rgba(57,255,143,.4));"></div>
+        <div style="width: 40%; background: rgba(255,255,255,.12);"></div>
+        <div style="width: 30%; background: linear-gradient(90deg, rgba(255,56,96,.4), var(--neon-red));"></div>
+    </div>
+    <div style="display: flex; justify-content: space-between; font-size: .78rem; color: var(--text-dim); margin-bottom: 1.2rem;">
+        <span>0 &mdash; sobrevendido</span>
+        <span>30</span>
+        <span>70</span>
+        <span>100 &mdash; sobrecomprado</span>
+    </div>
+
+    <div class="tabela-scroll">
+    <table class="tabela-futurista">
+        <thead>
+            <tr><th>Aspecto</th><th>Detalhe</th></tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td><span class="badge-tendencia badge-baixa">IFR &gt; 70</span></td>
+                <td>Sobrecomprado &mdash; ação pode estar prestes a corrigir ou recuar</td>
+            </tr>
+            <tr>
+                <td><span class="badge-tendencia badge-neutro">IFR 30&ndash;70</span></td>
+                <td>Zona neutra &mdash; sem sinal direcional forte</td>
+            </tr>
+            <tr>
+                <td><span class="badge-tendencia badge-alta">IFR &lt; 30</span></td>
+                <td>Sobrevendido &mdash; ação pode estar prestes a se recuperar ou reverter</td>
+            </tr>
+        </tbody>
+    </table>
+    </div>
+    <p style="color: var(--text-dim); font-size: .85rem; margin-top: .8rem;">
+        Zona de sobrecompra (vermelho, &gt;70) e zona de sobrevenda (verde, &lt;30) &mdash; leituras extremas
+        sinalizam potenciais reversões, mas não garantem nada sozinhas.
+    </p>
+
+    <h4 style="margin-bottom: .4rem;">Divergências do IFR</h4>
+    <p style="color: var(--text-dim); font-size: .9rem;">
+        As divergências entre a ação do preço e o IFR são alguns dos sinais mais poderosos na análise técnica:
+    </p>
+    <ul style="color: var(--text-dim); font-size: .9rem; padding-left: 1.2rem; margin-top: .4rem;">
+        <li style="margin-bottom: .4rem;">
+            <strong style="color: var(--text-main);">Divergência altista:</strong> o preço faz uma mínima mais baixa,
+            mas o IFR faz uma mínima mais alta &mdash; potencial reversão para cima.
+        </li>
+        <li>
+            <strong style="color: var(--text-main);">Divergência baixista:</strong> o preço faz uma máxima mais alta,
+            mas o IFR faz uma máxima mais baixa &mdash; potencial reversão para baixo.
+        </li>
+    </ul>
+    <p style="color: var(--text-dim); font-size: .8rem; margin-top: 1rem; margin-bottom: 0;">
+        O IFR é uma referência simples de apoio à decisão, calculado a partir do histórico recente de preços &mdash;
+        <strong>não constitui recomendação de investimento</strong>.
+    </p>
 </div>
 
 <script>
@@ -177,6 +213,11 @@
                             '</div>' +
                         '</div>' +
                         '<div class="cotacao-grid-campos">' +
+                            '<div><span>IFR (RSI, 14 períodos)</span><strong>' +
+                                '<span class="badge-tendencia badge-' + dados.rsi_classe + '">' +
+                                    escapeHtml(dados.rsi_label) + (dados.rsi != null ? ' (' + Number(dados.rsi).toFixed(2).replace(".", ",") + ')' : '') +
+                                '</span>' +
+                            '</strong></div>' +
                             '<div><span>Máxima do dia</span><strong>' + formatarReal(dados.maxima_dia) + '</strong></div>' +
                             '<div><span>Mínima do dia</span><strong>' + formatarReal(dados.minima_dia) + '</strong></div>' +
                             '<div><span>Abertura</span><strong>' + formatarReal(dados.abertura) + '</strong></div>' +
@@ -197,14 +238,23 @@
         }
 
         form.addEventListener("submit", pesquisar);
+
+        // Escolher um ativo comprado preenche o ticker e já pesquisa.
+        var seletorComprado = document.getElementById("campo-ativo-comprado");
+        if (seletorComprado) {
+            seletorComprado.addEventListener("change", function () {
+                if (!seletorComprado.value) return;
+                campoTicker.value = seletorComprado.value;
+                form.requestSubmit();
+            });
+        }
     })();
 
     (function () {
-        // Calculadora de lucro/perda por preço alvo: funciona tanto nos cards
-        // dos ativos acompanhados (renderizados pelo servidor) quanto no card
-        // da consulta avulsa (montado por JS acima) - delegação de evento no
-        // documento, então não precisa religar o listener quando o card da
-        // consulta avulsa é recriado a cada pesquisa.
+        // Calculadora de lucro/perda por preço alvo do card da consulta
+        // avulsa (montado por JS acima) - delegação de evento no documento,
+        // então não precisa religar o listener toda vez que o card é
+        // recriado a cada nova pesquisa.
         function formatarPercentual(valor) {
             var sinal = valor > 0 ? "+" : "";
             return sinal + valor.toFixed(2).replace(".", ",") + "%";

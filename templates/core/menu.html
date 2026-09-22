@@ -53,7 +53,7 @@
     <a class="menu-card" href="{% url 'core:detalhes_cotacoes' %}">
         <div class="icone">🧮</div>
         <h3>Detalhes de Cotações</h3>
-        <p>Preço, máxima/mínima do dia, abertura, volume, valor de mercado e faixa de 52 semanas de cada ativo.</p>
+        <p>Consulte a cotação de qualquer ação na hora: preço, máxima/mínima do dia, abertura, volume, valor de mercado e faixa de 52 semanas.</p>
     </a>
     <a class="menu-card" href="{% url 'core:acoes_b3' %}">
         <div class="icone">🏛️</div>
@@ -74,6 +74,11 @@
         <div class="icone">🗂️</div>
         <h3>Histórico de Atualizações</h3>
         <p>Registro de cada atualização de cotações (total de ativos, valor investido, valor atual e lucro/perda), com gráfico das variações do dia.</p>
+    </a>
+    <a class="menu-card" href="{% url 'core:conta_corrente' %}">
+        <div class="icone">💰</div>
+        <h3>Conta Corrente</h3>
+        <p>Saldo inicial, débito automático nas compras, crédito automático nas vendas, extrato por período e transferências para outras contas (ex: Nubank).</p>
     </a>
 </div>
 {% endblock %}

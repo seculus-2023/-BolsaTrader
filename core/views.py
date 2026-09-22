@@ -23,9 +23,12 @@ from .forms import (
     EditarCompraForm,
     EditarReservaForm,
     FonteNoticiaForm,
+    SaldoInicialContaCorrenteForm,
+    TransferenciaContaCorrenteForm,
 )
 from .models import (
     Operacao, Alerta, Ativo, Cotacao, MensagemWhatsapp, FonteNoticia, AcaoB3, RegistroAtualizacaoCarteira,
+    LancamentoContaCorrente,
 )
 from .services import (
     calcular_posicoes,
@@ -36,8 +39,18 @@ from .services import (
     mercado_b3_aberto,
     atualizar_cotacao_diaria,
     atualizar_cotacoes_ativos,
+    ativos_distintos_comprados,
+    consumo_api_ultimos_30_dias,
+    limite_automatico_api,
+    limite_absoluto_api,
+    orcamento_automatico_disponivel,
+    projetar_consumo_mensal,
     analisar_indicadores_tecnicos,
-    buscar_cotacao_atual,
+    buscar_cotacao_atual_com_historico,
+    calcular_rsi,
+    _classificar_rsi,
+    RSI_LABELS,
+    RSI_CLASSES,
     buscar_maiores_variacoes,
     sincronizar_acoes_b3,
     atividade_recente,
@@ -65,6 +78,14 @@ from .services import (
     construir_grafico_atualizacoes_dia,
     gerar_excel_historico_atualizacoes,
     gerar_pdf_historico_atualizacoes,
+    obter_ou_criar_conta_corrente,
+    saldo_conta_corrente,
+    sincronizar_lancamento_compra,
+    sincronizar_lancamento_venda,
+    registrar_transferencia_conta_corrente,
+    extrato_conta_corrente,
+    gerar_excel_extrato_conta_corrente,
+    gerar_pdf_extrato_conta_corrente,
 )
 
 TICKER_VALIDO = re.compile(r"^[A-Z0-9]{1,15}$")
@@ -310,6 +331,7 @@ def operacao_nova(request):
             operacao = form.save(commit=False)
             operacao.usuario = request.user
             operacao.save()
+            sincronizar_lancamento_compra(operacao)
 
             # tenta atualizar a cotação do ativo imediatamente para já refletir no dashboard
             try:
@@ -356,6 +378,7 @@ def operacao_vender(request, operacao_id):
         form = VendaLoteForm(request.POST, instance=operacao)
         if form.is_valid():
             operacao = form.save()
+            sincronizar_lancamento_venda(operacao)
 
             acao = "atualizada" if ja_estava_vendido else "registrada"
             mensagem = (
@@ -383,6 +406,7 @@ def operacao_comprar(request, operacao_id):
         form = ConfirmarCompraForm(request.POST, instance=operacao)
         if form.is_valid():
             operacao = form.save()
+            sincronizar_lancamento_compra(operacao)
             messages.success(
                 request,
                 f"Reserva efetivada: compra de {operacao.quantidade}x {operacao.ativo.ticker} registrada com sucesso.",
@@ -405,6 +429,8 @@ def operacao_editar(request, operacao_id):
         form = EditarCompraForm(request.POST, instance=operacao)
         if form.is_valid():
             operacao = form.save()
+            sincronizar_lancamento_compra(operacao)
+            sincronizar_lancamento_venda(operacao)
             messages.success(request, f"Compra de {operacao.ativo.ticker} atualizada com sucesso.")
             return redirect("core:operacao_lista")
     else:
@@ -888,6 +914,143 @@ def historico_atualizacoes_exportar_pdf(request):
     return resposta
 
 
+_CHAVES_PERIODO_CONTA_CORRENTE = ["data_de_extrato", "data_ate_extrato"]
+
+
+def _periodo_conta_corrente(request):
+    """
+    Mesma convenção de período de _periodo_e_operacoes: sem filtro de data na
+    URL, cai no mês atual por padrão; "Limpar filtro" manda os campos vazios
+    de propósito, pra mostrar o extrato inteiro.
+    """
+    if any(chave in request.GET for chave in _CHAVES_PERIODO_CONTA_CORRENTE):
+        data_de_str = request.GET.get("data_de_extrato", "")
+        data_ate_str = request.GET.get("data_ate_extrato", "")
+    else:
+        hoje = timezone.localdate()
+        ultimo_dia_mes = calendar.monthrange(hoje.year, hoje.month)[1]
+        data_de_str = hoje.replace(day=1).isoformat()
+        data_ate_str = hoje.replace(day=ultimo_dia_mes).isoformat()
+
+    return data_de_str, data_ate_str, parse_date(data_de_str) if data_de_str else None, parse_date(data_ate_str) if data_ate_str else None
+
+
+@login_required
+def conta_corrente(request):
+    """
+    Tela "Conta Corrente": saldo (inicial + créditos de venda - débitos de
+    compra + transferências manuais) e extrato por período, com a
+    descrição de cada lançamento automático trazendo o nome do ativo
+    comprado/vendido (ver core.services.sincronizar_lancamento_compra/venda).
+    """
+    conta = obter_ou_criar_conta_corrente(request.user)
+    data_de_str, data_ate_str, data_inicio, data_fim = _periodo_conta_corrente(request)
+
+    linhas = extrato_conta_corrente(conta, data_inicio, data_fim)
+    saldo_atual = saldo_conta_corrente(conta)
+
+    contexto = {
+        "conta": conta,
+        "saldo_atual": saldo_atual,
+        "linhas": linhas,
+        "data_de_extrato": data_de_str,
+        "data_ate_extrato": data_ate_str,
+        "form_saldo_inicial": SaldoInicialContaCorrenteForm(instance=conta),
+        "form_transferencia": TransferenciaContaCorrenteForm(),
+    }
+    return render(request, "core/conta_corrente.html", contexto)
+
+
+@login_required
+@require_POST
+def conta_corrente_definir_saldo(request):
+    """Define/corrige o saldo inicial da conta corrente do usuário logado."""
+    conta = obter_ou_criar_conta_corrente(request.user)
+    form = SaldoInicialContaCorrenteForm(request.POST, instance=conta)
+    if form.is_valid():
+        form.save()
+        messages.success(request, f"Saldo inicial definido em R$ {conta.saldo_inicial}.")
+    else:
+        for erros in form.errors.values():
+            for erro in erros:
+                messages.error(request, erro)
+    return redirect("core:conta_corrente")
+
+
+@login_required
+@require_POST
+def conta_corrente_transferencia_nova(request):
+    """Registra uma transferência manual (crédito ou débito) de/para outra conta (ex: Nubank, corretora)."""
+    form = TransferenciaContaCorrenteForm(request.POST)
+    if form.is_valid():
+        registrar_transferencia_conta_corrente(
+            request.user,
+            tipo=form.cleaned_data["tipo"],
+            valor=form.cleaned_data["valor"],
+            descricao=form.cleaned_data["descricao"],
+            data=form.cleaned_data["data"],
+        )
+        messages.success(request, "Transferência registrada com sucesso.")
+    else:
+        for erros in form.errors.values():
+            for erro in erros:
+                messages.error(request, erro)
+    return redirect("core:conta_corrente")
+
+
+@login_required
+@require_POST
+def conta_corrente_lancamento_excluir(request, lancamento_id):
+    """
+    Exclui um lançamento manual (transferência) da conta corrente do usuário
+    logado. Lançamentos automáticos de compra/venda não podem ser excluídos
+    por aqui - eles somem sozinhos junto com a Operacao (on_delete=CASCADE) -
+    ver core.views.operacao_excluir.
+    """
+    lancamento = get_object_or_404(
+        LancamentoContaCorrente,
+        id=lancamento_id,
+        conta__usuario=request.user,
+        origem=LancamentoContaCorrente.ORIGEM_TRANSFERENCIA,
+    )
+    lancamento.delete()
+    messages.success(request, "Transferência excluída com sucesso.")
+    return redirect("core:conta_corrente")
+
+
+@login_required
+def conta_corrente_exportar_excel(request):
+    """Exporta o extrato da conta corrente do usuário logado (no período filtrado) como planilha .xlsx."""
+    conta = obter_ou_criar_conta_corrente(request.user)
+    _, _, data_inicio, data_fim = _periodo_conta_corrente(request)
+    linhas = extrato_conta_corrente(conta, data_inicio, data_fim)
+    conteudo = gerar_excel_extrato_conta_corrente(linhas, conta.saldo_inicial, saldo_conta_corrente(conta))
+    resposta = HttpResponse(
+        conteudo,
+        content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+    nome_arquivo = f"extrato_conta_corrente_{timezone.localdate().isoformat()}.xlsx"
+    resposta["Content-Disposition"] = f'attachment; filename="{nome_arquivo}"'
+    return resposta
+
+
+@login_required
+def conta_corrente_exportar_pdf(request):
+    """Exporta o extrato da conta corrente do usuário logado (no período filtrado) como PDF."""
+    conta = obter_ou_criar_conta_corrente(request.user)
+    nome_usuario = request.user.first_name or request.user.username
+    data_de_str, data_ate_str, data_inicio, data_fim = _periodo_conta_corrente(request)
+    linhas = extrato_conta_corrente(conta, data_inicio, data_fim)
+    periodo_label = _periodo_label(data_de_str, data_ate_str, campo="Extrato")
+    conteudo = gerar_pdf_extrato_conta_corrente(
+        linhas, conta.saldo_inicial, saldo_conta_corrente(conta), periodo_label, nome_usuario,
+    )
+    resposta = HttpResponse(conteudo, content_type="application/pdf")
+    nome_arquivo = f"extrato_conta_corrente_{timezone.localdate().isoformat()}.pdf"
+    resposta["Content-Disposition"] = f'attachment; filename="{nome_arquivo}"'
+    return resposta
+
+
 def offline_view(request):
     """
     Página exibida pelo Service Worker (PWA) quando o usuário está sem conexão
@@ -1039,13 +1202,32 @@ def tradingview(request):
 @login_required
 def detalhes_cotacoes(request):
     """
-    Grid com o retrato mais recente da cotação (preço, máxima/mínima do dia,
-    abertura, fechamento anterior, volume, valor de mercado, faixa de 52
-    semanas etc.) de cada ativo que o usuário já comprou ou vendeu. Os dados
-    só mudam quando o usuário atualiza as cotações.
+    Consulta pontual da cotação de qualquer ação, direto da API - ver
+    core.views.consultar_cotacao_avulsa, chamada via AJAX pelo formulário
+    desta tela (não depende de ter o ativo em carteira). Também oferece a
+    lista dos ativos comprados pelo usuário para escolher em vez de digitar.
     """
-    ativos = Ativo.objects.filter(operacoes__usuario=request.user).distinct()
-    return render(request, "core/detalhes_cotacoes.html", {"ativos": ativos})
+    tickers_comprados = list(
+        Ativo.objects.filter(id__in=ativos_distintos_comprados(request.user))
+        .order_by("ticker").values_list("ticker", flat=True)
+    )
+    consumo = consumo_api_ultimos_30_dias()
+    total_ativos_acompanhados = Ativo.objects.filter(operacoes__isnull=False).distinct().count()
+    contexto = {
+        "tickers_comprados": tickers_comprados,
+        "consumo_api": {
+            "usado": consumo,
+            "limite": settings.BRAPI_LIMITE_MENSAL,
+            "limite_automatico": limite_automatico_api(),
+            "limite_absoluto": limite_absoluto_api(),
+            "percentual": round(consumo / settings.BRAPI_LIMITE_MENSAL * 100, 1),
+            "automatico_pausado": not orcamento_automatico_disponivel(),
+            "projecao": projetar_consumo_mensal(total_ativos_acompanhados),
+            "total_ativos": total_ativos_acompanhados,
+            "intervalo_minutos": settings.COTACOES_INTERVALO_MINUTOS,
+        },
+    }
+    return render(request, "core/detalhes_cotacoes.html", contexto)
 
 
 @login_required
@@ -1053,15 +1235,17 @@ def detalhes_cotacoes(request):
 def consultar_cotacao_avulsa(request):
     """
     Consulta pontual (via AJAX) da cotação atual de qualquer ticker na API
-    brapi.dev - não precisa ser um ativo que o usuário já comprou. Usada pelo
-    campo de busca na página de Detalhes de Cotações. Não grava nada no banco.
+    brapi.dev, junto com o IFR/RSI calculado a partir do histórico recente
+    (ver core.services.buscar_cotacao_atual_com_historico e calcular_rsi) -
+    não precisa ser um ativo que o usuário já comprou. Usada pelo campo de
+    busca na página de Detalhes de Cotações. Não grava nada no banco.
     """
     ticker = (request.GET.get("ticker") or "").strip().upper()
     if not ticker or not TICKER_VALIDO.match(ticker):
         return JsonResponse({"ok": False, "erro": "Informe um ticker válido (ex.: PETR4)."}, status=400)
 
     try:
-        dados = buscar_cotacao_atual(ticker)
+        dados, precos_historico = buscar_cotacao_atual_com_historico(ticker)
     except BrapiError as exc:
         return JsonResponse({"ok": False, "erro": str(exc)}, status=502)
 
@@ -1075,6 +1259,9 @@ def consultar_cotacao_avulsa(request):
     instante = parse_datetime(dados.get("regularMarketTime") or "")
     if instante:
         hora_formatada = timezone.localtime(instante).strftime("%d/%m/%Y %H:%M")
+
+    rsi = calcular_rsi(precos_historico)
+    rsi_classe_chave = _classificar_rsi(rsi)
 
     return JsonResponse({
         "ok": True,
@@ -1093,6 +1280,9 @@ def consultar_cotacao_avulsa(request):
         "minima_52_semanas": dados.get("fiftyTwoWeekLow"),
         "maxima_52_semanas": dados.get("fiftyTwoWeekHigh"),
         "hora_cotacao": hora_formatada,
+        "rsi": rsi,
+        "rsi_label": RSI_LABELS[rsi_classe_chave],
+        "rsi_classe": RSI_CLASSES[rsi_classe_chave],
     })
 
 

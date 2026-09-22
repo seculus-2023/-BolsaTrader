@@ -510,3 +510,100 @@ class RegistroAtualizacaoCarteira(models.Model):
 
     def __str__(self):
         return f"{self.usuario} - {self.criado_em:%d/%m/%Y %H:%M}"
+
+
+class ConsumoApiBrapi(models.Model):
+    """
+    Contador diário de requisições feitas à API brapi.dev - base do controle
+    de orçamento mensal (ver core.services.consumo_api_ultimos_30_dias): o
+    plano tem um limite de requisições por ciclo, e estourar deixa o sistema
+    sem cotações até a renovação. Compartilhado entre todos os processos que
+    usam o mesmo banco (servidor de desenvolvimento, produção, comandos).
+    """
+
+    data = models.DateField("Data", unique=True)
+    requisicoes = models.PositiveIntegerField("Requisições", default=0)
+
+    class Meta:
+        verbose_name = "Consumo diário da API brapi.dev"
+        verbose_name_plural = "Consumo diário da API brapi.dev"
+        ordering = ["-data"]
+
+    def __str__(self):
+        return f"{self.data}: {self.requisicoes} requisição(ões)"
+
+
+class ContaCorrente(models.Model):
+    """
+    Conta corrente do usuário para acompanhar o caixa das operações de bolsa:
+    saldo inicial informado manualmente, débito automático a cada compra,
+    crédito automático a cada venda (ver core.services.
+    sincronizar_lancamento_compra/venda), e lançamentos manuais de
+    transferência de/para outras contas (ex: Nubank). Uma por usuário.
+    """
+
+    usuario = models.OneToOneField(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="conta_corrente"
+    )
+    saldo_inicial = models.DecimalField("Saldo inicial (R$)", max_digits=14, decimal_places=2, default=Decimal("0"))
+    atualizado_em = models.DateTimeField(auto_now=True)
+    criado_em = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = "Conta corrente"
+        verbose_name_plural = "Contas correntes"
+
+    def __str__(self):
+        return f"Conta corrente de {self.usuario}"
+
+
+class LancamentoContaCorrente(models.Model):
+    """
+    Um lançamento (crédito ou débito) na conta corrente do usuário. Os
+    lançamentos de COMPRA/VENDA nascem e são mantidos automaticamente em
+    sincronia com a Operacao correspondente (1 lançamento por operação de
+    compra, 1 por venda de lote) - ver core.services.
+    sincronizar_lancamento_compra/venda. Excluir a Operacao exclui o
+    lançamento junto (on_delete=CASCADE). Lançamentos de TRANSFERENCIA são
+    cadastrados manualmente pelo usuário, sem Operacao associada.
+    """
+
+    CREDITO = "CREDITO"
+    DEBITO = "DEBITO"
+    TIPO_CHOICES = [(CREDITO, "Crédito"), (DEBITO, "Débito")]
+
+    ORIGEM_COMPRA = "COMPRA"
+    ORIGEM_VENDA = "VENDA"
+    ORIGEM_TRANSFERENCIA = "TRANSFERENCIA"
+    ORIGEM_CHOICES = [
+        (ORIGEM_COMPRA, "Compra de ações"),
+        (ORIGEM_VENDA, "Venda de ações"),
+        (ORIGEM_TRANSFERENCIA, "Transferência"),
+    ]
+
+    conta = models.ForeignKey(ContaCorrente, on_delete=models.CASCADE, related_name="lancamentos")
+    tipo = models.CharField("Tipo", max_length=8, choices=TIPO_CHOICES)
+    origem = models.CharField("Origem", max_length=15, choices=ORIGEM_CHOICES)
+    valor = models.DecimalField("Valor (R$)", max_digits=14, decimal_places=2)
+    descricao = models.CharField("Descrição", max_length=255)
+    data = models.DateField("Data", default=timezone.localdate)
+    operacao = models.ForeignKey(
+        Operacao, on_delete=models.CASCADE, null=True, blank=True, related_name="lancamentos_conta_corrente",
+        help_text="Preenchido só nos lançamentos automáticos de compra/venda - nulo nas transferências manuais.",
+    )
+    criado_em = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = "Lançamento da conta corrente"
+        verbose_name_plural = "Lançamentos da conta corrente"
+        ordering = ["-data", "-criado_em"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["operacao", "origem"], condition=models.Q(operacao__isnull=False),
+                name="um_lancamento_por_operacao_e_origem",
+            ),
+        ]
+
+    def __str__(self):
+        sinal = "+" if self.tipo == self.CREDITO else "-"
+        return f"{sinal}R$ {self.valor} - {self.descricao}"

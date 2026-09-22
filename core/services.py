@@ -32,9 +32,12 @@ from django.utils.dateparse import parse_datetime
 
 logger = logging.getLogger(__name__)
 
+from django.db.models import F, Sum
+
 from .models import (
+    ConsumoApiBrapi,
     Ativo, Cotacao, Operacao, Alerta, FonteNoticia, Noticia, AcaoB3, CotacaoIndice,
-    RegistroAtualizacaoCarteira,
+    RegistroAtualizacaoCarteira, ContaCorrente, LancamentoContaCorrente,
 )
 
 
@@ -91,6 +94,32 @@ class BrapiError(Exception):
     """Erro ao consultar a API de cotações."""
 
 
+def _detalhe_limite_brapi(resposta) -> str | None:
+    """
+    A brapi.dev responde 429 tanto pra um limite passageiro (por minuto -
+    resolve tentando de novo em instantes) quanto pro limite MENSAL do
+    plano gratuito esgotado (só volta a funcionar na próxima virada do
+    ciclo, às vezes semanas depois - "tente novamente em instantes" seria
+    enganoso nesse caso). O corpo da resposta traz um "code" que distingue
+    os dois; quando é o limite mensal, monta uma mensagem com a data real
+    de renovação em vez da genérica.
+    """
+    try:
+        corpo = resposta.json()
+    except (ValueError, AttributeError):
+        return None
+
+    if corpo.get("code") != "MONTHLY_LIMIT_EXCEEDED":
+        return None
+
+    resets_at = (corpo.get("details") or {}).get("usage", {}).get("resetsAt")
+    instante = parse_datetime(resets_at) if resets_at else None
+    quando = (
+        f"em {timezone.localtime(instante).strftime('%d/%m/%Y')}" if instante else "no início do próximo ciclo"
+    )
+    return f"Limite mensal de consultas da API de cotações foi atingido - só volta a funcionar {quando}"
+
+
 def _mensagem_falha_api(exc: requests.RequestException, contexto: str) -> str:
     """
     Mensagem amigável para falhas de rede numa API externa (brapi.dev ou
@@ -103,13 +132,90 @@ def _mensagem_falha_api(exc: requests.RequestException, contexto: str) -> str:
     segurança desnecessária.
 
     Trata especificamente o limite de requisições (HTTP 429) com uma
-    mensagem própria, já que é a causa mais comum na prática (plano
-    gratuito da brapi.dev).
+    mensagem própria, distinguindo o limite mensal esgotado (ver
+    _detalhe_limite_brapi) do limite passageiro por minuto - são situações
+    bem diferentes na prática.
     """
-    status = getattr(getattr(exc, "response", None), "status_code", None)
+    resposta = getattr(exc, "response", None)
+    status = getattr(resposta, "status_code", None)
     if status == 429:
+        detalhe_mensal = _detalhe_limite_brapi(resposta) if resposta is not None else None
+        if detalhe_mensal:
+            return f"{detalhe_mensal} ({contexto})."
         return f"Limite de consultas da API atingido para {contexto}. Tente novamente em alguns minutos."
     return f"Falha ao consultar a API para {contexto}. Tente novamente em instantes."
+
+
+# --------------------------------------------------------------------------
+# Orçamento de requisições à brapi.dev
+#
+# O plano contratado tem um limite por ciclo de 30 dias (BRAPI_LIMITE_MENSAL,
+# Startup = 150.000) e estourar deixa o sistema sem cotações até a renovação.
+# Toda requisição à brapi.dev passa por _get_brapi, que conta num contador
+# diário (ConsumoApiBrapi, compartilhado entre os processos que usam o mesmo
+# banco) e trava antes de estourar.
+# --------------------------------------------------------------------------
+BRAPI_TETO_ABSOLUTO_PCT = 95  # acima disso NENHUMA requisição é feita (nem manual)
+DIAS_UTEIS_POR_CICLO = 22  # dias úteis médios em 30 dias corridos
+
+
+def consumo_api_ultimos_30_dias() -> int:
+    """Requisições feitas à brapi.dev nos últimos 30 dias (janela móvel, conservadora frente ao ciclo do plano)."""
+    inicio = timezone.localdate() - timedelta(days=29)
+    return ConsumoApiBrapi.objects.filter(data__gte=inicio).aggregate(total=Sum("requisicoes"))["total"] or 0
+
+
+def limite_automatico_api() -> int:
+    """Consumo a partir do qual o ciclo AUTOMÁTICO pausa - deixa a margem de segurança para uso manual/imprevistos."""
+    return int(settings.BRAPI_LIMITE_MENSAL * (100 - settings.BRAPI_MARGEM_SEGURANCA_PCT) / 100)
+
+
+def limite_absoluto_api() -> int:
+    """Consumo a partir do qual QUALQUER requisição é bloqueada."""
+    return int(settings.BRAPI_LIMITE_MENSAL * BRAPI_TETO_ABSOLUTO_PCT / 100)
+
+
+def orcamento_automatico_disponivel() -> bool:
+    return consumo_api_ultimos_30_dias() < limite_automatico_api()
+
+
+def projetar_consumo_mensal(qtd_ativos: int, intervalo_minutos: int | None = None) -> dict:
+    """
+    Estima quantas requisições/mês o ciclo automático consome: ciclos por dia
+    (só dentro do pregão) x requisições por ciclo (ativos / tickers por lote)
+    x dias úteis. Serve para conferir se COTACOES_INTERVALO_MINUTOS cabe no
+    orçamento antes de o consumo real mostrar o problema.
+    """
+    from datetime import datetime as _dt
+
+    intervalo = intervalo_minutos or settings.COTACOES_INTERVALO_MINUTOS
+    abertura = _dt.strptime(settings.B3_HORARIO_ABERTURA, "%H:%M")
+    fechamento = _dt.strptime(settings.B3_HORARIO_FECHAMENTO, "%H:%M")
+    minutos_pregao = max(int((fechamento - abertura).total_seconds() // 60), 0)
+    ciclos_dia = minutos_pregao // max(intervalo, 1) + 1
+    lote = max(getattr(settings, "BRAPI_TICKERS_POR_LOTE", BRAPI_TICKERS_POR_LOTE_PADRAO), 1)
+    requisicoes_por_ciclo = -(-qtd_ativos // lote) if qtd_ativos else 0  # divisão com teto
+    mensal = ciclos_dia * requisicoes_por_ciclo * DIAS_UTEIS_POR_CICLO
+    return {
+        "ciclos_dia": ciclos_dia,
+        "requisicoes_por_ciclo": requisicoes_por_ciclo,
+        "requisicoes_mes": mensal,
+        "limite_automatico": limite_automatico_api(),
+        "cabe_no_orcamento": mensal <= limite_automatico_api(),
+        "percentual_do_limite": round(mensal / settings.BRAPI_LIMITE_MENSAL * 100, 1),
+    }
+
+
+def _get_brapi(url: str, params: dict, timeout: int):
+    """requests.get para a brapi.dev com controle de orçamento: bloqueia acima do teto absoluto e conta a requisição."""
+    if consumo_api_ultimos_30_dias() >= limite_absoluto_api():
+        raise BrapiError(
+            "Orçamento mensal de requisições à API de cotações quase esgotado - consultas bloqueadas por "
+            "segurança até o consumo dos últimos 30 dias baixar."
+        )
+    dia = ConsumoApiBrapi.objects.get_or_create(data=timezone.localdate())[0]
+    ConsumoApiBrapi.objects.filter(pk=dia.pk).update(requisicoes=F("requisicoes") + 1)
+    return requests.get(url, params=params, timeout=timeout)
 
 
 def buscar_cotacao_atual(ticker: str) -> dict:
@@ -127,7 +233,7 @@ def buscar_cotacao_atual(ticker: str) -> dict:
         params["token"] = settings.BRAPI_TOKEN
 
     try:
-        resposta = requests.get(url, params=params, timeout=10)
+        resposta = _get_brapi(url, params=params, timeout=10)
         resposta.raise_for_status()
         dados = resposta.json()
     except requests.RequestException as exc:
@@ -140,35 +246,90 @@ def buscar_cotacao_atual(ticker: str) -> dict:
     return resultados[0]
 
 
+def buscar_cotacao_atual_com_historico(ticker: str, dias_historico: int = 30) -> tuple[dict, list[float]]:
+    """
+    Busca a cotação atual de um ticker JUNTO com um histórico recente de
+    fechamentos, numa única chamada à API - a brapi.dev retorna os mesmos
+    campos de "cotação agora" (regularMarketPrice etc.) e também
+    "historicalDataPrice" na mesma resposta quando os parâmetros
+    range/interval são informados, então dá pra ter os dois sem uma segunda
+    requisição.
+
+    Usado pela consulta avulsa (ver core.views.consultar_cotacao_avulsa)
+    para calcular o IFR/RSI (ver calcular_rsi) de qualquer ticker pesquisado,
+    mesmo um que o usuário não tenha em carteira, sem gastar chamada extra
+    de API.
+
+    Retorna (dados_atuais, precos_cronologicos) - o segundo item já vem do
+    fechamento mais antigo para o mais recente, pronto para calcular_rsi.
+    """
+    url = f"{settings.BRAPI_BASE_URL}/quote/{ticker.upper()}"
+    params = {"range": _range_brapi(dias_historico), "interval": "1d"}
+    if settings.BRAPI_TOKEN:
+        params["token"] = settings.BRAPI_TOKEN
+
+    try:
+        resposta = _get_brapi(url, params=params, timeout=15)
+        resposta.raise_for_status()
+        dados = resposta.json()
+    except requests.RequestException as exc:
+        raise BrapiError(_mensagem_falha_api(exc, f"o ticker {ticker}")) from exc
+
+    resultados = dados.get("results") or []
+    if not resultados:
+        raise BrapiError(f"Ticker {ticker} não encontrado na API de cotações.")
+
+    dados_atuais = resultados[0]
+
+    pontos_ordenados = []
+    vistos = set()
+    for ponto in dados_atuais.get("historicalDataPrice") or []:
+        fechamento = ponto.get("close")
+        data_convertida = _converter_data_historico(ponto.get("date"))
+        if fechamento is None or data_convertida is None or data_convertida in vistos:
+            continue
+        vistos.add(data_convertida)
+        pontos_ordenados.append((data_convertida, float(fechamento)))
+    pontos_ordenados.sort(key=lambda item: item[0])
+
+    precos_cronologicos = [preco for _, preco in pontos_ordenados]
+    return dados_atuais, precos_cronologicos
+
+
 # brapi.dev aceita vários tickers separados por vírgula no mesmo endpoint de
 # cotação avulsa (ex: /quote/PETR4,VALE3,ITUB4) - agrupar em lotes assim, em
 # vez de uma requisição HTTP por ativo, reduz drasticamente o número de
-# chamadas à API e ajuda a evitar o erro 429 ("Too Many Requests") do plano
-# gratuito quando há muitos ativos acompanhados. Tamanho conservador (a API
-# não documenta um limite máximo de tickers por chamada).
-_TAMANHO_LOTE_COTACOES = 15
+# chamadas à API e ajuda a evitar o erro 429 ("Too Many Requests"). O número
+# máximo de tickers por requisição depende do PLANO contratado na brapi.dev
+# (ex: gratuito e Startup = 10, Pro = 20 - pedir mais que o limite do plano
+# não dá 429, dá 400 "QUOTES_PER_REQUEST_EXCEEDED", e o lote inteiro falha em
+# silêncio) - configurável via BRAPI_TICKERS_POR_LOTE no .env pra acompanhar
+# o plano sem precisar mexer no código.
+BRAPI_TICKERS_POR_LOTE_PADRAO = 10
 
 
 def buscar_cotacoes_em_lote(tickers: list[str]) -> dict[str, dict]:
     """
     Busca a cotação atual de vários tickers de uma vez (ver
-    _TAMANHO_LOTE_COTACOES), em lotes de tamanho fixo. Retorna um dict
-    {TICKER: dados_da_api} só com os tickers efetivamente encontrados -
-    tickers não encontrados ou cujo lote falhou (erro de rede, 429 etc.)
-    simplesmente não aparecem no retorno; cabe ao chamador (ver
+    BRAPI_TICKERS_POR_LOTE no .env), em lotes de tamanho fixo. Retorna um
+    dict {TICKER: dados_da_api} só com os tickers efetivamente encontrados -
+    tickers não encontrados ou cujo lote falhou (erro de rede, 429, ou 400
+    quando o lote excede o limite de ativos por requisição do plano
+    contratado) simplesmente não aparecem no retorno; cabe ao chamador (ver
     atualizar_cotacoes_ativos) tratar a ausência como falha por ativo, sem
     que a falha de um lote derrube os demais lotes que deram certo.
     """
+    tamanho_lote = getattr(settings, "BRAPI_TICKERS_POR_LOTE", BRAPI_TICKERS_POR_LOTE_PADRAO) or 1
     resultado = {}
-    for inicio in range(0, len(tickers), _TAMANHO_LOTE_COTACOES):
-        lote = tickers[inicio:inicio + _TAMANHO_LOTE_COTACOES]
+    for inicio in range(0, len(tickers), tamanho_lote):
+        lote = tickers[inicio:inicio + tamanho_lote]
         url = f"{settings.BRAPI_BASE_URL}/quote/{','.join(t.upper() for t in lote)}"
         params = {}
         if settings.BRAPI_TOKEN:
             params["token"] = settings.BRAPI_TOKEN
 
         try:
-            resposta = requests.get(url, params=params, timeout=15)
+            resposta = _get_brapi(url, params=params, timeout=15)
             resposta.raise_for_status()
             dados = resposta.json()
         except requests.RequestException:
@@ -185,13 +346,16 @@ def buscar_cotacoes_em_lote(tickers: list[str]) -> dict[str, dict]:
 def atualizar_cotacoes_ativos(ativos) -> tuple[int, int]:
     """
     Atualiza a cotação de uma lista/queryset de ativos com uma (ou poucas,
-    ver _TAMANHO_LOTE_COTACOES) chamada(s) em lote à API, em vez de uma
-    requisição HTTP por ativo - usado tanto pelo botão "Atualizar cotações
-    agora" quanto pelo ciclo automático (ver
+    ver BRAPI_TICKERS_POR_LOTE no .env) chamada(s) em lote à API, em vez de
+    uma requisição HTTP por ativo - usado tanto pelo botão "Atualizar
+    cotações agora" quanto pelo ciclo automático (ver
     executar_ciclo_atualizacao_cotacoes). Retorna (atualizados, falhas).
     """
     ativos = list(ativos)
-    lote = buscar_cotacoes_em_lote([a.ticker for a in ativos])
+    try:
+        lote = buscar_cotacoes_em_lote([a.ticker for a in ativos])
+    except BrapiError:
+        lote = {}  # orçamento de requisições esgotado (ver _get_brapi) - todos contam como falha
 
     atualizados, falhas = 0, 0
     for ativo in ativos:
@@ -221,7 +385,7 @@ def buscar_maiores_variacoes(limite: int = 5) -> tuple[list[dict], list[dict]]:
     def _consultar(sort_order: str) -> list[dict]:
         params = {**params_base, "sortBy": "change", "sortOrder": sort_order}
         try:
-            resposta = requests.get(url, params=params, timeout=10)
+            resposta = _get_brapi(url, params=params, timeout=10)
             resposta.raise_for_status()
             dados = resposta.json()
         except requests.RequestException as exc:
@@ -259,7 +423,7 @@ def sincronizar_acoes_b3() -> int:
         params["token"] = settings.BRAPI_TOKEN
 
     try:
-        resposta = requests.get(url, params=params, timeout=30)
+        resposta = _get_brapi(url, params=params, timeout=30)
         resposta.raise_for_status()
         dados = resposta.json()
     except requests.RequestException as exc:
@@ -435,6 +599,14 @@ def iniciar_agendador_cotacoes_embutido() -> bool:
             _ciclo_agendador_embutido()
 
     threading.Thread(target=_loop, name="bolsatrader-cotacoes-agendador", daemon=True).start()
+    # aviso no console do servidor: o intervalo é lido do .env só na subida do
+    # processo - mudar COTACOES_INTERVALO_MINUTOS com o servidor rodando não
+    # tem efeito até reiniciar, e sem esta linha não dá pra saber qual valor
+    # está valendo de verdade.
+    print(
+        f"[BolsaTrader] Agendador de cotações ligado: a cada {intervalo} minuto(s), "
+        "só durante o pregão da B3.", flush=True,
+    )
     return True
 
 
@@ -447,6 +619,13 @@ def _ciclo_agendador_embutido() -> None:
     ser testado sem precisar controlar a thread/sleep de verdade.
     """
     if not mercado_b3_aberto():
+        return
+    if not orcamento_automatico_disponivel():
+        logger.warning(
+            "Atualização automática de cotações pausada: %s requisições nos últimos 30 dias, acima do limite "
+            "automático de %s (margem de segurança do plano).",
+            consumo_api_ultimos_30_dias(), limite_automatico_api(),
+        )
         return
     try:
         resultado = executar_ciclo_atualizacao_cotacoes()
@@ -526,7 +705,7 @@ def buscar_historico_precos(ticker: str, dias: int = 180) -> list[dict]:
         params["token"] = settings.BRAPI_TOKEN
 
     try:
-        resposta = requests.get(url, params=params, timeout=30)
+        resposta = _get_brapi(url, params=params, timeout=30)
         resposta.raise_for_status()
         dados = resposta.json()
     except requests.RequestException as exc:
@@ -813,6 +992,7 @@ class Posicao:
     quantidade_reservada: int = 0
     reserva_do_robo: bool = False
     reserva_operacao_ids: list[int] = field(default_factory=list)
+    lotes_compra: list = field(default_factory=list)  # lotes (Operacao COMPRA) com saldo > 0 que compõem a posição
 
     @property
     def situacao(self) -> str:
@@ -933,6 +1113,7 @@ def calcular_posicoes(usuario) -> list[Posicao]:
         "custo_reservado": Decimal("0"),
         "reserva_do_robo": False,
         "reserva_operacao_ids": [],
+        "lotes_compra": [],
     })
 
     for op in operacoes:
@@ -946,6 +1127,7 @@ def calcular_posicoes(usuario) -> list[Posicao]:
                     item["data_abertura"] = op.data_operacao
                 item["quantidade"] += saldo_lote
                 item["custo_total"] += saldo_lote * op.preco_unitario
+                item["lotes_compra"].append(op)
         else:  # RESERVAR: intenção de compra futura (no máximo 1 unidade), não altera a posição real
             item["quantidade_reservada"] += op.quantidade
             item["custo_reservado"] += op.valor_total
@@ -991,6 +1173,7 @@ def calcular_posicoes(usuario) -> list[Posicao]:
             quantidade_reservada=item["quantidade_reservada"],
             reserva_do_robo=item["reserva_do_robo"],
             reserva_operacao_ids=item["reserva_operacao_ids"],
+            lotes_compra=item["lotes_compra"],
         )
 
         ultima_cotacao = ativo.ultima_cotacao()
@@ -2965,3 +3148,241 @@ def atualizar_noticias_fonte(fonte: FonteNoticia, limite: int = 15) -> list[int]
     fonte.noticias.exclude(url__in=urls_atuais).delete()
 
     return novas_ids
+
+
+# --------------------------------------------------------------------------
+# Conta corrente (caixa das operações de bolsa)
+# --------------------------------------------------------------------------
+def obter_ou_criar_conta_corrente(usuario) -> ContaCorrente:
+    """Cada usuário tem no máximo uma conta corrente - cria na primeira vez que for preciso (saldo inicial R$ 0)."""
+    conta, _ = ContaCorrente.objects.get_or_create(usuario=usuario)
+    return conta
+
+
+def saldo_conta_corrente(conta: ContaCorrente) -> Decimal:
+    """Saldo atual = saldo inicial + soma dos créditos - soma dos débitos de todos os lançamentos."""
+    total_creditos = conta.lancamentos.filter(
+        tipo=LancamentoContaCorrente.CREDITO
+    ).aggregate(total=Sum("valor"))["total"] or Decimal("0")
+    total_debitos = conta.lancamentos.filter(
+        tipo=LancamentoContaCorrente.DEBITO
+    ).aggregate(total=Sum("valor"))["total"] or Decimal("0")
+    return conta.saldo_inicial + total_creditos - total_debitos
+
+
+def sincronizar_lancamento_compra(operacao: Operacao) -> None:
+    """
+    Cria/atualiza o lançamento de DÉBITO (compra) da conta corrente do usuário
+    com o valor/quantidade/data atuais da Operacao - chamar sempre depois de
+    criar, efetivar (reserva -> compra) ou editar uma compra. Reservas
+    (Operacao.RESERVAR) não geram lançamento, já que ainda não é dinheiro
+    comprometido de fato.
+    """
+    if operacao.tipo != Operacao.COMPRA:
+        return
+
+    conta = obter_ou_criar_conta_corrente(operacao.usuario)
+    LancamentoContaCorrente.objects.update_or_create(
+        operacao=operacao,
+        origem=LancamentoContaCorrente.ORIGEM_COMPRA,
+        defaults={
+            "conta": conta,
+            "tipo": LancamentoContaCorrente.DEBITO,
+            "valor": operacao.valor_total,
+            "descricao": f"Compra de {operacao.quantidade}x {operacao.ativo.ticker}",
+            "data": operacao.data_operacao,
+        },
+    )
+
+
+def sincronizar_lancamento_venda(operacao: Operacao) -> None:
+    """
+    Cria/atualiza o lançamento de CRÉDITO (venda) da conta corrente do usuário
+    com a venda (total ou parcial) já registrada neste lote de compra - chamar
+    sempre depois de registrar ou corrigir uma venda (core.views.
+    operacao_vender). Usa o valor líquido (já descontada a corretora), que é o
+    que realmente entra na conta. Sem venda registrada (quantidade_vendida
+    zerada, ex: venda desfeita ao editar o lote), remove o lançamento se
+    existir.
+    """
+    if not operacao.quantidade_vendida or operacao.preco_venda is None:
+        LancamentoContaCorrente.objects.filter(
+            operacao=operacao, origem=LancamentoContaCorrente.ORIGEM_VENDA
+        ).delete()
+        return
+
+    conta = obter_ou_criar_conta_corrente(operacao.usuario)
+    valor = operacao.valor_liquido_vendido
+    LancamentoContaCorrente.objects.update_or_create(
+        operacao=operacao,
+        origem=LancamentoContaCorrente.ORIGEM_VENDA,
+        defaults={
+            "conta": conta,
+            "tipo": LancamentoContaCorrente.CREDITO,
+            "valor": valor,
+            "descricao": f"Venda de {operacao.quantidade_vendida}x {operacao.ativo.ticker}",
+            "data": operacao.data_venda or timezone.localdate(),
+        },
+    )
+
+
+def registrar_transferencia_conta_corrente(
+    usuario, tipo: str, valor: Decimal, descricao: str, data: date | None = None
+) -> LancamentoContaCorrente:
+    """Registra uma transferência manual (crédito ou débito) de/para outra conta (ex: Nubank, corretora)."""
+    conta = obter_ou_criar_conta_corrente(usuario)
+    return LancamentoContaCorrente.objects.create(
+        conta=conta,
+        tipo=tipo,
+        origem=LancamentoContaCorrente.ORIGEM_TRANSFERENCIA,
+        valor=valor,
+        descricao=descricao,
+        data=data or timezone.localdate(),
+    )
+
+
+def extrato_conta_corrente(
+    conta: ContaCorrente, data_inicio: date | None = None, data_fim: date | None = None
+) -> list[dict]:
+    """
+    Lançamentos da conta corrente no período informado (todos, se nenhuma
+    data for passada), com o saldo acumulado (saldo_apos) já calculado a
+    partir do saldo inicial mais tudo que aconteceu antes do período - assim
+    o extrato bate com o saldo real da conta mesmo filtrando só uma fatia do
+    tempo. Devolvido do lançamento mais recente para o mais antigo, como as
+    outras grids do sistema.
+    """
+    todos = conta.lancamentos.select_related("operacao__ativo").order_by("data", "criado_em")
+    saldo = conta.saldo_inicial
+    linhas = []
+    for lancamento in todos:
+        sinal = 1 if lancamento.tipo == LancamentoContaCorrente.CREDITO else -1
+
+        if data_inicio and lancamento.data < data_inicio:
+            saldo += sinal * lancamento.valor
+            continue
+        if data_fim and lancamento.data > data_fim:
+            continue
+
+        saldo += sinal * lancamento.valor
+        linhas.append({"lancamento": lancamento, "saldo_apos": saldo})
+
+    linhas.reverse()
+    return linhas
+
+
+COLUNAS_EXTRATO_CONTA_CORRENTE = ["Data", "Tipo", "Origem", "Descrição", "Valor (R$)", "Saldo após (R$)"]
+
+
+def _linha_extrato_conta_corrente(item: dict) -> list:
+    lancamento = item["lancamento"]
+    sinal = 1 if lancamento.tipo == LancamentoContaCorrente.CREDITO else -1
+    return [
+        lancamento.data,
+        lancamento.get_tipo_display(),
+        lancamento.get_origem_display(),
+        lancamento.descricao,
+        float(sinal * lancamento.valor),
+        float(item["saldo_apos"]),
+    ]
+
+
+def gerar_excel_extrato_conta_corrente(linhas: list[dict], saldo_inicial: Decimal, saldo_atual: Decimal) -> bytes:
+    """Gera uma planilha .xlsx com o extrato da conta corrente do usuário, pronta para download."""
+    import io
+
+    from openpyxl import Workbook
+    from openpyxl.styles import Alignment, Font, PatternFill
+    from openpyxl.utils import get_column_letter
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Extrato conta corrente"
+
+    ws.append(["Extrato da Conta Corrente"])
+    ws.append([f"Gerado em {timezone.localtime().strftime('%d/%m/%Y %H:%M')}"])
+    ws.append([f"Saldo inicial: R$ {saldo_inicial}", f"Saldo atual: R$ {saldo_atual}"])
+    ws.append([])
+    ws.append(COLUNAS_EXTRATO_CONTA_CORRENTE)
+    for celula in ws[5]:
+        celula.font = Font(bold=True, color="FFFFFF")
+        celula.fill = PatternFill("solid", fgColor="0D1526")
+        celula.alignment = Alignment(horizontal="center")
+
+    for item in linhas:
+        linha = _linha_extrato_conta_corrente(item)
+        linha[0] = linha[0].strftime("%d/%m/%Y")
+        ws.append(linha)
+
+    for indice in range(1, len(COLUNAS_EXTRATO_CONTA_CORRENTE) + 1):
+        ws.column_dimensions[get_column_letter(indice)].width = 22
+    ws.freeze_panes = "A6"
+
+    buffer = io.BytesIO()
+    wb.save(buffer)
+    return buffer.getvalue()
+
+
+def gerar_pdf_extrato_conta_corrente(
+    linhas: list[dict], saldo_inicial: Decimal, saldo_atual: Decimal, periodo_label: str, nome_usuario: str
+) -> bytes:
+    """Gera um PDF com o extrato da conta corrente do usuário, pronto para download."""
+    import io
+    from xml.sax.saxutils import escape
+
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import A4, landscape
+    from reportlab.lib.styles import getSampleStyleSheet
+    from reportlab.lib.units import cm
+    from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+
+    nome_usuario = escape(nome_usuario)
+    periodo_label = escape(periodo_label)
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(
+        buffer, pagesize=landscape(A4),
+        topMargin=1.5 * cm, bottomMargin=1.5 * cm, leftMargin=1.2 * cm, rightMargin=1.2 * cm,
+    )
+    estilos = getSampleStyleSheet()
+
+    elementos = [
+        Paragraph("BolsaTrader - Extrato da Conta Corrente", estilos["Title"]),
+        Paragraph(
+            f"{nome_usuario} - gerado em {timezone.localtime().strftime('%d/%m/%Y %H:%M')}",
+            estilos["Normal"],
+        ),
+        Paragraph(periodo_label, estilos["Normal"]),
+        Paragraph(
+            f"Saldo inicial: R$ {saldo_inicial:.2f} — Saldo atual: R$ {saldo_atual:.2f}",
+            estilos["Normal"],
+        ),
+        Spacer(1, 0.5 * cm),
+    ]
+
+    if not linhas:
+        elementos.append(Paragraph("Nenhum lançamento no período selecionado.", estilos["Normal"]))
+    else:
+        dados = [COLUNAS_EXTRATO_CONTA_CORRENTE]
+        for item in linhas:
+            linha = _linha_extrato_conta_corrente(item)
+            dados.append([
+                linha[0].strftime("%d/%m/%Y"), linha[1], linha[2], linha[3],
+                f"{linha[4]:.2f}", f"{linha[5]:.2f}",
+            ])
+
+        tabela = Table(dados, repeatRows=1)
+        tabela.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#0D1526")),
+            ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+            ("FONTSIZE", (0, 0), (-1, -1), 8),
+            ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#cccccc")),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#eef2f7")]),
+            ("ALIGN", (1, 0), (-1, -1), "CENTER"),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("TOPPADDING", (0, 0), (-1, -1), 5),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+        ]))
+        elementos.append(tabela)
+
+    doc.build(elementos)
+    return buffer.getvalue()

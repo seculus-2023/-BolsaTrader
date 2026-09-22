@@ -115,6 +115,20 @@ a:hover { color: var(--neon-magenta); }
     position: relative;
 }
 
+/* Nome do usuário logado, sempre visível no cabeçalho de todas as telas. */
+.nav-usuario-logado {
+    display: inline-block;
+    margin-right: 0.6rem;
+    padding: 0.3rem 0.8rem;
+    border: 1px solid var(--glass-border);
+    border-radius: 999px;
+    background: rgba(0, 240, 255, 0.08);
+    color: var(--neon-cyan);
+    font-weight: 700;
+    font-size: 0.9rem;
+    white-space: nowrap;
+}
+
 .navbar-futurista nav a:hover, .navbar-futurista nav a.active,
 .navbar-futurista .nav-user .link-botao:hover {
     color: var(--neon-cyan);

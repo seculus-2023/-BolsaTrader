@@ -86,6 +86,7 @@ from .services import (
     extrato_conta_corrente,
     gerar_excel_extrato_conta_corrente,
     gerar_pdf_extrato_conta_corrente,
+    escanear_carteira,
 )
 
 TICKER_VALIDO = re.compile(r"^[A-Z0-9]{1,15}$")
@@ -561,6 +562,19 @@ def posicoes_exportar_pdf(request):
     nome_arquivo = f"posicoes_{timezone.localdate().isoformat()}.pdf"
     resposta["Content-Disposition"] = f'attachment; filename="{nome_arquivo}"'
     return resposta
+
+
+@login_required
+def scanner_tecnico(request):
+    """
+    Scanner Técnico: combina IFR, médias móveis, MACD, volume, volatilidade e
+    tendência de curto prazo de cada ação realmente comprada (saldo > 0) num
+    só veredito por ativo - deixando explícito quando os indicadores estão
+    conflitantes entre si, em vez de fingir uma previsão certa de alta ou
+    baixa (ver core.services.escanear_carteira).
+    """
+    resultados = escanear_carteira(request.user)
+    return render(request, "core/scanner_tecnico.html", {"resultados": resultados})
 
 
 @login_required

@@ -302,6 +302,10 @@ class Cotacao(models.Model):
     variacao_dia_pct = models.DecimalField(
         "Variação no dia (%)", max_digits=6, decimal_places=2, null=True, blank=True
     )
+    volume = models.BigIntegerField(
+        "Volume negociado", null=True, blank=True,
+        help_text="Vem de graça no mesmo retorno da API que já busca o preço - nulo em registros salvos antes desse campo existir.",
+    )
     criado_em = models.DateTimeField(auto_now_add=True)
 
     class Meta:

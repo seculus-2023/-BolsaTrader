@@ -11,6 +11,13 @@ Sem histórico suficiente, RSI (14 pregões) e MACD (26+9=35 pregões) ficam
 Uso:
     python manage.py backfill_cotacoes
     python manage.py backfill_cotacoes --dias 365 --minimo 40
+    python manage.py backfill_cotacoes --todos   # ver --todos abaixo
+
+--todos processa TODOS os ativos, mesmo os que já têm histórico suficiente -
+útil só uma vez para completar o campo volume (ver Scanner Técnico,
+core.services.analisar_volume_precos) em cotações antigas gravadas antes
+desse campo existir; backfill_historico_cotacoes não sobrescreve preço, só
+completa o volume que estiver faltando.
 """
 
 from django.core.management.base import BaseCommand
@@ -37,18 +44,25 @@ class Command(BaseCommand):
             help=f"Só processa ativos com menos que esta quantidade de cotações já salvas "
             f"(padrão: {MINIMO_PADRAO_PREGOES}, o mínimo que o MACD exige).",
         )
+        parser.add_argument(
+            "--todos", action="store_true",
+            help="Processa todos os ativos, ignorando --minimo - use uma vez para completar o "
+            "campo volume em cotações antigas (ver Scanner Técnico).",
+        )
 
     def handle(self, *args, **options):
         dias = options["dias"]
         minimo = options["minimo"]
+        todos = options["todos"]
 
-        ativos = (
-            Ativo.objects.annotate(total_cotacoes=Count("cotacoes"))
-            .filter(total_cotacoes__lt=minimo)
-            .order_by("ticker")
-        )
+        ativos = Ativo.objects.annotate(total_cotacoes=Count("cotacoes")).order_by("ticker")
+        if not todos:
+            ativos = ativos.filter(total_cotacoes__lt=minimo)
         total = ativos.count()
-        self.stdout.write(f"{total} ativo(s) com menos de {minimo} cotação(ões) registrada(s)...")
+        if todos:
+            self.stdout.write(f"{total} ativo(s) no total (--todos, ignorando --minimo)...")
+        else:
+            self.stdout.write(f"{total} ativo(s) com menos de {minimo} cotação(ões) registrada(s)...")
 
         atualizados, falhas, total_gravadas = 0, 0, 0
         for ativo in ativos:

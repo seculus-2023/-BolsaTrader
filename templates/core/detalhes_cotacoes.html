@@ -131,6 +131,40 @@
     </p>
 </div>
 
+<div class="card-glass" style="margin: 1.5rem 0 2rem;">
+    <h3 style="margin-top: 0;">Sinais de alta e de baixa (checklist de confirmação)</h3>
+    <p style="color: var(--text-dim);">
+        Um conjunto de critérios técnicos que reforçam a confiança num sinal quando aparecem juntos &mdash; quanto
+        mais critérios batem ao mesmo tempo, mais forte a confirmação. Nenhum critério isolado garante nada.
+    </p>
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 1.2rem; margin-top: 1rem;">
+        <div style="border: 1px solid rgba(57, 255, 143, .35); border-radius: 12px; padding: 1rem 1.2rem; background: rgba(57, 255, 143, .05);">
+            <h4 style="margin: 0 0 .6rem; color: var(--neon-green);">📈 Sinal de alta</h4>
+            <ul style="margin: 0; padding-left: 1.2rem; color: var(--text-dim); font-size: .92rem;">
+                <li style="margin-bottom: .35rem;">IFR (RSI, 14 períodos) &lt; 35</li>
+                <li style="margin-bottom: .35rem;">Preço acima da média móvel de 21 dias</li>
+                <li style="margin-bottom: .35rem;">Volume acima da média</li>
+                <li style="margin-bottom: .35rem;">MACD positivo</li>
+                <li>Tendência de curto prazo positiva</li>
+            </ul>
+        </div>
+        <div style="border: 1px solid rgba(255, 56, 96, .35); border-radius: 12px; padding: 1rem 1.2rem; background: rgba(255, 56, 96, .05);">
+            <h4 style="margin: 0 0 .6rem; color: var(--neon-red);">📉 Sinal de baixa</h4>
+            <ul style="margin: 0; padding-left: 1.2rem; color: var(--text-dim); font-size: .92rem;">
+                <li style="margin-bottom: .35rem;">IFR (RSI, 14 períodos) &gt; 65</li>
+                <li style="margin-bottom: .35rem;">Preço abaixo da média móvel de 21 dias</li>
+                <li style="margin-bottom: .35rem;">Volume aumentando na queda</li>
+                <li style="margin-bottom: .35rem;">MACD negativo</li>
+                <li>Tendência de curto prazo negativa</li>
+            </ul>
+        </div>
+    </div>
+    <p style="color: var(--text-dim); font-size: .8rem; margin-top: 1rem; margin-bottom: 0;">
+        Quanto mais critérios apontarem na mesma direção ao mesmo tempo, mais forte a confirmação do sinal &mdash;
+        são apoio à decisão, <strong>não constituem recomendação de investimento</strong>.
+    </p>
+</div>
+
 <script>
     (function () {
         var form = document.getElementById("form-consulta-avulsa");

@@ -46,10 +46,14 @@ from .services import (
     buscar_cotacoes_em_lote, atualizar_cotacoes_ativos, buscar_cotacao_atual_com_historico,
     _ciclo_agendador_embutido, _mensagem_falha_api,
     buscar_cotacao_atual,
+    calcular_rsi,
     BrapiError,
     obter_ou_criar_conta_corrente, saldo_conta_corrente, sincronizar_lancamento_compra,
     sincronizar_lancamento_venda, registrar_transferencia_conta_corrente, extrato_conta_corrente,
     gerar_excel_extrato_conta_corrente, gerar_pdf_extrato_conta_corrente,
+    calcular_medias_moveis, _classificar_medias_moveis, analisar_volume_precos,
+    _classificar_volatilidade, _veredito_scanner, escanear_ativo_precos, escanear_ativo,
+    escanear_carteira,
 )
 
 
@@ -927,7 +931,7 @@ class BrapiIntegracaoTests(TestCase):
         from .services import atualizar_cotacao_diaria
 
         ativo = Ativo.objects.create(ticker="B3SA3")
-        atualizar_cotacao_diaria(ativo, dados_api=self._payload_completo())
+        cotacao = atualizar_cotacao_diaria(ativo, dados_api=self._payload_completo())
         ativo.refresh_from_db()
 
         self.assertEqual(ativo.nome_longo, "B3 SA - Brasil, Bolsa, Balcao")
@@ -938,6 +942,9 @@ class BrapiIntegracaoTests(TestCase):
         self.assertEqual(ativo.fechamento_anterior, Decimal("14.54"))
         self.assertEqual(ativo.variacao_dia_valor, Decimal("0.13"))
         self.assertEqual(ativo.volume, 5689600)
+        # o mesmo volume também fica no histórico diário (Cotacao.volume) -
+        # ver Scanner Técnico, core.services.analisar_volume_precos.
+        self.assertEqual(cotacao.volume, 5689600)
         self.assertEqual(ativo.valor_mercado, Decimal("70010885753.00"))
         self.assertEqual(ativo.minima_52_semanas, Decimal("12.12"))
         self.assertEqual(ativo.maxima_52_semanas, Decimal("20.33"))
@@ -1490,6 +1497,22 @@ class DetalhesCotacoesTests(TestCase):
         self.assertContains(resposta, "Divergência altista")
         self.assertContains(resposta, "Divergência baixista")
 
+    def test_pagina_mostra_checklist_de_sinais_de_alta_e_baixa(self):
+        resposta = self.client.get(reverse("core:detalhes_cotacoes"))
+        self.assertContains(resposta, "Sinais de alta e de baixa")
+        self.assertContains(resposta, "Sinal de alta")
+        self.assertContains(resposta, "IFR (RSI, 14 períodos) &lt; 35")
+        self.assertContains(resposta, "Preço acima da média móvel de 21 dias")
+        self.assertContains(resposta, "Volume acima da média")
+        self.assertContains(resposta, "MACD positivo")
+        self.assertContains(resposta, "Tendência de curto prazo positiva")
+        self.assertContains(resposta, "Sinal de baixa")
+        self.assertContains(resposta, "IFR (RSI, 14 períodos) &gt; 65")
+        self.assertContains(resposta, "Preço abaixo da média móvel de 21 dias")
+        self.assertContains(resposta, "Volume aumentando na queda")
+        self.assertContains(resposta, "MACD negativo")
+        self.assertContains(resposta, "Tendência de curto prazo negativa")
+
     def test_pagina_nao_mostra_mais_a_grid_de_ativos_acompanhados(self):
         # a grid antiga (um card por ativo em carteira, com botão "Atualizar
         # cotações agora") foi removida - só sobra a consulta avulsa.
@@ -1869,6 +1892,61 @@ class BuscarHistoricoPrecosTests(TestCase):
         mock_get.return_value.json = lambda: {"results": [{"historicalDataPrice": []}]}
         self.assertEqual(backfill_historico_cotacoes(self.ativo), 0)
 
+    @patch("core.services.requests.get")
+    def test_historico_traz_o_volume_de_cada_ponto_sem_custo_extra(self, mock_get):
+        base = int(datetime(2026, 9, 1, tzinfo=dt_timezone.utc).timestamp())
+        mock_get.return_value.raise_for_status = lambda: None
+        mock_get.return_value.json = lambda: {"results": [{"historicalDataPrice": [
+            {"date": base, "close": 30.0, "volume": 123456},
+        ]}]}
+        historico = buscar_historico_precos("PETR4", dias=30)
+        self.assertEqual(historico[0]["volume"], 123456)
+
+    @patch("core.services.requests.get")
+    def test_backfill_grava_volume_nas_cotacoes_novas(self, mock_get):
+        base = int(datetime(2026, 9, 1, tzinfo=dt_timezone.utc).timestamp())
+        mock_get.return_value.raise_for_status = lambda: None
+        mock_get.return_value.json = lambda: {"results": [{"historicalDataPrice": [
+            {"date": base, "close": 30.0, "volume": 111},
+        ]}]}
+        backfill_historico_cotacoes(self.ativo)
+        cotacao = Cotacao.objects.get(ativo=self.ativo, data=date(2026, 9, 1))
+        self.assertEqual(cotacao.volume, 111)
+
+    @patch("core.services.requests.get")
+    def test_backfill_completa_volume_faltante_em_cotacao_ja_existente_sem_mexer_no_preco(self, mock_get):
+        # simula uma cotação gravada antes do campo volume existir (ou antes
+        # de ele ter sido preenchido) - rodar o backfill de novo (ex: comando
+        # "backfill_cotacoes --todos") deve completar só o volume, mantendo o
+        # preço já salvo intacto.
+        Cotacao.objects.create(ativo=self.ativo, data=date(2026, 9, 1), preco_fechamento=Decimal("99.00"), volume=None)
+        base = int(datetime(2026, 9, 1, tzinfo=dt_timezone.utc).timestamp())
+        mock_get.return_value.raise_for_status = lambda: None
+        mock_get.return_value.json = lambda: {"results": [{"historicalDataPrice": [
+            {"date": base, "close": 30.0, "volume": 555},
+        ]}]}
+
+        gravadas = backfill_historico_cotacoes(self.ativo)
+
+        self.assertEqual(gravadas, 0)  # a data já existia - não conta como "nova"
+        cotacao = Cotacao.objects.get(ativo=self.ativo, data=date(2026, 9, 1))
+        self.assertEqual(cotacao.volume, 555)  # completado
+        self.assertEqual(cotacao.preco_fechamento, Decimal("99.00"))  # preço não foi tocado
+
+    @patch("core.services.requests.get")
+    def test_backfill_nao_sobrescreve_volume_ja_preenchido(self, mock_get):
+        Cotacao.objects.create(ativo=self.ativo, data=date(2026, 9, 1), preco_fechamento=Decimal("99.00"), volume=777)
+        base = int(datetime(2026, 9, 1, tzinfo=dt_timezone.utc).timestamp())
+        mock_get.return_value.raise_for_status = lambda: None
+        mock_get.return_value.json = lambda: {"results": [{"historicalDataPrice": [
+            {"date": base, "close": 30.0, "volume": 555},
+        ]}]}
+
+        backfill_historico_cotacoes(self.ativo)
+
+        cotacao = Cotacao.objects.get(ativo=self.ativo, data=date(2026, 9, 1))
+        self.assertEqual(cotacao.volume, 777)
+
 
 class BackfillAoRegistrarOperacaoTests(TestCase):
     """A primeira compra de um ativo novo aciona o backfill automático (ver core.views.operacao_nova)."""
@@ -2175,6 +2253,28 @@ class ComandoBackfillCotacoesTests(TestCase):
         self.assertEqual(Cotacao.objects.filter(ativo=ativo_pouco).count(), 2)
         mock_get.assert_called_once()  # só ativo_pouco foi processado - ativo_completo já tem 40 >= 35
         self.assertIn("1 ativo(s) com menos de 35", saida.getvalue())
+
+    @patch("core.services.requests.get")
+    def test_todos_processa_mesmo_ativo_com_historico_completo(self, mock_get):
+        # --todos serve pra completar o campo volume em cotações antigas de
+        # ativos que já têm histórico suficiente (ver core.services.
+        # backfill_historico_cotacoes) - sem ele, esses ativos nunca seriam
+        # reprocessados pelo comando (ficam sempre abaixo do --minimo).
+        ativo_completo = Ativo.objects.create(ticker="VALE3")
+        hoje = date.today()
+        for i in range(40):
+            Cotacao.objects.create(
+                ativo=ativo_completo, data=hoje - timedelta(days=40 - i), preco_fechamento=Decimal("10.00")
+            )
+
+        mock_get.return_value.raise_for_status = lambda: None
+        mock_get.return_value.json = lambda: {"results": [{"historicalDataPrice": []}]}
+
+        saida = StringIO()
+        call_command("backfill_cotacoes", "--todos", stdout=saida)
+
+        mock_get.assert_called_once()
+        self.assertIn("no total (--todos", saida.getvalue())
 
 
 class ConcentracaoSetorTests(TestCase):
@@ -3169,3 +3269,244 @@ class ContaCorrenteViewsTests(TestCase):
     def test_menu_tem_link_para_conta_corrente(self):
         resposta = self.client.get(reverse("core:menu"))
         self.assertContains(resposta, reverse("core:conta_corrente"))
+
+
+class ScannerTecnicoServicosTests(TestCase):
+    """core.services: calcular_medias_moveis, analisar_volume_precos, _classificar_volatilidade, _veredito_scanner."""
+
+    def test_medias_moveis_none_com_historico_insuficiente(self):
+        self.assertIsNone(calcular_medias_moveis(list(range(1, 21))))  # 20 preços, precisa de 21
+
+    def test_medias_moveis_alinhamento_de_alta(self):
+        precos = list(range(1, 22))  # 1..21, sequência ascendente
+        info = calcular_medias_moveis(precos)
+        self.assertEqual(info["media_longa"], 11.0)
+        self.assertEqual(info["media_curta"], 17.0)  # média dos últimos 9 (13..21)
+        self.assertTrue(info["preco_acima_da_longa"])
+        self.assertTrue(info["curta_acima_da_longa"])
+        self.assertEqual(_classificar_medias_moveis(info), "ALTA")
+
+    def test_medias_moveis_alinhamento_de_baixa(self):
+        precos = list(range(21, 0, -1))  # 21..1, sequência descendente
+        info = calcular_medias_moveis(precos)
+        self.assertTrue(info["preco_abaixo_da_longa"])
+        self.assertTrue(info["curta_abaixo_da_longa"])
+        self.assertEqual(_classificar_medias_moveis(info), "BAIXA")
+
+    def test_medias_moveis_sinal_misto_fica_neutro(self):
+        # sobe forte e cai bruscamente no último dia: preço atual fica abaixo
+        # da longa, mas a curta (ainda "puxada" pela alta recente) fica acima
+        # dela - as duas partes do indicador discordam entre si.
+        precos = [10] * 12 + [30] * 8 + [5]
+        info = calcular_medias_moveis(precos)
+        self.assertTrue(info["preco_abaixo_da_longa"])
+        self.assertTrue(info["curta_acima_da_longa"])
+        self.assertEqual(_classificar_medias_moveis(info), "NEUTRO")
+
+    def test_medias_moveis_none_classificado_como_dados_insuficientes(self):
+        self.assertEqual(_classificar_medias_moveis(None), "DADOS_INSUFICIENTES")
+
+    def test_volume_dados_insuficientes_com_poucos_pontos(self):
+        volumes = [None] * 5 + [100]
+        precos = list(range(6))
+        info = analisar_volume_precos(volumes, precos)
+        self.assertEqual(info["classificacao"], "DADOS_INSUFICIENTES")
+
+    def test_volume_acima_da_media_confirmando_alta(self):
+        volumes = [100, 100, 100, 100, 100, 200]
+        precos = [10, 10, 10, 10, 10, 11]  # subiu no último dia
+        info = analisar_volume_precos(volumes, precos)
+        self.assertEqual(info["classificacao"], "ALTA")
+        self.assertEqual(info["volume_atual"], 200)
+        self.assertEqual(info["media_volume"], 100)
+
+    def test_volume_aumentando_na_queda(self):
+        volumes = [100, 100, 100, 100, 100, 200]
+        precos = [10, 10, 10, 10, 10, 9]  # caiu no último dia
+        info = analisar_volume_precos(volumes, precos)
+        self.assertEqual(info["classificacao"], "BAIXA")
+
+    def test_volume_normal_fica_neutro(self):
+        volumes = [100] * 6
+        precos = [10, 10, 10, 10, 10, 11]
+        info = analisar_volume_precos(volumes, precos)
+        self.assertEqual(info["classificacao"], "NEUTRO")
+
+    def test_classificar_volatilidade(self):
+        self.assertEqual(_classificar_volatilidade(None), "DADOS_INSUFICIENTES")
+        self.assertEqual(_classificar_volatilidade(50.0), "ALTA")
+        self.assertEqual(_classificar_volatilidade(10.0), "BAIXA")
+        self.assertEqual(_classificar_volatilidade(25.0), "MODERADA")
+
+    def test_veredito_conflitante_quando_ha_alta_e_baixa_ao_mesmo_tempo(self):
+        self.assertEqual(
+            _veredito_scanner(["ALTA", "BAIXA", "NEUTRO", "NEUTRO", "NEUTRO"]), "CONFLITANTE"
+        )
+
+    def test_veredito_predominio_alta_ignora_neutros_e_sem_dados(self):
+        self.assertEqual(
+            _veredito_scanner(["ALTA", "NEUTRO", "NEUTRO", "DADOS_INSUFICIENTES", "NEUTRO"]),
+            "PREDOMINIO_ALTA",
+        )
+
+    def test_veredito_predominio_baixa(self):
+        self.assertEqual(
+            _veredito_scanner(["BAIXA", "BAIXA", "NEUTRO", "DADOS_INSUFICIENTES", "NEUTRO"]),
+            "PREDOMINIO_BAIXA",
+        )
+
+    def test_veredito_neutro_quando_nenhum_indicador_aponta_direcao(self):
+        self.assertEqual(_veredito_scanner(["NEUTRO"] * 5), "NEUTRO")
+
+    def test_veredito_dados_insuficientes_só_quando_todos_sem_dados(self):
+        self.assertEqual(_veredito_scanner(["DADOS_INSUFICIENTES"] * 5), "DADOS_INSUFICIENTES")
+        # um único indicador com dado real já basta pra não ser "sem dados"
+        self.assertEqual(
+            _veredito_scanner(["ALTA"] + ["DADOS_INSUFICIENTES"] * 4), "PREDOMINIO_ALTA"
+        )
+
+
+class EscanearAtivoTests(TestCase):
+    """core.services.escanear_ativo_precos / escanear_ativo / escanear_carteira."""
+
+    def test_indicadores_discordantes_geram_veredito_conflitante(self):
+        # série longa e puramente decrescente: o IFR fica sobrevendido (vota
+        # ALTA, é contrário) enquanto médias móveis e tendência de curto prazo
+        # seguem o movimento e votam BAIXA - um caso real de discordância.
+        precos = [float(v) for v in range(100, 60, -1)]  # 100, 99, ..., 61 (40 pregões)
+
+        resultado = escanear_ativo_precos(precos)
+
+        chaves = {item["nome"]: item["chave"] for item in resultado["indicadores"]}
+        self.assertEqual(chaves["IFR (RSI)"], "ALTA")
+        self.assertEqual(chaves["Médias móveis"], "BAIXA")
+        self.assertEqual(chaves["Tendência de curto prazo"], "BAIXA")
+        self.assertEqual(resultado["veredito"], "CONFLITANTE")
+        self.assertEqual(resultado["veredito_label"], "Indicadores conflitantes - sem sinal claro")
+        self.assertGreater(resultado["votos_alta"], 0)
+        self.assertGreater(resultado["votos_baixa"], 0)
+
+    def test_indicadores_concordantes_geram_predominio_de_alta(self):
+        # leve tendência de alta com ruído dia a dia (mantém o IFR numa faixa
+        # neutra, sem votar) enquanto médias móveis, MACD e tendência sobem juntas.
+        precos = [50 + i * 0.2 + (0.3 if i % 2 == 0 else -0.3) for i in range(41)]
+
+        rsi = calcular_rsi(precos)
+        self.assertIsNotNone(rsi)
+        self.assertTrue(30 < rsi < 70, f"pré-condição do teste falhou: RSI={rsi} não ficou na faixa neutra")
+
+        resultado = escanear_ativo_precos(precos)
+
+        self.assertEqual(resultado["votos_baixa"], 0)
+        self.assertGreater(resultado["votos_alta"], 0)
+        self.assertEqual(resultado["veredito"], "PREDOMINIO_ALTA")
+
+    def test_sem_historico_fica_dados_insuficientes(self):
+        # um único preço: nem a tendência (precisa de >= 2) consegue opinar -
+        # todos os indicadores ficam sem dados, e só nesse caso o veredito é
+        # DADOS_INSUFICIENTES (com histórico curto mas >= 2 preços, a
+        # tendência já vota NEUTRO, e o veredito vira NEUTRO, não isso).
+        resultado = escanear_ativo_precos([100.0])
+        self.assertEqual(resultado["veredito"], "DADOS_INSUFICIENTES")
+
+    def test_historico_curto_mas_com_2_precos_fica_neutro_nao_sem_dados(self):
+        resultado = escanear_ativo_precos([100.0, 101.0])
+        self.assertEqual(resultado["veredito"], "NEUTRO")
+
+    def test_escanear_ativo_busca_precos_e_volumes_do_banco(self):
+        ativo = Ativo.objects.create(ticker="SCAN3")
+        hoje = date.today()
+        for i, preco in enumerate(range(100, 60, -1)):
+            Cotacao.objects.create(
+                ativo=ativo, data=hoje - timedelta(days=(39 - i)), preco_fechamento=Decimal(str(preco)),
+            )
+
+        resultado = escanear_ativo(ativo)
+
+        self.assertEqual(resultado["ativo"], ativo)
+        self.assertEqual(resultado["veredito"], "CONFLITANTE")
+
+    def test_escanear_carteira_so_inclui_ativos_realmente_comprados(self):
+        usuario = User.objects.create_user(username="investidor_scanner", password="SenhaForte123!")
+        outro_usuario = User.objects.create_user(username="investidor_scanner_outro", password="SenhaForte123!")
+
+        comprado = Ativo.objects.create(ticker="COMP3")
+        Operacao.objects.create(
+            usuario=usuario, ativo=comprado, tipo=Operacao.COMPRA,
+            quantidade=10, preco_unitario=Decimal("30.00"), data_operacao=date.today(),
+        )
+        reservado = Ativo.objects.create(ticker="RES3")
+        Operacao.objects.create(
+            usuario=usuario, ativo=reservado, tipo=Operacao.RESERVAR,
+            quantidade=1, preco_unitario=Decimal("20.00"), data_operacao=date.today(),
+        )
+        ativo_de_outro = Ativo.objects.create(ticker="OUTRO3")
+        Operacao.objects.create(
+            usuario=outro_usuario, ativo=ativo_de_outro, tipo=Operacao.COMPRA,
+            quantidade=5, preco_unitario=Decimal("15.00"), data_operacao=date.today(),
+        )
+
+        resultados = escanear_carteira(usuario)
+
+        tickers = [r["ativo"].ticker for r in resultados]
+        self.assertEqual(tickers, ["COMP3"])
+
+
+class ScannerTecnicoViewTests(TestCase):
+    """Tela Scanner Técnico (core.views.scanner_tecnico)."""
+
+    def setUp(self):
+        self.usuario = User.objects.create_user(username="investidor_scanner_view", password="SenhaForte123!")
+        self.client.login(username="investidor_scanner_view", password="SenhaForte123!")
+
+    def test_exige_login(self):
+        self.client.logout()
+        resposta = self.client.get(reverse("core:scanner_tecnico"))
+        self.assertEqual(resposta.status_code, 302)
+
+    def test_sem_ativos_comprados_mostra_mensagem(self):
+        resposta = self.client.get(reverse("core:scanner_tecnico"))
+        self.assertEqual(resposta.status_code, 200)
+        self.assertContains(resposta, "ainda não tem ações compradas")
+
+    def test_mostra_ativo_comprado_com_veredito_conflitante(self):
+        ativo = Ativo.objects.create(ticker="SCVW3")
+        Operacao.objects.create(
+            usuario=self.usuario, ativo=ativo, tipo=Operacao.COMPRA,
+            quantidade=10, preco_unitario=Decimal("70.00"), data_operacao=date.today() - timedelta(days=39),
+        )
+        hoje = date.today()
+        for i, preco in enumerate(range(100, 60, -1)):
+            Cotacao.objects.create(
+                ativo=ativo, data=hoje - timedelta(days=(39 - i)), preco_fechamento=Decimal(str(preco)),
+            )
+
+        resposta = self.client.get(reverse("core:scanner_tecnico"))
+
+        self.assertContains(resposta, "SCVW3")
+        self.assertContains(resposta, "Indicadores conflitantes")
+
+    def test_nao_mostra_reserva_nem_ativo_de_outro_usuario(self):
+        reservado = Ativo.objects.create(ticker="RESV3")
+        Operacao.objects.create(
+            usuario=self.usuario, ativo=reservado, tipo=Operacao.RESERVAR,
+            quantidade=1, preco_unitario=Decimal("10.00"), data_operacao=date.today(),
+        )
+        outro_usuario = User.objects.create_user(username="investidor_scanner_view_outro", password="SenhaForte123!")
+        ativo_de_outro = Ativo.objects.create(ticker="ALHEIO3")
+        Operacao.objects.create(
+            usuario=outro_usuario, ativo=ativo_de_outro, tipo=Operacao.COMPRA,
+            quantidade=5, preco_unitario=Decimal("15.00"), data_operacao=date.today(),
+        )
+
+        resposta = self.client.get(reverse("core:scanner_tecnico"))
+
+        self.assertNotContains(resposta, "RESV3")
+        self.assertNotContains(resposta, "ALHEIO3")
+
+    def test_menu_e_posicoes_tem_link_para_o_scanner(self):
+        resposta_menu = self.client.get(reverse("core:menu"))
+        self.assertContains(resposta_menu, reverse("core:scanner_tecnico"))
+
+        resposta_posicoes = self.client.get(reverse("core:posicoes"))
+        self.assertContains(resposta_posicoes, reverse("core:scanner_tecnico"))

@@ -11,6 +11,7 @@
 <a href="{% url 'core:posicoes_exportar_pdf' %}" class="btn-futurista btn-secundario">⬇ Exportar PDF</a>
 {% endif %}
 <a href="{% url 'core:historico_atualizacoes' %}" class="btn-futurista btn-secundario">🗂️ Histórico de Atualizações</a>
+<a href="{% url 'core:scanner_tecnico' %}" class="btn-futurista btn-secundario">🔎 Scanner Técnico</a>
 {% if ultima_atualizacao_cotacoes %}
 <p class="badge-atualizacao">⏱ Última atualização das cotações: {{ ultima_atualizacao_cotacoes|date:"d/m/Y H:i" }}</p>
 {% endif %}

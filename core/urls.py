@@ -22,6 +22,7 @@ urlpatterns = [
     path("posicoes/", views.posicoes, name="posicoes"),
     path("posicoes/exportar/excel/", views.posicoes_exportar_excel, name="posicoes_exportar_excel"),
     path("posicoes/exportar/pdf/", views.posicoes_exportar_pdf, name="posicoes_exportar_pdf"),
+    path("scanner-tecnico/", views.scanner_tecnico, name="scanner_tecnico"),
     path("alertas/", views.alertas, name="alertas"),
     path("alertas/<int:alerta_id>/lido/", views.alerta_marcar_lido, name="alerta_marcar_lido"),
     path("analise-mercado/", views.analise_mercado, name="analise_mercado"),

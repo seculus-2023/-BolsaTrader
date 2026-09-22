@@ -26,7 +26,7 @@ class OperacaoAdmin(admin.ModelAdmin):
 
 @admin.register(Cotacao)
 class CotacaoAdmin(admin.ModelAdmin):
-    list_display = ("ativo", "data", "preco_fechamento", "variacao_dia_pct")
+    list_display = ("ativo", "data", "preco_fechamento", "variacao_dia_pct", "volume")
     list_filter = ("data",)
     search_fields = ("ativo__ticker",)
 

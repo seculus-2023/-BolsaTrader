@@ -510,6 +510,7 @@ def atualizar_cotacao_diaria(ativo: Ativo, dados_api: dict | None = None) -> Cot
             "variacao_dia_pct": Decimal(str(variacao)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
             if variacao is not None
             else None,
+            "volume": dados.get("regularMarketVolume"),
         },
     )
     return cotacao
@@ -727,7 +728,9 @@ def buscar_historico_precos(ticker: str, dias: int = 180) -> list[dict]:
         vistos.add(data_convertida)
         preco = _para_decimal(fechamento)
         if preco is not None:
-            historico.append({"data": data_convertida, "fechamento": preco})
+            # volume já vem de graça no mesmo ponto do histórico (sem custo
+            # extra de API) - usado pelo Scanner Técnico (ver analisar_volume_precos)
+            historico.append({"data": data_convertida, "fechamento": preco, "volume": ponto.get("volume")})
 
     historico.sort(key=lambda item: item["data"])
     return historico
@@ -741,24 +744,43 @@ def backfill_historico_cotacoes(ativo: Ativo, dias: int = 180) -> int:
     core.views.operacao_nova) e também disponível para ativos já existentes
     via o comando "python manage.py backfill_cotacoes".
 
-    Não sobrescreve cotações que já existem (ex: a de hoje, gravada por
-    atualizar_cotacao_diaria) - só grava as datas que ainda faltam. Retorna
-    quantas cotações novas foram gravadas.
+    Não sobrescreve preço/variação de cotações que já existem (ex: a de hoje,
+    gravada por atualizar_cotacao_diaria) - só grava as datas que ainda
+    faltam. Retorna quantas cotações novas foram gravadas.
+
+    Efeito colateral "auto-cura": o campo volume (ver Scanner Técnico,
+    core.services.analisar_volume_precos) foi adicionado depois de várias
+    cotações já existirem sem ele - como o histórico da brapi.dev já traz o
+    volume de graça (mesma chamada, sem custo extra), aproveita pra completar
+    o volume que estiver faltando em cotações JÁ existentes dentro do período
+    buscado, sem tocar no preço/variação delas.
     """
     historico = buscar_historico_precos(ativo.ticker, dias=dias)
     if not historico:
         return 0
 
     datas_buscadas = [item["data"] for item in historico]
-    datas_existentes = set(ativo.cotacoes.filter(data__in=datas_buscadas).values_list("data", flat=True))
+    existentes = {
+        c.data: c for c in ativo.cotacoes.filter(data__in=datas_buscadas)
+    }
 
     novas = [
-        Cotacao(ativo=ativo, data=item["data"], preco_fechamento=item["fechamento"])
+        Cotacao(ativo=ativo, data=item["data"], preco_fechamento=item["fechamento"], volume=item.get("volume"))
         for item in historico
-        if item["data"] not in datas_existentes
+        if item["data"] not in existentes
     ]
     if novas:
         Cotacao.objects.bulk_create(novas, ignore_conflicts=True)
+
+    por_data = {item["data"]: item.get("volume") for item in historico}
+    a_completar = [
+        Cotacao(id=cotacao.id, volume=por_data.get(data_))
+        for data_, cotacao in existentes.items()
+        if cotacao.volume is None and por_data.get(data_) is not None
+    ]
+    if a_completar:
+        Cotacao.objects.bulk_update(a_completar, ["volume"])
+
     return len(novas)
 
 
@@ -1513,6 +1535,45 @@ DIAS_PREGAO_POR_ANO = 252
 LIMIAR_CONCENTRACAO_ALERTA_PCT = Decimal("40")
 
 
+def _volatilidade_e_drawdown_precos(precos_cronologico: list[float]) -> dict:
+    """
+    Núcleo puro (sem acesso ao banco) do cálculo de volatilidade anualizada e
+    drawdown máximo a partir de uma lista de preços em ordem cronológica
+    (mais antigo primeiro). Extraído de calcular_metricas_risco para ser
+    reaproveitado pelo Scanner Técnico (ver analisar_volatilidade_precos),
+    sem duplicar a fórmula. Ambos ficam None sem histórico suficiente
+    (< 3 preços).
+
+    Volatilidade: desvio padrão dos retornos diários no período, anualizado
+    (× √252, dias de pregão por ano) - maior valor = preço oscila mais no dia
+    a dia. Drawdown máximo: maior queda percentual do topo ao fundo dentro da
+    mesma janela.
+    """
+    if len(precos_cronologico) < 3:
+        return {"volatilidade_pct": None, "drawdown_pct": None}
+
+    retornos = [
+        (atual - anterior) / anterior
+        for anterior, atual in zip(precos_cronologico, precos_cronologico[1:])
+        if anterior
+    ]
+    volatilidade_pct = (
+        round(statistics.pstdev(retornos) * (DIAS_PREGAO_POR_ANO ** 0.5) * 100, 2)
+        if len(retornos) >= 2
+        else None
+    )
+
+    pico = precos_cronologico[0]
+    maior_queda = 0.0
+    for preco in precos_cronologico:
+        pico = max(pico, preco)
+        if pico:
+            maior_queda = min(maior_queda, (preco - pico) / pico)
+    drawdown_pct = round(maior_queda * 100, 2)
+
+    return {"volatilidade_pct": volatilidade_pct, "drawdown_pct": drawdown_pct}
+
+
 def calcular_metricas_risco(posicoes: list, dias_janela: int = 30) -> dict:
     """
     Para cada posição comprada, calcula a volatilidade anualizada e o
@@ -1537,22 +1598,9 @@ def calcular_metricas_risco(posicoes: list, dias_janela: int = 30) -> dict:
         )
         precos = [float(v) for v in reversed(historico_desc)]  # cronológico: mais antigo -> mais recente
 
-        volatilidade_pct = None
-        drawdown_pct = None
-        if len(precos) >= 3:
-            retornos = [
-                (atual - anterior) / anterior for anterior, atual in zip(precos, precos[1:]) if anterior
-            ]
-            if len(retornos) >= 2:
-                volatilidade_pct = round(statistics.pstdev(retornos) * (DIAS_PREGAO_POR_ANO ** 0.5) * 100, 2)
-
-            pico = precos[0]
-            maior_queda = 0.0
-            for preco in precos:
-                pico = max(pico, preco)
-                if pico:
-                    maior_queda = min(maior_queda, (preco - pico) / pico)
-            drawdown_pct = round(maior_queda * 100, 2)
+        metricas = _volatilidade_e_drawdown_precos(precos)
+        volatilidade_pct = metricas["volatilidade_pct"]
+        drawdown_pct = metricas["drawdown_pct"]
 
         percentual_carteira = (
             (p.valor_atual / valor_total * 100).quantize(Decimal("0.01"))
@@ -2438,6 +2486,16 @@ RSI_CLASSES = {
     "NEUTRO": "neutro",
     "DADOS_INSUFICIENTES": "neutro",
 }
+# traduz o vocabulário do RSI (SOBRECOMPRADO/SOBREVENDIDO) para o vocabulário
+# de voto ALTA/BAIXA/NEUTRO/DADOS_INSUFICIENTES usado pelo Scanner Técnico
+# (ver core.services.escanear_ativo_precos) - o rótulo exibido continua sendo
+# o mais descritivo (RSI_LABELS/RSI_CLASSES), só a contagem de votos usa isto.
+RSI_CHAVE_PARA_VOTO_SCANNER = {
+    "SOBRECOMPRADO": "BAIXA",
+    "SOBREVENDIDO": "ALTA",
+    "NEUTRO": "NEUTRO",
+    "DADOS_INSUFICIENTES": "DADOS_INSUFICIENTES",
+}
 
 
 def _media_movel_exponencial(valores: list[float], periodo: int) -> list[float]:
@@ -2579,6 +2637,309 @@ def analisar_indicadores_tecnicos(ativo: Ativo, janela_curta: int = 3, janela_lo
     )
     precos = [float(p) for p in historico]
     return analisar_indicadores_tecnicos_precos(precos, janela_curta, janela_longa)
+
+
+# --------------------------------------------------------------------------
+# Scanner Técnico da carteira (ações compradas)
+#
+# Combina IFR + médias móveis + MACD + volume + volatilidade + tendência num
+# só painel por ativo comprado. Diferença deliberada do sinal_geral do robô
+# consultor (analisar_indicadores_tecnicos_precos, que sempre elege um
+# "vencedor" por votação, inclusive em caso de empate): aqui, sempre que pelo
+# menos um indicador direcional aponta pra cada lado ao mesmo tempo, o
+# veredito é explicitamente CONFLITANTE, em vez de fingir que existe uma
+# previsão certa. Só fecha PREDOMINIO_ALTA/PREDOMINIO_BAIXA quando todos os
+# indicadores direcionais que não ficaram neutros/sem dados concordam entre
+# si. Volatilidade não entra nessa votação - é risco (magnitude), não direção.
+# --------------------------------------------------------------------------
+MEDIA_MOVEL_CURTA_PADRAO = 9
+MEDIA_MOVEL_LONGA_PADRAO = 21
+
+
+def calcular_medias_moveis(
+    precos_cronologico: list[float], curta: int = MEDIA_MOVEL_CURTA_PADRAO, longa: int = MEDIA_MOVEL_LONGA_PADRAO
+) -> dict | None:
+    """
+    Médias móveis simples curta (padrão: 9 pregões) e longa (padrão: 21
+    pregões) a partir de preços em ordem cronológica (mais antigo primeiro).
+    None sem histórico suficiente para a média longa.
+    """
+    if len(precos_cronologico) < longa:
+        return None
+
+    media_curta = sum(precos_cronologico[-curta:]) / curta
+    media_longa = sum(precos_cronologico[-longa:]) / longa
+    preco_atual = precos_cronologico[-1]
+
+    return {
+        "media_curta": round(media_curta, 2),
+        "media_longa": round(media_longa, 2),
+        "preco_atual": round(preco_atual, 2),
+        "preco_acima_da_longa": preco_atual > media_longa,
+        "preco_abaixo_da_longa": preco_atual < media_longa,
+        "curta_acima_da_longa": media_curta > media_longa,
+        "curta_abaixo_da_longa": media_curta < media_longa,
+    }
+
+
+def _classificar_medias_moveis(info: dict | None) -> str:
+    """
+    ALTA só quando o preço atual E a média curta concordam (as duas acima da
+    longa); BAIXA quando as duas concordam abaixo. Qualquer combinação mista
+    (ex: preço já voltou pra cima da longa, mas a curta ainda não cruzou) é um
+    sinal internamente conflitante desse próprio indicador - fica NEUTRO em
+    vez de forçar um lado.
+    """
+    if info is None:
+        return "DADOS_INSUFICIENTES"
+    if info["preco_acima_da_longa"] and info["curta_acima_da_longa"]:
+        return "ALTA"
+    if info["preco_abaixo_da_longa"] and info["curta_abaixo_da_longa"]:
+        return "BAIXA"
+    return "NEUTRO"
+
+
+MEDIAS_MOVEIS_LABELS = {
+    "ALTA": "Preço e médias em alinhamento de alta",
+    "BAIXA": "Preço e médias em alinhamento de baixa",
+    "NEUTRO": "Sem alinhamento claro",
+    "DADOS_INSUFICIENTES": "Aguardando histórico",
+}
+MEDIAS_MOVEIS_CLASSES = {
+    "ALTA": "alta", "BAIXA": "baixa", "NEUTRO": "neutro", "DADOS_INSUFICIENTES": "neutro",
+}
+
+
+VOLUME_JANELA_PADRAO = 20
+
+
+def analisar_volume_precos(
+    volumes_cronologico: list, precos_cronologico: list[float], janela: int = VOLUME_JANELA_PADRAO
+) -> dict:
+    """
+    Compara o volume do último pregão com a média dos anteriores (janela
+    padrão: 20 pregões) e cruza com a direção do preço no mesmo dia: volume
+    acima da média (margem de 10%, pra não reagir a ruído) confirmando alta é
+    força compradora; volume acima da média numa queda ("volume aumentando na
+    queda") é força vendedora.
+
+    Sem pelo menos 6 pregões com volume registrado, fica "DADOS_INSUFICIENTES"
+    em vez de fingir um sinal - o campo Cotacao.volume foi adicionado depois
+    de várias cotações já existirem sem ele (ver backfill_historico_cotacoes),
+    então esse indicador só passa a valer conforme o histórico com volume vai
+    se acumulando.
+    """
+    pares = [(v, p) for v, p in zip(volumes_cronologico, precos_cronologico) if v is not None]
+    if len(pares) < 6:
+        return {"classificacao": "DADOS_INSUFICIENTES", "volume_atual": None, "media_volume": None, "variacao_pct": None}
+
+    volumes_validos = [v for v, _ in pares]
+    volume_atual = volumes_validos[-1]
+    anteriores = volumes_validos[-(janela + 1):-1]
+    media_volume = sum(anteriores) / len(anteriores)
+
+    variacao_pct = round((volume_atual - media_volume) / media_volume * 100, 2) if media_volume else None
+    acima_da_media = media_volume > 0 and volume_atual > media_volume * 1.1
+
+    preco_atual = precos_cronologico[-1]
+    preco_anterior = precos_cronologico[-2] if len(precos_cronologico) >= 2 else None
+    preco_caiu = preco_anterior is not None and preco_atual < preco_anterior
+    preco_subiu = preco_anterior is not None and preco_atual > preco_anterior
+
+    if acima_da_media and preco_caiu:
+        classificacao = "BAIXA"
+    elif acima_da_media and preco_subiu:
+        classificacao = "ALTA"
+    else:
+        classificacao = "NEUTRO"
+
+    return {
+        "classificacao": classificacao,
+        "volume_atual": volume_atual,
+        "media_volume": round(media_volume, 0),
+        "variacao_pct": variacao_pct,
+    }
+
+
+VOLUME_LABELS = {
+    "ALTA": "Volume acima da média confirmando a alta",
+    "BAIXA": "Volume aumentando na queda",
+    "NEUTRO": "Volume dentro do normal",
+    "DADOS_INSUFICIENTES": "Sem histórico de volume suficiente ainda",
+}
+VOLUME_CLASSES = {
+    "ALTA": "alta", "BAIXA": "baixa", "NEUTRO": "neutro", "DADOS_INSUFICIENTES": "neutro",
+}
+
+
+VOLATILIDADE_ALTA_LIMIAR_PCT = 40.0
+VOLATILIDADE_BAIXA_LIMIAR_PCT = 15.0
+
+
+def _classificar_volatilidade(volatilidade_pct: float | None) -> str:
+    """Não é direcional (não vota alta nem baixa) - é só um alerta de risco/contexto, independente do veredito."""
+    if volatilidade_pct is None:
+        return "DADOS_INSUFICIENTES"
+    if volatilidade_pct >= VOLATILIDADE_ALTA_LIMIAR_PCT:
+        return "ALTA"
+    if volatilidade_pct <= VOLATILIDADE_BAIXA_LIMIAR_PCT:
+        return "BAIXA"
+    return "MODERADA"
+
+
+VOLATILIDADE_LABELS = {
+    "ALTA": "Alta volatilidade - oscila bastante",
+    "MODERADA": "Volatilidade moderada",
+    "BAIXA": "Baixa volatilidade - mais estável",
+    "DADOS_INSUFICIENTES": "Aguardando histórico",
+}
+# não é direção de preço - "ALTA volatilidade" usa a cor de alerta (mesma do
+# "BAIXA" nos outros indicadores) e "BAIXA volatilidade" usa a cor "positiva"
+# (menos risco), pra não ser lido como um voto de alta/baixa do preço.
+VOLATILIDADE_CLASSES = {
+    "ALTA": "baixa", "MODERADA": "neutro", "BAIXA": "alta", "DADOS_INSUFICIENTES": "neutro",
+}
+
+VEREDITO_SCANNER_LABELS = {
+    "PREDOMINIO_ALTA": "Predomínio de sinais de alta",
+    "PREDOMINIO_BAIXA": "Predomínio de sinais de baixa",
+    "CONFLITANTE": "Indicadores conflitantes - sem sinal claro",
+    "NEUTRO": "Neutro - nenhum indicador aponta direção",
+    "DADOS_INSUFICIENTES": "Aguardando histórico suficiente",
+}
+VEREDITO_SCANNER_CLASSES = {
+    # CONFLITANTE fica sozinho com o âmbar (badge-neutro) - é o estado que
+    # mais precisa chamar atenção nessa tela; NEUTRO/DADOS_INSUFICIENTES usam
+    # o cinza (badge-dados-insuficientes) para não competir visualmente com
+    # ele, já que os dois não têm nada de "conflito" pra sinalizar.
+    "PREDOMINIO_ALTA": "alta", "PREDOMINIO_BAIXA": "baixa", "CONFLITANTE": "neutro",
+    "NEUTRO": "dados-insuficientes", "DADOS_INSUFICIENTES": "dados-insuficientes",
+}
+
+
+def _veredito_scanner(chaves: list[str]) -> str:
+    """
+    A regra do veredito do Scanner Técnico, isolada dos indicadores em si pra
+    poder ser testada direto: CONFLITANTE sempre que há pelo menos um "ALTA" E
+    um "BAIXA" ao mesmo tempo entre as chaves (não importa quantos "NEUTRO"/
+    "DADOS_INSUFICIENTES" também existam) - só fecha PREDOMINIO_ALTA/
+    PREDOMINIO_BAIXA quando todas as chaves que apontaram uma direção
+    concordam entre si. DADOS_INSUFICIENTES só quando TODAS as chaves são
+    "DADOS_INSUFICIENTES" (nenhum indicador tem histórico suficiente ainda).
+    """
+    votos_alta = chaves.count("ALTA")
+    votos_baixa = chaves.count("BAIXA")
+    votos_sem_dados = chaves.count("DADOS_INSUFICIENTES")
+
+    if votos_sem_dados == len(chaves):
+        return "DADOS_INSUFICIENTES"
+    if votos_alta > 0 and votos_baixa > 0:
+        return "CONFLITANTE"
+    if votos_alta > 0:
+        return "PREDOMINIO_ALTA"
+    if votos_baixa > 0:
+        return "PREDOMINIO_BAIXA"
+    return "NEUTRO"
+
+
+def escanear_ativo_precos(
+    precos_cronologico: list[float], volumes_cronologico: list | None = None,
+    janela_curta: int = 3, janela_longa: int = 10,
+) -> dict:
+    """
+    Núcleo puro (sem acesso ao banco) do Scanner Técnico: combina IFR (RSI),
+    médias móveis, MACD, volume, volatilidade e tendência de curto prazo num
+    só veredito. Ver o comentário da seção acima para a regra do veredito
+    (CONFLITANTE sempre que houver indicadores discordando entre si).
+    """
+    if volumes_cronologico is None:
+        volumes_cronologico = [None] * len(precos_cronologico)
+
+    rsi = calcular_rsi(precos_cronologico)
+    rsi_chave = _classificar_rsi(rsi)
+
+    medias = calcular_medias_moveis(precos_cronologico)
+    medias_chave = _classificar_medias_moveis(medias)
+
+    macd = calcular_macd(precos_cronologico)
+    macd_chave = macd["cruzamento"] if macd else "DADOS_INSUFICIENTES"
+
+    volume_info = analisar_volume_precos(volumes_cronologico, precos_cronologico)
+    volume_chave = volume_info["classificacao"]
+
+    tendencia_chave = _tendencia_a_partir_de_precos_desc(
+        list(reversed(precos_cronologico))[:janela_longa], janela_curta, janela_longa
+    )
+
+    volatilidade_metricas = _volatilidade_e_drawdown_precos(precos_cronologico)
+    volatilidade_chave = _classificar_volatilidade(volatilidade_metricas["volatilidade_pct"])
+
+    indicadores = [
+        {
+            "nome": "IFR (RSI)", "chave": RSI_CHAVE_PARA_VOTO_SCANNER[rsi_chave],
+            "label": RSI_LABELS[rsi_chave], "classe": RSI_CLASSES[rsi_chave],
+        },
+        {
+            "nome": "Médias móveis", "chave": medias_chave,
+            "label": MEDIAS_MOVEIS_LABELS[medias_chave], "classe": MEDIAS_MOVEIS_CLASSES[medias_chave],
+        },
+        {"nome": "MACD", "chave": macd_chave, "label": MACD_LABELS[macd_chave], "classe": MACD_CLASSES[macd_chave]},
+        {"nome": "Volume", "chave": volume_chave, "label": VOLUME_LABELS[volume_chave], "classe": VOLUME_CLASSES[volume_chave]},
+        {
+            "nome": "Tendência de curto prazo", "chave": tendencia_chave,
+            "label": TENDENCIA_LABELS.get(tendencia_chave, tendencia_chave),
+            "classe": tendencia_chave.lower() if tendencia_chave != "DADOS_INSUFICIENTES" else "neutro",
+        },
+    ]
+
+    chaves = [item["chave"] for item in indicadores]
+    votos_alta = chaves.count("ALTA")
+    votos_baixa = chaves.count("BAIXA")
+    votos_sem_dados = chaves.count("DADOS_INSUFICIENTES")
+    veredito = _veredito_scanner(chaves)
+
+    return {
+        "indicadores": indicadores,
+        "rsi": rsi,
+        "medias_moveis": medias,
+        "macd": macd,
+        "volume": volume_info,
+        "volatilidade_pct": volatilidade_metricas["volatilidade_pct"],
+        "drawdown_pct": volatilidade_metricas["drawdown_pct"],
+        "volatilidade_chave": volatilidade_chave,
+        "volatilidade_label": VOLATILIDADE_LABELS[volatilidade_chave],
+        "volatilidade_classe": VOLATILIDADE_CLASSES[volatilidade_chave],
+        "tendencia_label": TENDENCIA_LABELS.get(tendencia_chave, tendencia_chave),
+        "votos_alta": votos_alta,
+        "votos_baixa": votos_baixa,
+        "votos_sem_dados": votos_sem_dados,
+        "veredito": veredito,
+        "veredito_label": VEREDITO_SCANNER_LABELS[veredito],
+        "veredito_classe": VEREDITO_SCANNER_CLASSES[veredito],
+    }
+
+
+def escanear_ativo(ativo: Ativo, janela_curta: int = 3, janela_longa: int = 10) -> dict:
+    """Versão do Scanner Técnico que busca preços e volumes já salvos (Cotacao) de um ativo."""
+    cotacoes = list(ativo.cotacoes.order_by("data").values_list("preco_fechamento", "volume"))
+    precos = [float(preco) for preco, _ in cotacoes]
+    volumes = [volume for _, volume in cotacoes]
+    resultado = escanear_ativo_precos(precos, volumes, janela_curta, janela_longa)
+    resultado["ativo"] = ativo
+    return resultado
+
+
+def escanear_carteira(usuario) -> list[dict]:
+    """
+    Scanner Técnico de todos os ativos realmente comprados (saldo > 0) do
+    usuário, ordenados por ticker - ver core.views.scanner_tecnico.
+    """
+    posicoes = calcular_posicoes(usuario)
+    compradas = sorted(
+        (p for p in posicoes if not p.apenas_reservado and p.quantidade > 0),
+        key=lambda p: p.ativo.ticker,
+    )
+    return [escanear_ativo(p.ativo) for p in compradas]
 
 
 # --------------------------------------------------------------------------

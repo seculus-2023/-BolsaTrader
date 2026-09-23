@@ -68,58 +68,7 @@
 <div class="grid-duas-colunas">
 <div class="card-glass">
     <h2>Posições em carteira</h2>
-    {% if posicoes %}
-    <div class="tabela-scroll">
-    <table class="tabela-futurista">
-        <thead>
-            <tr>
-                <th>Ativo</th>
-                <th>Qtd.</th>
-                <th>Preço médio</th>
-                <th>Cotação atual</th>
-                <th>Lucro/Perda</th>
-                <th>Tendência</th>
-                <th>Dias em carteira</th>
-            </tr>
-        </thead>
-        <tbody>
-            {% for p in posicoes %}
-            <tr{% if p.meta_compra_atingida or p.reserva_do_robo or p.meta_lucro_atingida %} class="{% if p.meta_compra_atingida %}linha-meta-compra {% endif %}{% if p.reserva_do_robo %}linha-robo {% endif %}{% if p.meta_lucro_atingida %}linha-meta-atingida{% endif %}"{% endif %}>
-                <td>
-                    <strong>{{ p.ativo.ticker }}</strong>{% if p.ativo.nome %}<br><small style="color: var(--text-dim);">{{ p.ativo.nome }}</small>{% endif %}
-                    {% if p.apenas_reservado %}
-                        <br><span class="badge-tendencia badge-neutro">🔖 Reservado</span>
-                    {% elif p.quantidade_reservada %}
-                        <br><span class="badge-tendencia badge-neutro">🔖 +{{ p.quantidade_reservada }} reservada{{ p.quantidade_reservada|pluralize }}</span>
-                    {% endif %}
-                    {% if p.reserva_do_robo %}
-                        <br><span class="badge-robo" title="Reserva automática do robô consultor">🤖 Robô</span>
-                    {% endif %}
-                </td>
-                <td>{% if p.apenas_reservado %}&mdash;{% else %}{{ p.quantidade }}{% endif %}</td>
-                <td>R$ {{ p.preco_medio }}</td>
-                <td>{% if p.preco_atual %}R$ {{ p.preco_atual }}{% else %}<span style="color: var(--text-dim);">sem cotação</span>{% endif %}</td>
-                <td class="{% if p.situacao == 'LUCRO' %}valor-positivo{% elif p.situacao == 'PERDA' %}valor-negativo{% else %}valor-neutro{% endif %}">
-                    {% if p.lucro_perda_pct is not None %}{{ p.lucro_perda_pct }}% (R$ {{ p.lucro_perda_valor }}){% else %}&mdash;{% endif %}
-                </td>
-                <td>
-                    {% if p.tendencia %}
-                    <span class="badge-tendencia badge-{{ p.tendencia|lower|slugify }}">{{ p.tendencia }}</span>
-                    {% else %}&mdash;{% endif %}
-                </td>
-                <td>
-                    {% if p.dias_desde_compra is not None %}
-                        {% if p.dias_desde_compra == 0 %}hoje{% elif p.dias_desde_compra == 1 %}1 dia{% else %}{{ p.dias_desde_compra }} dias{% endif %}
-                    {% else %}&mdash;{% endif %}
-                </td>
-            </tr>
-            {% endfor %}
-        </tbody>
-    </table>
-    </div>
-    {% else %}
-    <p style="color: var(--text-dim);">Você ainda não registrou nenhuma operação. <a href="{% url 'core:operacao_nova' %}">Registrar a primeira compra</a>.</p>
-    {% endif %}
+    {% include "core/_tabela_posicoes_compradas.html" with ocultar_acoes=True %}
 </div>
 
 <div class="card-glass">

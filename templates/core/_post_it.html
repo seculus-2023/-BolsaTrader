@@ -1,6 +1,8 @@
-{# Post-it: bloco de notas pessoal e fixo do usuário logado (ver core.models.PostIt,
-   core.context_processors.post_it e core.views.post_it_salvar). Incluído só na
-   tela Menu - não em todas as telas. #}
+{% comment %}
+Post-it: bloco de notas pessoal e fixo do usuário logado (ver core.models.PostIt,
+core.context_processors.post_it e core.views.post_it_salvar). Incluído só na
+tela Menu - não em todas as telas.
+{% endcomment %}
 <div class="post-it-flutuante" id="post-it-widget">
     {% csrf_token %}
     <button type="button" class="post-it-aba" id="post-it-aba" {% if not post_it_minimizado %}hidden{% endif %}>

@@ -3676,6 +3676,32 @@ class RedistribuicaoPainelTests(TestCase):
         self.assertNotContains(resposta, "RESV4")
         self.assertEqual(resposta.context["total_ativos"], 1)
 
+    def test_painel_usa_a_mesma_tabela_de_compradas_de_posicoes_em_carteira(self):
+        # mesma tabela compartilhada via templates/core/
+        # _tabela_posicoes_compradas.html - mas no Painel (resumo) a coluna
+        # Ação (vender/alterar/excluir por lote) fica escondida.
+        ativo = Ativo.objects.create(ticker="IGUAL3")
+        operacao = Operacao.objects.create(
+            usuario=self.usuario, ativo=ativo, tipo=Operacao.COMPRA,
+            quantidade=10, preco_unitario=Decimal("20.00"), data_operacao=date.today(),
+        )
+
+        resposta_painel = self.client.get(reverse("core:dashboard"))
+        resposta_posicoes = self.client.get(reverse("core:posicoes"))
+
+        for resposta in (resposta_painel, resposta_posicoes):
+            self.assertContains(resposta, "IGUAL3")
+            self.assertContains(resposta, "Lucro/Perda por dia em carteira")
+
+        self.assertContains(resposta_posicoes, reverse("core:operacao_vender", args=[operacao.id]))
+        self.assertContains(resposta_posicoes, reverse("core:operacao_editar", args=[operacao.id]))
+        self.assertContains(resposta_posicoes, reverse("core:operacao_excluir", args=[operacao.id]))
+
+        self.assertNotContains(resposta_painel, ">Ação<")
+        self.assertNotContains(resposta_painel, reverse("core:operacao_vender", args=[operacao.id]))
+        self.assertNotContains(resposta_painel, reverse("core:operacao_editar", args=[operacao.id]))
+        self.assertNotContains(resposta_painel, reverse("core:operacao_excluir", args=[operacao.id]))
+
 
 class SinaisRoboSomenteCompradosTests(TestCase):
     """
@@ -3722,3 +3748,34 @@ class SinaisRoboSomenteCompradosTests(TestCase):
         resposta_pdf = self.client.get(reverse("core:robo_exportar_pdf"))
         self.assertEqual(resposta_excel.status_code, 200)
         self.assertEqual(resposta_pdf.status_code, 200)
+
+
+class ComentariosDeTemplateNaoVazamTests(TestCase):
+    """
+    {# ... #} do Django não suporta múltiplas linhas (vira texto literal na
+    página em vez de sumir) - só {% comment %}...{% endcomment %} suporta.
+    Já aconteceu em _tabela_posicoes_compradas.html e _post_it.html; este
+    teste evita que a mesma armadilha volte a vazar texto de comentário para
+    o usuário em qualquer tela.
+    """
+
+    def setUp(self):
+        self.usuario = User.objects.create_user(username="investidor_sem_comentario_vazado", password="SenhaForte123!")
+        self.client.login(username="investidor_sem_comentario_vazado", password="SenhaForte123!")
+        ativo = Ativo.objects.create(ticker="LIMPO3")
+        Operacao.objects.create(
+            usuario=self.usuario, ativo=ativo, tipo=Operacao.COMPRA,
+            quantidade=10, preco_unitario=Decimal("10.00"), data_operacao=date.today(),
+        )
+
+    def test_paginas_principais_nao_vazam_texto_de_comentario_de_template(self):
+        trechos_de_comentario = [
+            "compartilhada entre Posições em Carteira",
+            "core.context_processors.post_it",
+            "ocultar_acoes",
+        ]
+        for nome_url in ("core:dashboard", "core:menu", "core:posicoes", "core:operacao_lista"):
+            resposta = self.client.get(reverse(nome_url))
+            conteudo = resposta.content.decode()
+            for trecho in trechos_de_comentario:
+                self.assertNotIn(trecho, conteudo, f"{nome_url} vazou texto de comentário: {trecho!r}")

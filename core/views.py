@@ -112,9 +112,12 @@ def dashboard(request):
 
     contexto = {
         # só as compradas de verdade - reservas (intenção de compra) não
-        # aparecem mais nessa tabela resumida do Painel (ver Posições em
-        # Carteira para o detalhamento completo, com reservas inclusive).
+        # aparecem mais nessa tabela do Painel. "posicoes_compradas" usa a
+        # mesma tabela (com ações vender/alterar/excluir por lote) da aba
+        # Compradas de Posições em Carteira - ver templates/core/
+        # _tabela_posicoes_compradas.html.
         "posicoes": posicoes_compradas,
+        "posicoes_compradas": posicoes_compradas,
         "valor_investido_total": valor_investido_total,
         "valor_atual_total": valor_atual_total,
         "lucro_perda_total": lucro_perda_total,

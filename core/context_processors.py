@@ -63,3 +63,23 @@ def horario_b3(request):
         "b3_horario_fechamento": settings.B3_HORARIO_FECHAMENTO,
         "b3_mercado_aberto": mercado_b3_aberto(),
     }
+
+
+def post_it(request):
+    """
+    Disponibiliza o post-it (bloco de notas pessoal e fixo) do usuário nos
+    templates que o exibem (Menu - ver templates/core/_post_it.html). Só
+    busca (não cria) - criar um post-it
+    vazio aqui gravaria no banco em toda requisição de todo usuário
+    autenticado, mesmo em telas onde ele nunca aparece.
+    """
+    if not request.user.is_authenticated:
+        return {"post_it_texto": "", "post_it_minimizado": False}
+
+    from .services import obter_post_it
+
+    post_it = obter_post_it(request.user)
+    return {
+        "post_it_texto": post_it.texto if post_it else "",
+        "post_it_minimizado": post_it.minimizado if post_it else False,
+    }

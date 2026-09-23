@@ -1,10 +1,8 @@
 {% extends "base.html" %}
+{% load static l10n %}
 {% block titulo %}Painel - BolsaTrader{% endblock %}
 {% block conteudo %}
 <h1>Painel de Controle</h1>
-
-<div class="painel-com-lateral">
-<div class="coluna-principal">
 
 <div class="grid-stats">
     <div class="stat-tile">
@@ -67,27 +65,7 @@
 </div>
 {% endif %}
 
-<div class="card-glass">
-    <h2>Ações rápidas</h2>
-    <div style="display: flex; flex-wrap: nowrap; gap: .6rem; overflow-x: auto; padding-bottom: .3rem;">
-        <a href="{% url 'core:operacao_nova' %}" class="btn-futurista" style="white-space: nowrap;">+ Nova compra/venda</a>
-        <a href="{% url 'core:posicoes' %}" class="btn-futurista btn-secundario" style="white-space: nowrap;">Ver posições</a>
-        <a href="{% url 'core:atualizar_cotacoes' %}" class="btn-futurista btn-secundario btn-atualizar-cotacoes" data-overlay-texto="Atualizando cotações..." style="white-space: nowrap;">Atualizar cotações agora</a>
-        <a href="{% url 'core:analise_mercado' %}" class="btn-futurista btn-secundario" style="white-space: nowrap;">Ver análise de mercado</a>
-        <a href="{% url 'core:historico_graficos' %}" class="btn-futurista btn-secundario" style="white-space: nowrap;">Ver histórico e gráficos</a>
-        <a href="{% url 'core:noticias' %}" class="btn-futurista btn-secundario" style="white-space: nowrap;">Notícias do Mercado</a>
-        <a href="{% url 'core:historico_atualizacoes' %}" class="btn-futurista btn-secundario" style="white-space: nowrap;">🗂️ Histórico de Atualizações</a>
-    </div>
-    <div style="display: flex; flex-wrap: wrap; gap: .6rem;">
-        {% if ultima_atualizacao_cotacoes %}
-        <p class="badge-atualizacao" style="margin: 0;">⏱ Última atualização das cotações: {{ ultima_atualizacao_cotacoes|date:"d/m/Y H:i" }}</p>
-        {% endif %}
-        <p class="badge-horario-b3 {% if b3_mercado_aberto %}aberto{% else %}fechado{% endif %}" style="margin: 0;">
-            {% if b3_mercado_aberto %}🟢{% else %}⚪{% endif %} B3: {{ b3_horario_abertura }} - {{ b3_horario_fechamento }} &middot; {% if b3_mercado_aberto %}Mercado aberto{% else %}Mercado fechado{% endif %}
-        </p>
-    </div>
-</div>
-
+<div class="grid-duas-colunas">
 <div class="card-glass">
     <h2>Posições em carteira</h2>
     {% if posicoes %}
@@ -145,49 +123,44 @@
 </div>
 
 <div class="card-glass">
-    <h2>Alertas recentes</h2>
-    {% if alertas_recentes %}
-    <ul style="list-style: none; padding: 0;">
-        {% for a in alertas_recentes %}
-        <li style="padding: .5rem 0; border-bottom: 1px solid rgba(0,240,255,.1);">
-            <span class="badge-tendencia badge-{% if a.tipo == 'LUCRO' or a.tipo == 'SINAL_COMPRA' %}alta{% elif a.tipo == 'PERDA' or a.tipo == 'SINAL_VENDA' %}baixa{% else %}neutro{% endif %}">{{ a.get_tipo_display }}</span>
-            {{ a.mensagem }}
-            <small style="color: var(--text-dim);">— {{ a.criado_em|date:"d/m/Y H:i" }}</small>
-        </li>
-        {% endfor %}
-    </ul>
-    <a href="{% url 'core:alertas' %}" class="link-secundario">Ver todos os alertas →</a>
+    <h2>Variações de hoje</h2>
+    {% if grafico_dia %}
+    <p style="color: var(--text-dim); font-size: .85rem; margin-top: -.2rem;">
+        Lucro/perda (%) da carteira em cada atualização registrada hoje ({{ total_registros_hoje }} registro{{ total_registros_hoje|pluralize }}).
+    </p>
+    <div class="grafico-wrap">
+        {% localize off %}
+        <svg viewBox="0 0 {{ grafico_dia.largura }} {{ grafico_dia.altura }}"
+             class="grafico-carteira-dia" preserveAspectRatio="none"
+             data-pontos-id="{{ grafico_dia.id_svg }}"
+             role="img" aria-label="Variação do lucro/perda da carteira ao longo das atualizações de hoje">
+            <line x1="{{ grafico_dia.x_inicio }}" y1="{{ grafico_dia.y_topo }}"
+                  x2="{{ grafico_dia.x_fim }}" y2="{{ grafico_dia.y_topo }}" class="grafico-grid" />
+            <line x1="{{ grafico_dia.x_inicio }}" y1="{{ grafico_dia.y_base }}"
+                  x2="{{ grafico_dia.x_fim }}" y2="{{ grafico_dia.y_base }}" class="grafico-grid" />
+            <path d="{{ grafico_dia.path_d }}" fill="none" class="grafico-linha {% if grafico_dia.tendencia_alta %}linha-alta{% else %}linha-baixa{% endif %}" />
+            {% for p in grafico_dia.pontos %}
+                {% if forloop.first or forloop.last %}
+                <circle cx="{{ p.x }}" cy="{{ p.y }}" r="4" class="grafico-marcador {% if grafico_dia.tendencia_alta %}linha-alta{% else %}linha-baixa{% endif %}" />
+                {% endif %}
+            {% endfor %}
+        </svg>
+        {% endlocalize %}
+        {{ grafico_dia.pontos|json_script:grafico_dia.id_svg }}
+        <div class="grafico-eixos">
+            <span>{{ grafico_dia.faixa_min_label }}</span>
+            <span>{{ grafico_dia.faixa_max_label }}</span>
+        </div>
+    </div>
+    <a href="{% url 'core:historico_atualizacoes' %}" class="link-secundario">Ver histórico completo →</a>
     {% else %}
-    <p style="color: var(--text-dim);">Nenhum alerta no momento.</p>
+    <p style="color: var(--text-dim);">
+        Ainda não há pelo menos 2 registros de hoje para montar o gráfico. Clique em "Atualizar cotações agora"
+        em qualquer tela do sistema para gerar um novo registro.
+    </p>
     {% endif %}
 </div>
-
 </div>
 
-<aside class="coluna-lateral">
-    <div class="card-glass">
-        <h2>Atividade da comunidade</h2>
-        <p style="color: var(--text-dim); font-size: .85rem; margin-top: -.5rem;">
-            Quem está comprando e vendendo agora. Os detalhes de cada operação (ativo, quantidade, preço) continuam privados.
-        </p>
-        {% if atividade_recente %}
-        <ul style="list-style: none; padding: 0; margin: 0;">
-            {% for a in atividade_recente %}
-            <li style="padding: .55rem 0; border-bottom: 1px solid rgba(0,240,255,.1); display: flex; justify-content: space-between; gap: .5rem; align-items: baseline;">
-                <span>
-                    <strong>{{ a.nome }}</strong>
-                    <span class="{% if a.tipo == 'COMPRA' %}valor-positivo{% else %}valor-neutro{% endif %}">
-                        {% if a.tipo == 'COMPRA' %}comprou{% else %}reservou{% endif %}
-                    </span> ações
-                </span>
-                <small style="color: var(--text-dim); white-space: nowrap;">{{ a.quando|timesince }} atrás</small>
-            </li>
-            {% endfor %}
-        </ul>
-        {% else %}
-        <p style="color: var(--text-dim);">Nenhuma operação registrada ainda por ninguém.</p>
-        {% endif %}
-    </div>
-</aside>
-</div>
+<script src="{% static 'js/grafico.js' %}" defer></script>
 {% endblock %}

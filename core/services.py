@@ -37,7 +37,7 @@ from django.db.models import F, Sum
 from .models import (
     ConsumoApiBrapi,
     Ativo, Cotacao, Operacao, Alerta, FonteNoticia, Noticia, AcaoB3, CotacaoIndice,
-    RegistroAtualizacaoCarteira, ContaCorrente, LancamentoContaCorrente,
+    RegistroAtualizacaoCarteira, ContaCorrente, LancamentoContaCorrente, PostIt,
 )
 
 
@@ -3747,3 +3747,37 @@ def gerar_pdf_extrato_conta_corrente(
 
     doc.build(elementos)
     return buffer.getvalue()
+
+
+# --------------------------------------------------------------------------
+# Post-it (bloco de notas pessoal e fixo, nas telas Menu/Operações/Posições)
+# --------------------------------------------------------------------------
+def obter_post_it(usuario) -> PostIt | None:
+    """
+    O post-it do usuário, se ele já tiver escrito algo alguma vez - None
+    quando ainda não existe. Só busca (nunca cria): é chamado pelo context
+    processor em TODA requisição autenticada (ver core.context_processors.
+    post_it), então criar um registro vazio aqui gravaria no banco à toa para
+    quem nunca usou o post-it. A criação de verdade só acontece ao salvar
+    (ver salvar_post_it).
+    """
+    return PostIt.objects.filter(usuario=usuario).first()
+
+
+def salvar_post_it(usuario, texto: str | None = None, minimizado: bool | None = None) -> PostIt:
+    """
+    Cria (na primeira vez) ou atualiza o post-it do usuário - só grava os
+    campos realmente informados, então salvar só o estado de minimizado não
+    mexe no texto e vice-versa.
+    """
+    post_it, _ = PostIt.objects.get_or_create(usuario=usuario)
+    campos = []
+    if texto is not None:
+        post_it.texto = texto
+        campos.append("texto")
+    if minimizado is not None:
+        post_it.minimizado = minimizado
+        campos.append("minimizado")
+    if campos:
+        post_it.save(update_fields=campos)
+    return post_it

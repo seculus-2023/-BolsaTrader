@@ -34,7 +34,6 @@ from .services import (
     calcular_posicoes,
     gerar_alertas_para_usuario,
     gerar_sinais_robo_para_usuario,
-    ativo_ja_comprado,
     limpar_alertas_antigos,
     mercado_b3_aberto,
     atualizar_cotacao_diaria,
@@ -87,6 +86,7 @@ from .services import (
     gerar_excel_extrato_conta_corrente,
     gerar_pdf_extrato_conta_corrente,
     escanear_carteira,
+    salvar_post_it,
 )
 
 TICKER_VALIDO = re.compile(r"^[A-Z0-9]{1,15}$")
@@ -94,8 +94,14 @@ TICKER_VALIDO = re.compile(r"^[A-Z0-9]{1,15}$")
 
 @login_required
 def dashboard(request):
-    """Painel principal: resumo da carteira, lucro/perda consolidado e alertas recentes."""
+    """
+    Painel principal: resumo da carteira e lucro/perda consolidado. "Ações
+    rápidas" e "Alertas recentes" foram para Posições em Carteira, e
+    "Atividade da comunidade" para Histórico de Atualizações - o Painel ficou
+    só com o resumo mais direto.
+    """
     posicoes = calcular_posicoes(request.user)
+    posicoes_compradas = [p for p in posicoes if not p.apenas_reservado]
 
     valor_investido_total = sum((p.valor_investido for p in posicoes), Decimal("0"))
     valor_atual_total = sum((p.valor_atual for p in posicoes if p.valor_atual is not None), Decimal("0"))
@@ -104,19 +110,22 @@ def dashboard(request):
         (lucro_perda_total / valor_investido_total) * 100 if valor_investido_total else None
     )
 
-    alertas_recentes = request.user.alertas.all()[:8]
-
     contexto = {
-        "posicoes": posicoes,
+        # só as compradas de verdade - reservas (intenção de compra) não
+        # aparecem mais nessa tabela resumida do Painel (ver Posições em
+        # Carteira para o detalhamento completo, com reservas inclusive).
+        "posicoes": posicoes_compradas,
         "valor_investido_total": valor_investido_total,
         "valor_atual_total": valor_atual_total,
         "lucro_perda_total": lucro_perda_total,
         "lucro_perda_pct_total": lucro_perda_pct_total,
-        "alertas_recentes": alertas_recentes,
-        "total_ativos": len([p for p in posicoes if not p.apenas_reservado]),
-        "atividade_recente": atividade_recente(limite=15),
+        "total_ativos": len(posicoes_compradas),
         "comparativo_benchmark": calcular_comparativo_benchmark(request.user, posicoes=posicoes),
     }
+    # "Variações de hoje" (mesmo gráfico de Histórico de Atualizações) ao
+    # lado de "Posições em carteira" - só precisa de grafico_dia/
+    # total_registros_hoje daqui, mas reaproveita o helper inteiro.
+    contexto.update(_contexto_historico_atualizacoes(request.user, limite=20))
     return render(request, "core/dashboard.html", contexto)
 
 
@@ -512,6 +521,7 @@ def posicoes(request):
         "concentracao_setor": calcular_concentracao_setor(lista_posicoes),
         "metricas_risco": calcular_metricas_risco(lista_posicoes),
         "comparativo_benchmark": calcular_comparativo_benchmark(request.user, posicoes=lista_posicoes),
+        "alertas_recentes": request.user.alertas.all()[:8],
     }
     contexto.update(_contexto_historico_atualizacoes(request.user, limite=20))
     return render(request, "core/posicoes.html", contexto)
@@ -578,6 +588,25 @@ def scanner_tecnico(request):
 
 
 @login_required
+@require_POST
+def post_it_salvar(request):
+    """
+    Endpoint leve (JSON) chamado pelo JS do post-it (ver templates/core/
+    _post_it.html) para salvar sozinho, enquanto o usuário digita ou
+    minimiza/restaura a notinha - sem recarregar a página. Cada campo
+    ("texto", "minimizado") só é gravado quando enviado nesta chamada.
+    """
+    texto = request.POST.get("texto")
+    minimizado_bruto = request.POST.get("minimizado")
+    minimizado = minimizado_bruto == "1" if minimizado_bruto is not None else None
+    post_it = salvar_post_it(request.user, texto=texto, minimizado=minimizado)
+    return JsonResponse({
+        "ok": True,
+        "atualizado_em": timezone.localtime(post_it.atualizado_em).strftime("%H:%M:%S"),
+    })
+
+
+@login_required
 def alertas(request):
     """
     Lista de avisos/lembretes do usuário; também dispara a verificação de
@@ -603,15 +632,16 @@ def alerta_marcar_lido(request, alerta_id):
 def _sinais_robo(usuario):
     """
     Indicadores técnicos (tendência, RSI, MACD, sinal geral) do robô
-    consultor pra cada ativo que o usuário acompanha, mais se o ativo já
-    está em carteira - usado pela página Análise de Mercado e pelo
-    relatório de indicação do robô (Excel/PDF).
+    consultor pra cada ativo que o usuário tem efetivamente comprado (saldo
+    > 0 em carteira) - usado pela página Análise de Mercado e pelo
+    relatório de indicação do robô (Excel/PDF). Ativos só reservados (sem
+    compra de verdade) não entram mais aqui.
     """
-    ativos = Ativo.objects.filter(operacoes__usuario=usuario).distinct()
+    ativos = Ativo.objects.filter(id__in=ativos_distintos_comprados(usuario))
     return [
         {
             "ativo": ativo,
-            "em_carteira": ativo_ja_comprado(usuario, ativo),
+            "em_carteira": True,
             **analisar_indicadores_tecnicos(ativo),
         }
         for ativo in ativos
@@ -855,10 +885,14 @@ def historico_atualizacoes(request):
     carteira gravados a cada atualização de cotações (ver
     core.services.registrar_atualizacao_carteira), com um gráfico da
     variação (%) de hoje e a opção de excluir registros antigos por dias.
+    Também traz o mural "Atividade da comunidade" (saiu do Painel de
+    Controle pra cá) e recarrega sozinha quando uma atualização de cotações
+    acontece em segundo plano (mesmo mecanismo de Posições em Carteira - ver
+    core.views.verificar_atualizacao_cotacoes).
     """
-    return render(
-        request, "core/historico_atualizacoes.html", _contexto_historico_atualizacoes(request.user),
-    )
+    contexto = _contexto_historico_atualizacoes(request.user)
+    contexto["atividade_recente"] = atividade_recente(limite=15)
+    return render(request, "core/historico_atualizacoes.html", contexto)
 
 
 @login_required

@@ -611,3 +611,28 @@ class LancamentoContaCorrente(models.Model):
     def __str__(self):
         sinal = "+" if self.tipo == self.CREDITO else "-"
         return f"{sinal}R$ {self.valor} - {self.descricao}"
+
+
+class PostIt(models.Model):
+    """
+    Bloco de notas pessoal e fixo do usuário (tipo "post-it"): um texto livre
+    que fica salvo e aparece flutuando nas principais telas do sistema (Menu,
+    Minhas Operações, Posições em Carteira), pronto pra anotar lembretes
+    rápidos sem precisar de uma tela dedicada. Um por usuário - salva sozinho
+    enquanto o usuário digita (ver core.views.post_it_salvar).
+    """
+
+    usuario = models.OneToOneField(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="post_it"
+    )
+    texto = models.TextField("Texto", blank=True)
+    minimizado = models.BooleanField("Minimizado", default=False)
+    atualizado_em = models.DateTimeField(auto_now=True)
+    criado_em = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = "Post-it"
+        verbose_name_plural = "Post-its"
+
+    def __str__(self):
+        return f"Post-it de {self.usuario}"

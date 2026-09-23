@@ -31,7 +31,7 @@ from . import services as core_services
 from .forms import OperacaoForm, VendaLoteForm
 from .models import (
     Ativo, Cotacao, Operacao, Alerta, MensagemWhatsapp, CotacaoIndice, RegistroAtualizacaoCarteira,
-    ContaCorrente, LancamentoContaCorrente,
+    ContaCorrente, LancamentoContaCorrente, PostIt,
 )
 from .services import (
     calcular_posicoes, analisar_tendencia, gerar_alertas_para_usuario, construir_comparativo_valores,
@@ -54,6 +54,7 @@ from .services import (
     calcular_medias_moveis, _classificar_medias_moveis, analisar_volume_precos,
     _classificar_volatilidade, _veredito_scanner, escanear_ativo_precos, escanear_ativo,
     escanear_carteira,
+    obter_post_it, salvar_post_it,
 )
 
 
@@ -482,8 +483,10 @@ class IsolamentoEntreUsuariosTests(TestCase):
         self.assertFalse(self.alerta_bruno.lido)  # continua não lido, não foi alterado
 
     def test_atividade_recente_mostra_nome_mas_nao_detalhes_da_operacao_alheia(self):
+        # o mural "Atividade da comunidade" mudou do Painel de Controle para
+        # Histórico de Atualizações (ver core.views.historico_atualizacoes).
         self.client.login(username="ana", password="SenhaForte123!")
-        resposta = self.client.get(reverse("core:dashboard"))
+        resposta = self.client.get(reverse("core:historico_atualizacoes"))
         conteudo = resposta.content.decode()
         # o nome de quem operou aparece no mural...
         self.assertIn("bruno", conteudo)
@@ -2770,16 +2773,16 @@ class HistoricoAtualizacoesTests(TestCase):
         self.assertEqual(resposta_pdf.status_code, 200)
 
     def test_botoes_de_acesso_ao_historico_nas_telas_relacionadas(self):
+        # "Ações rápidas" (que tinha esse link) saiu do Painel de Controle e
+        # foi para Posições em Carteira - ver core.views.dashboard/posicoes.
         self.client.login(username="investidor_historico", password="SenhaForte123!")
         url_historico = reverse("core:historico_atualizacoes")
 
         resposta_operacoes = self.client.get(reverse("core:operacao_lista"))
         resposta_posicoes = self.client.get(reverse("core:posicoes"))
-        resposta_dashboard = self.client.get(reverse("core:dashboard"))
 
         self.assertContains(resposta_operacoes, url_historico)
         self.assertContains(resposta_posicoes, url_historico)
-        self.assertContains(resposta_dashboard, url_historico)
 
     def test_posicoes_compradas_tem_acoes_vender_alterar_excluir_por_lote(self):
         # mesmas ações de Minhas Operações > Em carteira, uma linha por lote
@@ -3510,3 +3513,212 @@ class ScannerTecnicoViewTests(TestCase):
 
         resposta_posicoes = self.client.get(reverse("core:posicoes"))
         self.assertContains(resposta_posicoes, reverse("core:scanner_tecnico"))
+
+
+class PostItServicosTests(TestCase):
+    """core.services: obter_post_it, salvar_post_it."""
+
+    def setUp(self):
+        self.usuario = User.objects.create_user(username="investidor_postit", password="SenhaForte123!")
+
+    def test_obter_post_it_retorna_none_quando_nunca_salvou(self):
+        self.assertIsNone(obter_post_it(self.usuario))
+
+    def test_salvar_post_it_cria_na_primeira_vez(self):
+        post_it = salvar_post_it(self.usuario, texto="Vender PETR4 se bater 40")
+        self.assertEqual(PostIt.objects.count(), 1)
+        self.assertEqual(post_it.texto, "Vender PETR4 se bater 40")
+        self.assertFalse(post_it.minimizado)
+        self.assertEqual(obter_post_it(self.usuario).texto, "Vender PETR4 se bater 40")
+
+    def test_salvar_so_o_texto_nao_mexe_no_minimizado(self):
+        salvar_post_it(self.usuario, texto="rascunho", minimizado=True)
+        salvar_post_it(self.usuario, texto="rascunho final")
+        post_it = obter_post_it(self.usuario)
+        self.assertEqual(post_it.texto, "rascunho final")
+        self.assertTrue(post_it.minimizado)  # não foi tocado na segunda chamada
+
+    def test_salvar_so_o_minimizado_nao_mexe_no_texto(self):
+        salvar_post_it(self.usuario, texto="lembrete importante")
+        salvar_post_it(self.usuario, minimizado=True)
+        post_it = obter_post_it(self.usuario)
+        self.assertEqual(post_it.texto, "lembrete importante")
+        self.assertTrue(post_it.minimizado)
+
+    def test_texto_vazio_e_diferente_de_nao_informado(self):
+        salvar_post_it(self.usuario, texto="alguma coisa")
+        salvar_post_it(self.usuario, texto="")  # apagar o texto deliberadamente
+        self.assertEqual(obter_post_it(self.usuario).texto, "")
+
+    def test_post_it_e_isolado_por_usuario(self):
+        outro = User.objects.create_user(username="investidor_postit_outro", password="SenhaForte123!")
+        salvar_post_it(self.usuario, texto="nota do usuario 1")
+        self.assertIsNone(obter_post_it(outro))
+
+
+class PostItViewTests(TestCase):
+    """Endpoint core.views.post_it_salvar + inclusão do widget nas telas Menu/Operações/Posições."""
+
+    def setUp(self):
+        self.usuario = User.objects.create_user(username="investidor_postit_view", password="SenhaForte123!")
+        self.client.login(username="investidor_postit_view", password="SenhaForte123!")
+
+    def test_exige_login(self):
+        self.client.logout()
+        resposta = self.client.post(reverse("core:post_it_salvar"), {"texto": "x"})
+        self.assertEqual(resposta.status_code, 302)
+
+    def test_exige_post(self):
+        resposta = self.client.get(reverse("core:post_it_salvar"))
+        self.assertEqual(resposta.status_code, 405)
+
+    def test_salva_texto_via_post(self):
+        resposta = self.client.post(reverse("core:post_it_salvar"), {"texto": "comprar mais ITSA4"})
+        self.assertEqual(resposta.status_code, 200)
+        self.assertEqual(resposta.json()["ok"], True)
+        self.assertIn("atualizado_em", resposta.json())
+        self.assertEqual(obter_post_it(self.usuario).texto, "comprar mais ITSA4")
+
+    def test_salva_minimizado_via_post(self):
+        self.client.post(reverse("core:post_it_salvar"), {"minimizado": "1"})
+        self.assertTrue(obter_post_it(self.usuario).minimizado)
+        self.client.post(reverse("core:post_it_salvar"), {"minimizado": "0"})
+        self.assertFalse(obter_post_it(self.usuario).minimizado)
+
+    def test_widget_aparece_no_menu(self):
+        resposta = self.client.get(reverse("core:menu"))
+        self.assertContains(resposta, 'id="post-it-widget"')
+
+    def test_widget_nao_aparece_em_posicoes_nem_em_operacoes(self):
+        for nome_url in ("core:posicoes", "core:operacao_lista"):
+            resposta = self.client.get(reverse(nome_url))
+            self.assertNotContains(resposta, 'id="post-it-widget"')
+
+    def test_texto_salvo_aparece_pre_preenchido_na_tela(self):
+        salvar_post_it(self.usuario, texto="lembrete visivel na tela")
+        resposta = self.client.get(reverse("core:menu"))
+        self.assertContains(resposta, "lembrete visivel na tela")
+
+    def test_widget_nao_vaza_texto_de_outro_usuario(self):
+        outro = User.objects.create_user(username="investidor_postit_view_outro", password="SenhaForte123!")
+        salvar_post_it(outro, texto="segredo do outro usuario")
+        resposta = self.client.get(reverse("core:menu"))
+        self.assertNotContains(resposta, "segredo do outro usuario")
+
+
+class RedistribuicaoPainelTests(TestCase):
+    """
+    "Atividade da comunidade", "Ações rápidas" e "Alertas recentes" saíram do
+    Painel de Controle: as duas últimas foram para Posições em Carteira, e a
+    primeira para Histórico de Atualizações (que passou a se atualizar
+    sozinho, igual a Posições em Carteira).
+    """
+
+    def setUp(self):
+        self.usuario = User.objects.create_user(username="investidor_redistrib", password="SenhaForte123!")
+        self.client.login(username="investidor_redistrib", password="SenhaForte123!")
+        Alerta.objects.create(usuario=self.usuario, tipo=Alerta.LEMBRETE, mensagem="Alerta de teste")
+
+    def test_painel_nao_mostra_mais_os_tres_blocos(self):
+        resposta = self.client.get(reverse("core:dashboard"))
+        self.assertNotContains(resposta, "Atividade da comunidade")
+        self.assertNotContains(resposta, "Ações rápidas")
+        self.assertNotContains(resposta, "Alertas recentes")
+
+    def test_posicoes_mostra_acoes_rapidas_e_alertas_recentes(self):
+        resposta = self.client.get(reverse("core:posicoes"))
+        self.assertContains(resposta, "Ações rápidas")
+        self.assertContains(resposta, "Alertas recentes")
+        self.assertContains(resposta, "Alerta de teste")
+
+    def test_historico_atualizacoes_mostra_atividade_da_comunidade(self):
+        resposta = self.client.get(reverse("core:historico_atualizacoes"))
+        self.assertContains(resposta, "Atividade da comunidade")
+
+    def test_historico_atualizacoes_tem_o_mesmo_mecanismo_de_refresh_automatico(self):
+        resposta = self.client.get(reverse("core:historico_atualizacoes"))
+        self.assertContains(resposta, 'id="marcador-ultima-atualizacao"')
+        self.assertContains(resposta, reverse("core:verificar_atualizacao_cotacoes"))
+
+    def test_painel_mostra_posicoes_e_variacoes_de_hoje_lado_a_lado(self):
+        ativo = Ativo.objects.create(ticker="LADO3")
+        Operacao.objects.create(
+            usuario=self.usuario, ativo=ativo, tipo=Operacao.COMPRA,
+            quantidade=10, preco_unitario=Decimal("10.00"), data_operacao=date.today(),
+        )
+        Cotacao.objects.create(ativo=ativo, data=date.today(), preco_fechamento=Decimal("11.00"))
+        r1 = registrar_atualizacao_carteira(self.usuario)
+        Cotacao.objects.filter(ativo=ativo, data=date.today()).update(preco_fechamento=Decimal("12.00"))
+        registrar_atualizacao_carteira(self.usuario)
+
+        resposta = self.client.get(reverse("core:dashboard"))
+
+        self.assertContains(resposta, 'class="grid-duas-colunas"')
+        self.assertContains(resposta, "Posições em carteira")
+        self.assertContains(resposta, "Variações de hoje")
+        self.assertContains(resposta, "grafico-carteira-dia")
+
+    def test_painel_mostra_so_as_posicoes_realmente_compradas(self):
+        ativo_comprado = Ativo.objects.create(ticker="COMP4")
+        Operacao.objects.create(
+            usuario=self.usuario, ativo=ativo_comprado, tipo=Operacao.COMPRA,
+            quantidade=10, preco_unitario=Decimal("20.00"), data_operacao=date.today(),
+        )
+        ativo_reservado = Ativo.objects.create(ticker="RESV4")
+        Operacao.objects.create(
+            usuario=self.usuario, ativo=ativo_reservado, tipo=Operacao.RESERVAR,
+            quantidade=1, preco_unitario=Decimal("15.00"), data_operacao=date.today(),
+        )
+
+        resposta = self.client.get(reverse("core:dashboard"))
+
+        self.assertContains(resposta, "COMP4")
+        self.assertNotContains(resposta, "RESV4")
+        self.assertEqual(resposta.context["total_ativos"], 1)
+
+
+class SinaisRoboSomenteCompradosTests(TestCase):
+    """
+    "Indicadores técnicos dos seus ativos acompanhados" (Análise de Mercado)
+    e os relatórios do robô (Excel/PDF) mostram só ativos realmente
+    comprados (saldo > 0) - reservas (intenção de compra) não entram mais
+    (ver core.views._sinais_robo).
+    """
+
+    def setUp(self):
+        self.usuario = User.objects.create_user(username="investidor_sinais_robo", password="SenhaForte123!")
+        self.client.login(username="investidor_sinais_robo", password="SenhaForte123!")
+
+        self.ativo_comprado = Ativo.objects.create(ticker="COMPR3")
+        Operacao.objects.create(
+            usuario=self.usuario, ativo=self.ativo_comprado, tipo=Operacao.COMPRA,
+            quantidade=10, preco_unitario=Decimal("20.00"), data_operacao=date.today(),
+        )
+        self.ativo_reservado = Ativo.objects.create(ticker="RESER3")
+        Operacao.objects.create(
+            usuario=self.usuario, ativo=self.ativo_reservado, tipo=Operacao.RESERVAR,
+            quantidade=1, preco_unitario=Decimal("15.00"), data_operacao=date.today(),
+        )
+        self.ativo_vendido = Ativo.objects.create(ticker="VEND3")
+        Operacao.objects.create(
+            usuario=self.usuario, ativo=self.ativo_vendido, tipo=Operacao.COMPRA,
+            quantidade=5, preco_unitario=Decimal("10.00"), data_operacao=date.today(),
+            quantidade_vendida=5, preco_venda=Decimal("12.00"), data_venda=date.today(),
+        )
+
+    def test_analise_mercado_mostra_so_o_ativo_comprado(self):
+        resposta = self.client.get(reverse("core:analise_mercado"))
+        tickers = [item["ativo"].ticker for item in resposta.context["sinais"]]
+        self.assertEqual(tickers, ["COMPR3"])
+
+    def test_analise_mercado_nao_mostra_reservado_nem_totalmente_vendido(self):
+        resposta = self.client.get(reverse("core:analise_mercado"))
+        self.assertContains(resposta, "COMPR3")
+        self.assertNotContains(resposta, "RESER3")
+        self.assertNotContains(resposta, "VEND3")
+
+    def test_exportar_excel_e_pdf_do_robo_respondem_ok(self):
+        resposta_excel = self.client.get(reverse("core:robo_exportar_excel"))
+        resposta_pdf = self.client.get(reverse("core:robo_exportar_pdf"))
+        self.assertEqual(resposta_excel.status_code, 200)
+        self.assertEqual(resposta_pdf.status_code, 200)

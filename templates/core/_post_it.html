@@ -1,0 +1,63 @@
+{# Post-it: bloco de notas pessoal e fixo do usuário logado (ver core.models.PostIt,
+   core.context_processors.post_it e core.views.post_it_salvar). Incluído só na
+   tela Menu - não em todas as telas. #}
+<div class="post-it-flutuante" id="post-it-widget">
+    {% csrf_token %}
+    <button type="button" class="post-it-aba" id="post-it-aba" {% if not post_it_minimizado %}hidden{% endif %}>
+        📝 Post-it
+    </button>
+    <div class="post-it-caixa" id="post-it-caixa" {% if post_it_minimizado %}hidden{% endif %}>
+        <div class="post-it-cabecalho">
+            <span>📝 Post-it</span>
+            <button type="button" class="post-it-fechar" id="post-it-minimizar" title="Minimizar" aria-label="Minimizar">—</button>
+        </div>
+        <textarea class="post-it-textarea" id="post-it-texto" placeholder="Escreva um lembrete rápido...">{{ post_it_texto }}</textarea>
+        <div class="post-it-rodape" id="post-it-status">&nbsp;</div>
+    </div>
+</div>
+
+<script>
+(function () {
+    var widget = document.getElementById("post-it-widget");
+    if (!widget) return;
+    var aba = document.getElementById("post-it-aba");
+    var caixa = document.getElementById("post-it-caixa");
+    var texto = document.getElementById("post-it-texto");
+    var minimizarBtn = document.getElementById("post-it-minimizar");
+    var status = document.getElementById("post-it-status");
+    var csrftoken = widget.querySelector("[name=csrfmiddlewaretoken]").value;
+
+    function salvar(dados) {
+        var body = new URLSearchParams(dados);
+        fetch("{% url 'core:post_it_salvar' %}", {
+            method: "POST",
+            headers: { "X-CSRFToken": csrftoken, "Content-Type": "application/x-www-form-urlencoded" },
+            body: body.toString(),
+        }).then(function (resp) { return resp.json(); }).then(function (data) {
+            if (data.ok && status) status.textContent = "Salvo às " + data.atualizado_em;
+        }).catch(function () {
+            if (status) status.textContent = "Não foi possível salvar agora.";
+        });
+    }
+
+    var temporizador = null;
+    texto.addEventListener("input", function () {
+        if (status) status.textContent = "Salvando...";
+        clearTimeout(temporizador);
+        temporizador = setTimeout(function () { salvar({ texto: texto.value }); }, 600);
+    });
+
+    minimizarBtn.addEventListener("click", function () {
+        caixa.hidden = true;
+        aba.hidden = false;
+        salvar({ minimizado: "1" });
+    });
+
+    aba.addEventListener("click", function () {
+        aba.hidden = true;
+        caixa.hidden = false;
+        texto.focus();
+        salvar({ minimizado: "0" });
+    });
+})();
+</script>

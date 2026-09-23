@@ -12,6 +12,7 @@
 <a href="{% url 'core:historico_atualizacoes_exportar_excel' %}" class="btn-futurista btn-secundario">⬇ Exportar Excel</a>
 <a href="{% url 'core:historico_atualizacoes_exportar_pdf' %}" class="btn-futurista btn-secundario">⬇ Exportar PDF</a>
 {% endif %}
+<span id="marcador-ultima-atualizacao" data-ultima="{% if ultima_atualizacao_cotacoes %}{{ ultima_atualizacao_cotacoes|date:'c' }}{% endif %}" hidden></span>
 
 <h2 style="margin-top: 1.8rem;">Variações de hoje</h2>
 {% if grafico_dia %}
@@ -122,5 +123,56 @@
     {% endif %}
 </div>
 
+<h2 style="margin-top: 1.8rem;">Atividade da comunidade</h2>
+<div class="card-glass">
+    <p style="color: var(--text-dim); font-size: .85rem; margin-top: -.5rem;">
+        Quem está comprando e vendendo agora. Os detalhes de cada operação (ativo, quantidade, preço) continuam privados.
+    </p>
+    {% if atividade_recente %}
+    <ul style="list-style: none; padding: 0; margin: 0;">
+        {% for a in atividade_recente %}
+        <li style="padding: .55rem 0; border-bottom: 1px solid rgba(0,240,255,.1); display: flex; justify-content: space-between; gap: .5rem; align-items: baseline;">
+            <span>
+                <strong>{{ a.nome }}</strong>
+                <span class="{% if a.tipo == 'COMPRA' %}valor-positivo{% else %}valor-neutro{% endif %}">
+                    {% if a.tipo == 'COMPRA' %}comprou{% else %}reservou{% endif %}
+                </span> ações
+            </span>
+            <small style="color: var(--text-dim); white-space: nowrap;">{{ a.quando|timesince }} atrás</small>
+        </li>
+        {% endfor %}
+    </ul>
+    {% else %}
+    <p style="color: var(--text-dim);">Nenhuma operação registrada ainda por ninguém.</p>
+    {% endif %}
+</div>
+
 <script src="{% static 'js/grafico.js' %}" defer></script>
+<script>
+    (function () {
+        // Verifica de tempos em tempos se as cotações foram atualizadas em
+        // segundo plano (pelo agendador embutido no servidor ou pelo comando
+        // "atualizar_cotacoes --loop") e recarrega a tela sozinha quando
+        // percebe uma atualização mais nova - assim o usuário vê o novo
+        // registro sem precisar apertar F5 (mesmo mecanismo de Posições em
+        // Carteira - ver core.views.verificar_atualizacao_cotacoes).
+        var marcador = document.getElementById("marcador-ultima-atualizacao");
+        if (!marcador) return;
+        var ultimaConhecida = marcador.dataset.ultima || "";
+
+        setInterval(function () {
+            fetch("{% url 'core:verificar_atualizacao_cotacoes' %}")
+                .then(function (resposta) { return resposta.json(); })
+                .then(function (dados) {
+                    var atual = dados.ultima_atualizacao || "";
+                    if (atual && atual !== ultimaConhecida) {
+                        window.location.reload();
+                    }
+                })
+                .catch(function () {
+                    // falha de rede pontual - tenta de novo no próximo intervalo
+                });
+        }, 30000);
+    })();
+</script>
 {% endblock %}

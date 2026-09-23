@@ -24,6 +24,19 @@
             {% if lucro_perda_pct_total is not None %}({{ lucro_perda_pct_total|floatformat:2 }}%){% endif %}
         </div>
     </div>
+    <div class="stat-tile" style="text-align: center;">
+        <div class="label">Ibovespa</div>
+        {% if ibovespa %}
+        <div class="value {% if ibovespa.variacao_pct > 0 %}valor-positivo{% elif ibovespa.variacao_pct < 0 %}valor-negativo{% else %}valor-neutro{% endif %}">
+            {{ ibovespa.valor|floatformat:0 }} pts
+            {% if ibovespa.variacao_pct is not None %}({{ ibovespa.variacao_pct }}%){% endif %}
+        </div>
+        <small style="color: var(--text-dim);">em {{ ibovespa.data|date:"d/m/Y" }}</small>
+        {% else %}
+        <div class="value valor-neutro" style="font-size: 1rem;">sem dados</div>
+        <small><a href="{% url 'core:atualizar_benchmarks' %}?next={{ request.path|urlencode }}">🔄 Atualizar agora</a></small>
+        {% endif %}
+    </div>
 </div>
 
 {% if comparativo_benchmark %}

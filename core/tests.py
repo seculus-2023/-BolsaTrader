@@ -55,6 +55,7 @@ from .services import (
     _classificar_volatilidade, _veredito_scanner, escanear_ativo_precos, escanear_ativo,
     escanear_carteira,
     obter_post_it, salvar_post_it,
+    ultimo_valor_ibovespa,
 )
 
 
@@ -135,7 +136,11 @@ class OperacaoTipoReservarTests(TestCase):
         self.assertEqual(posicao.valor_investido, Decimal("0.00"))
         self.assertEqual(posicao.preco_medio, Decimal("9.80"))  # preço pretendido na reserva
 
-    def test_atualizar_cotacoes_agora_inclui_ativo_so_com_reserva(self):
+    @patch("core.views.mercado_b3_aberto", return_value=True)
+    def test_atualizar_cotacoes_agora_inclui_ativo_so_com_reserva(self, mock_mercado_aberto):
+        # sem isso, o teste só passa se rodar durante o horário de pregão de
+        # verdade - "Atualizar cotações agora" recusa fora do horário (ver
+        # core.views.atualizar_cotacoes_agora).
         usuario = User.objects.create_user(username="investidor_cotacao_reserva", password="SenhaForte123!")
         self.client.login(username="investidor_cotacao_reserva", password="SenhaForte123!")
         ativo = Ativo.objects.create(ticker="CSMG3")
@@ -3812,3 +3817,72 @@ class ComentariosDeTemplateNaoVazamTests(TestCase):
             conteudo = resposta.content.decode()
             for trecho in trechos_de_comentario:
                 self.assertNotIn(trecho, conteudo, f"{nome_url} vazou texto de comentário: {trecho!r}")
+
+
+class UltimoValorIbovespaTests(TestCase):
+    """core.services.ultimo_valor_ibovespa"""
+
+    def test_none_sem_nenhum_valor_salvo(self):
+        self.assertIsNone(ultimo_valor_ibovespa())
+
+    def test_um_so_valor_salvo_fica_sem_variacao(self):
+        CotacaoIndice.objects.create(indice=CotacaoIndice.IBOVESPA, data=date.today(), valor=Decimal("130000"))
+        resultado = ultimo_valor_ibovespa()
+        self.assertEqual(resultado["valor"], Decimal("130000"))
+        self.assertIsNone(resultado["variacao_pct"])
+
+    def test_calcula_variacao_percentual_em_relacao_ao_pregao_anterior(self):
+        CotacaoIndice.objects.create(
+            indice=CotacaoIndice.IBOVESPA, data=date.today() - timedelta(days=1), valor=Decimal("130000")
+        )
+        CotacaoIndice.objects.create(indice=CotacaoIndice.IBOVESPA, data=date.today(), valor=Decimal("131300"))
+
+        resultado = ultimo_valor_ibovespa()
+
+        self.assertEqual(resultado["valor"], Decimal("131300"))
+        self.assertEqual(resultado["variacao_pct"], Decimal("1.00"))
+
+    def test_ignora_o_cdi_e_pega_so_o_ibovespa(self):
+        CotacaoIndice.objects.create(indice=CotacaoIndice.CDI, data=date.today(), valor=Decimal("0.05"))
+        self.assertIsNone(ultimo_valor_ibovespa())
+
+    def test_none_quando_o_ultimo_valor_salvo_nao_e_de_hoje(self):
+        # valor de ontem (ex: ninguém clicou em "Atualizar benchmarks" hoje
+        # ainda) não deve aparecer como se fosse o de agora.
+        CotacaoIndice.objects.create(
+            indice=CotacaoIndice.IBOVESPA, data=date.today() - timedelta(days=1), valor=Decimal("130000")
+        )
+        self.assertIsNone(ultimo_valor_ibovespa())
+
+
+class IbovespaNoPainelTests(TestCase):
+    """Painel de Controle mostra o último valor conhecido do Ibovespa (ver ultimo_valor_ibovespa)."""
+
+    def setUp(self):
+        self.usuario = User.objects.create_user(username="investidor_ibov_painel", password="SenhaForte123!")
+        self.client.login(username="investidor_ibov_painel", password="SenhaForte123!")
+
+    def test_painel_mostra_valor_e_variacao_do_ibovespa(self):
+        CotacaoIndice.objects.create(
+            indice=CotacaoIndice.IBOVESPA, data=date.today() - timedelta(days=1), valor=Decimal("130000")
+        )
+        CotacaoIndice.objects.create(indice=CotacaoIndice.IBOVESPA, data=date.today(), valor=Decimal("131300"))
+
+        resposta = self.client.get(reverse("core:dashboard"))
+
+        self.assertContains(resposta, "Ibovespa")
+        self.assertContains(resposta, "131300")
+        self.assertContains(resposta, "1,00")
+
+    def test_painel_sem_dado_de_ibovespa_mostra_link_para_atualizar(self):
+        resposta = self.client.get(reverse("core:dashboard"))
+        self.assertContains(resposta, "sem dados")
+        self.assertContains(resposta, reverse("core:atualizar_benchmarks"))
+
+    def test_painel_com_ibovespa_desatualizado_mostra_sem_dados_em_vez_do_valor_velho(self):
+        CotacaoIndice.objects.create(
+            indice=CotacaoIndice.IBOVESPA, data=date.today() - timedelta(days=3), valor=Decimal("130000")
+        )
+        resposta = self.client.get(reverse("core:dashboard"))
+        self.assertContains(resposta, "sem dados")
+        self.assertNotContains(resposta, "130000")

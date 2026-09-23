@@ -70,6 +70,7 @@ from .services import (
     calcular_metricas_risco,
     calcular_comparativo_benchmark,
     atualizar_benchmarks,
+    ultimo_valor_ibovespa,
     registrar_atualizacao_carteira,
     excluir_registros_atualizacao_antigos,
     excluir_registros_atualizacao_por_periodo,
@@ -125,6 +126,7 @@ def dashboard(request):
         "total_ativos": len(posicoes_compradas),
         "comparativo_benchmark": calcular_comparativo_benchmark(request.user, posicoes=posicoes),
         "alertas_recentes": request.user.alertas.all()[:8],
+        "ibovespa": ultimo_valor_ibovespa(),
     }
     # "Variações de hoje" (mesmo gráfico de Histórico de Atualizações) ao
     # lado de "Posições em carteira" - só precisa de grafico_dia/

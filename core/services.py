@@ -898,6 +898,33 @@ def atualizar_benchmarks(dias: int = 180) -> dict:
     return resultado
 
 
+def ultimo_valor_ibovespa() -> dict | None:
+    """
+    Valor do Ibovespa (pontos de fechamento) DE HOJE e a variação percentual
+    em relação ao pregão anterior já salvo - vem do histórico gravado por
+    atualizar_benchmarks (botão "Atualizar benchmarks (Ibovespa / CDI)" ou o
+    comando "atualizar_benchmarks"), não do ciclo de cotações dos ativos, que
+    não mexe em índices.
+
+    None quando ainda não há nenhum valor salvo, OU quando o valor mais
+    recente salvo é de um dia anterior a hoje - de propósito, pra não mostrar
+    um número desatualizado como se fosse o de agora; nesse caso a tela deve
+    sugerir rodar aquela atualização.
+    """
+    ultimos = list(
+        CotacaoIndice.objects.filter(indice=CotacaoIndice.IBOVESPA).order_by("-data")[:2]
+    )
+    if not ultimos or ultimos[0].data != timezone.localdate():
+        return None
+
+    atual = ultimos[0]
+    variacao_pct = None
+    if len(ultimos) == 2 and ultimos[1].valor:
+        variacao_pct = ((atual.valor - ultimos[1].valor) / ultimos[1].valor * 100).quantize(Decimal("0.01"))
+
+    return {"data": atual.data, "valor": atual.valor, "variacao_pct": variacao_pct}
+
+
 def _retorno_indice_periodo(indice: str, data_inicio: date, data_fim: date) -> Decimal | None:
     """Retorno % de um índice tipo Ibovespa (comparando o primeiro e o último valor do período)."""
     pontos = list(

@@ -16,8 +16,8 @@ Painel de Controle, que é só um resumo.
                 <th>Dias em carteira</th>
                 <th>Ativo</th>
                 <th class="coluna-destaque">Cotação atual</th>
-                <th>Lucro/Perda por dia em carteira</th>
                 <th>Lucro/Perda (%)</th>
+                <th>Lucro/Perda por dia em carteira</th>
                 <th>Lucro/Perda (R$)</th>
                 <th>Qtd.</th>
                 <th>Preço médio</th>
@@ -69,13 +69,13 @@ Painel de Controle, que é só um resumo.
                     {% endif %}
                 </td>
                 <td class="coluna-destaque">{% if p.preco_atual %}R$ {{ p.preco_atual }}{% else %}&mdash;{% endif %}</td>
+                <td class="{% if p.situacao == 'LUCRO' %}valor-positivo{% elif p.situacao == 'PERDA' %}valor-negativo{% else %}valor-neutro{% endif %}">
+                    {% if p.lucro_perda_pct is not None %}{{ p.lucro_perda_pct }}%{% else %}&mdash;{% endif %}
+                </td>
                 <td class="{% if p.lucro_perda_por_dia_valor > 0 %}valor-positivo{% elif p.lucro_perda_por_dia_valor < 0 %}valor-negativo{% else %}valor-neutro{% endif %}">
                     {% if p.lucro_perda_por_dia_valor is not None %}
                         R$ {{ p.lucro_perda_por_dia_valor }}/dia ({{ p.lucro_perda_por_dia_pct }}%/dia)
                     {% else %}&mdash;{% endif %}
-                </td>
-                <td class="{% if p.situacao == 'LUCRO' %}valor-positivo{% elif p.situacao == 'PERDA' %}valor-negativo{% else %}valor-neutro{% endif %}">
-                    {% if p.lucro_perda_pct is not None %}{{ p.lucro_perda_pct }}%{% else %}&mdash;{% endif %}
                 </td>
                 <td class="{% if p.situacao == 'LUCRO' %}valor-positivo{% elif p.situacao == 'PERDA' %}valor-negativo{% else %}valor-neutro{% endif %}">
                     {% if p.lucro_perda_valor is not None %}R$ {{ p.lucro_perda_valor }}{% else %}&mdash;{% endif %}

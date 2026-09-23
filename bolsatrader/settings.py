@@ -43,8 +43,17 @@ SECRET_KEY = config(
 
 DEBUG = config("DEBUG", default=True, cast=bool)
 
-ALLOWED_HOSTS = config("ALLOWED_HOSTS", default="127.0.0.1,localhost", cast=Csv())
+ALLOWED_HOSTS = config(
+    "ALLOWED_HOSTS",
+    default="127.0.0.1,localhost,bolsatrader.com.br,www.bolsatrader.com.br",
+    cast=Csv(),
+)
 
+CSRF_TRUSTED_ORIGINS = config(
+    "CSRF_TRUSTED_ORIGINS",
+    default="https://bolsatrader.com.br,https://www.bolsatrader.com.br",
+    cast=Csv(),
+)
 
 # --------------------------------------------------------------------------
 # HTTPS em produção - o Service Worker do PWA (ver static/js/service-worker-

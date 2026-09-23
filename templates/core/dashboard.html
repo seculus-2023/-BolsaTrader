@@ -74,6 +74,12 @@
 <div>
 <div class="card-glass">
     <h2>Variações de hoje</h2>
+    {% if ultima_atualizacao_cotacoes %}
+    <p class="badge-atualizacao" style="margin: 0;">⏱ Última atualização das cotações: {{ ultima_atualizacao_cotacoes|date:"d/m/Y H:i" }}</p>
+    {% endif %}
+    <p class="badge-horario-b3 {% if b3_mercado_aberto %}aberto{% else %}fechado{% endif %}" style="margin: .5rem 0 0;">
+        {% if b3_mercado_aberto %}🟢{% else %}⚪{% endif %} B3: {{ b3_horario_abertura }} - {{ b3_horario_fechamento }} &middot; {% if b3_mercado_aberto %}Mercado aberto{% else %}Mercado fechado{% endif %}
+    </p>
     {% if grafico_dia %}
     <p style="color: var(--text-dim); font-size: .85rem; margin-top: -.2rem;">
         Lucro/perda (%) da carteira em cada atualização registrada hoje ({{ total_registros_hoje }} registro{{ total_registros_hoje|pluralize }}).

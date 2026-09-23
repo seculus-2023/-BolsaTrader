@@ -3634,6 +3634,23 @@ class RedistribuicaoPainelTests(TestCase):
         resposta = self.client.get(reverse("core:dashboard"))
         self.assertContains(resposta, 'class="lista-scroll"')
 
+    def test_variacoes_de_hoje_mostra_badges_de_atualizacao_e_horario_b3(self):
+        from .services import atualizar_cotacao_diaria
+
+        ativo = Ativo.objects.create(ticker="BADGE3")
+        Operacao.objects.create(
+            usuario=self.usuario, ativo=ativo, tipo=Operacao.COMPRA,
+            quantidade=10, preco_unitario=Decimal("10.00"), data_operacao=date.today(),
+        )
+        atualizar_cotacao_diaria(ativo, dados_api={"regularMarketPrice": 11.0, "regularMarketChangePercent": 1.0})
+
+        resposta = self.client.get(reverse("core:dashboard"))
+
+        self.assertContains(resposta, "Última atualização das cotações:")
+        self.assertContains(resposta, "badge-horario-b3")
+        self.assertContains(resposta, "B3:")
+        self.assertContains(resposta, "Mercado")
+
     def test_painel_mostra_alertas_recentes_embaixo_de_variacoes_de_hoje(self):
         resposta = self.client.get(reverse("core:dashboard"))
         conteudo = resposta.content.decode()

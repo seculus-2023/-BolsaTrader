@@ -2,6 +2,7 @@ from django.contrib import admin
 
 from .models import (
     Ativo, Operacao, Cotacao, Alerta, MensagemWhatsapp, FonteNoticia, Noticia, CotacaoIndice,
+    ContaCorrente, LancamentoContaCorrente,
 )
 
 
@@ -57,3 +58,26 @@ class NoticiaAdmin(admin.ModelAdmin):
     list_display = ("titulo", "fonte", "capturada_em")
     list_filter = ("fonte",)
     search_fields = ("titulo", "url")
+
+
+class LancamentoContaCorrenteInline(admin.TabularInline):
+    model = LancamentoContaCorrente
+    extra = 0
+    fields = ("data", "tipo", "origem", "valor", "descricao", "operacao")
+    readonly_fields = ("operacao",)
+    ordering = ("-data", "-criado_em")
+
+
+@admin.register(ContaCorrente)
+class ContaCorrenteAdmin(admin.ModelAdmin):
+    list_display = ("usuario", "saldo_inicial", "criado_em", "atualizado_em")
+    search_fields = ("usuario__username",)
+    inlines = [LancamentoContaCorrenteInline]
+
+
+@admin.register(LancamentoContaCorrente)
+class LancamentoContaCorrenteAdmin(admin.ModelAdmin):
+    list_display = ("conta", "data", "tipo", "origem", "valor", "descricao")
+    list_filter = ("tipo", "origem", "data")
+    search_fields = ("conta__usuario__username", "descricao")
+    autocomplete_fields = ("conta", "operacao")

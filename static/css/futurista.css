@@ -286,6 +286,18 @@ a:hover { color: var(--neon-magenta); }
     border-radius: 12px;
 }
 
+/*
+ * Rolagem vertical interna pra listas que, sem isso, cresceriam livremente e
+ * deixariam a coluna bem mais alta que a vizinha (ex: "Alertas recentes" ao
+ * lado de "Posições em carteira" no Painel de Controle) - a altura máxima
+ * aproxima a coluna da altura da tabela ao lado em vez de destoar.
+ */
+.lista-scroll {
+    max-height: 320px;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+}
+
 table.tabela-futurista {
     width: 100%;
     border-collapse: collapse;

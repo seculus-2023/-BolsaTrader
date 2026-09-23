@@ -450,24 +450,6 @@
 </div>
 {% endif %}
 
-<div class="card-glass" style="margin-top: 1.2rem;">
-    <h2>Alertas recentes</h2>
-    {% if alertas_recentes %}
-    <ul style="list-style: none; padding: 0;">
-        {% for a in alertas_recentes %}
-        <li style="padding: .5rem 0; border-bottom: 1px solid rgba(0,240,255,.1);">
-            <span class="badge-tendencia badge-{% if a.tipo == 'LUCRO' or a.tipo == 'SINAL_COMPRA' %}alta{% elif a.tipo == 'PERDA' or a.tipo == 'SINAL_VENDA' %}baixa{% else %}neutro{% endif %}">{{ a.get_tipo_display }}</span>
-            {{ a.mensagem }}
-            <small style="color: var(--text-dim);">— {{ a.criado_em|date:"d/m/Y H:i" }}</small>
-        </li>
-        {% endfor %}
-    </ul>
-    <a href="{% url 'core:alertas' %}" class="link-secundario">Ver todos os alertas →</a>
-    {% else %}
-    <p style="color: var(--text-dim);">Nenhum alerta no momento.</p>
-    {% endif %}
-</div>
-
 <script>
     (function () {
         document.querySelectorAll(".grupo-abas").forEach(function (grupo) {

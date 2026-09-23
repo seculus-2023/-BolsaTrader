@@ -3609,9 +3609,10 @@ class PostItViewTests(TestCase):
 class RedistribuicaoPainelTests(TestCase):
     """
     "Atividade da comunidade", "Ações rápidas" e "Alertas recentes" saíram do
-    Painel de Controle: as duas últimas foram para Posições em Carteira, e a
-    primeira para Histórico de Atualizações (que passou a se atualizar
-    sozinho, igual a Posições em Carteira).
+    Painel de Controle original: "Ações rápidas" foi para Posições em
+    Carteira, "Atividade da comunidade" para Histórico de Atualizações (que
+    passou a se atualizar sozinho, igual a Posições em Carteira), e "Alertas
+    recentes" voltou pro Painel, embaixo de "Variações de hoje".
     """
 
     def setUp(self):
@@ -3619,17 +3620,32 @@ class RedistribuicaoPainelTests(TestCase):
         self.client.login(username="investidor_redistrib", password="SenhaForte123!")
         Alerta.objects.create(usuario=self.usuario, tipo=Alerta.LEMBRETE, mensagem="Alerta de teste")
 
-    def test_painel_nao_mostra_mais_os_tres_blocos(self):
+    def test_painel_nao_mostra_mais_ativiade_da_comunidade_nem_acoes_rapidas(self):
         resposta = self.client.get(reverse("core:dashboard"))
         self.assertNotContains(resposta, "Atividade da comunidade")
         self.assertNotContains(resposta, "Ações rápidas")
-        self.assertNotContains(resposta, "Alertas recentes")
 
-    def test_posicoes_mostra_acoes_rapidas_e_alertas_recentes(self):
-        resposta = self.client.get(reverse("core:posicoes"))
-        self.assertContains(resposta, "Ações rápidas")
+    def test_painel_mostra_alertas_recentes(self):
+        resposta = self.client.get(reverse("core:dashboard"))
         self.assertContains(resposta, "Alertas recentes")
         self.assertContains(resposta, "Alerta de teste")
+
+    def test_alertas_recentes_tem_rolagem_para_nivelar_com_posicoes(self):
+        resposta = self.client.get(reverse("core:dashboard"))
+        self.assertContains(resposta, 'class="lista-scroll"')
+
+    def test_painel_mostra_alertas_recentes_embaixo_de_variacoes_de_hoje(self):
+        resposta = self.client.get(reverse("core:dashboard"))
+        conteudo = resposta.content.decode()
+        # "Variações de hoje" precisa aparecer antes de "Alertas recentes" no
+        # HTML pra ficar "embaixo" dela na coluna direita do grid.
+        self.assertLess(conteudo.index("Variações de hoje"), conteudo.index("Alertas recentes"))
+
+    def test_posicoes_mostra_acoes_rapidas_mas_nao_alertas_recentes(self):
+        resposta = self.client.get(reverse("core:posicoes"))
+        self.assertContains(resposta, "Ações rápidas")
+        self.assertNotContains(resposta, "Alertas recentes")
+        self.assertNotContains(resposta, "Alerta de teste")
 
     def test_historico_atualizacoes_mostra_atividade_da_comunidade(self):
         resposta = self.client.get(reverse("core:historico_atualizacoes"))

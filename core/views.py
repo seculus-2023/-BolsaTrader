@@ -96,9 +96,9 @@ TICKER_VALIDO = re.compile(r"^[A-Z0-9]{1,15}$")
 def dashboard(request):
     """
     Painel principal: resumo da carteira e lucro/perda consolidado. "Ações
-    rápidas" e "Alertas recentes" foram para Posições em Carteira, e
-    "Atividade da comunidade" para Histórico de Atualizações - o Painel ficou
-    só com o resumo mais direto.
+    rápidas" foi para Posições em Carteira e "Atividade da comunidade" para
+    Histórico de Atualizações; "Alertas recentes" ficou aqui, embaixo de
+    "Variações de hoje".
     """
     posicoes = calcular_posicoes(request.user)
     posicoes_compradas = [p for p in posicoes if not p.apenas_reservado]
@@ -124,6 +124,7 @@ def dashboard(request):
         "lucro_perda_pct_total": lucro_perda_pct_total,
         "total_ativos": len(posicoes_compradas),
         "comparativo_benchmark": calcular_comparativo_benchmark(request.user, posicoes=posicoes),
+        "alertas_recentes": request.user.alertas.all()[:8],
     }
     # "Variações de hoje" (mesmo gráfico de Histórico de Atualizações) ao
     # lado de "Posições em carteira" - só precisa de grafico_dia/
@@ -524,7 +525,6 @@ def posicoes(request):
         "concentracao_setor": calcular_concentracao_setor(lista_posicoes),
         "metricas_risco": calcular_metricas_risco(lista_posicoes),
         "comparativo_benchmark": calcular_comparativo_benchmark(request.user, posicoes=lista_posicoes),
-        "alertas_recentes": request.user.alertas.all()[:8],
     }
     contexto.update(_contexto_historico_atualizacoes(request.user, limite=20))
     return render(request, "core/posicoes.html", contexto)

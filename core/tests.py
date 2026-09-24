@@ -3686,6 +3686,27 @@ class RedistribuicaoPainelTests(TestCase):
         self.assertContains(resposta, 'id="marcador-ultima-atualizacao"')
         self.assertContains(resposta, reverse("core:verificar_atualizacao_cotacoes"))
 
+    def test_painel_mostra_registros_recentes_abaixo_do_grafico_limitado_a_5(self):
+        for i in range(7):
+            registrar_atualizacao_carteira(self.usuario)
+
+        resposta = self.client.get(reverse("core:dashboard"))
+        conteudo = resposta.content.decode()
+
+        self.assertContains(resposta, "Registros recentes")
+        self.assertEqual(conteudo.count("R$ 0,00</td>"), 5)  # só os 5 mais recentes (carteira vazia = R$0)
+        # "Registros recentes" precisa vir depois de "Variações de hoje" (embaixo do gráfico)
+        self.assertLess(conteudo.index("Variações de hoje"), conteudo.index("Registros recentes"))
+        self.assertLess(conteudo.index("Registros recentes"), conteudo.index("Alertas recentes"))
+
+    def test_painel_mostra_credito_do_desenvolvedor_em_destaque(self):
+        resposta = self.client.get(reverse("core:dashboard"))
+        self.assertContains(resposta, "Antonio Roberto Pereira Junior")
+        self.assertContains(resposta, "arpjunior40@gmail.com")
+        self.assertContains(resposta, "+55 65 98113-2995")
+        self.assertContains(resposta, "https://wa.me/5565981132995")
+        self.assertContains(resposta, 'class="card-glass card-desenvolvedor"')
+
     def test_painel_mostra_posicoes_e_variacoes_de_hoje_lado_a_lado(self):
         ativo = Ativo.objects.create(ticker="LADO3")
         Operacao.objects.create(

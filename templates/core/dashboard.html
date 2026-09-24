@@ -40,49 +40,59 @@
     </div>
 </div>
 
-{% if comparativo_benchmark %}
-<div class="card-glass">
-    <h2>Sua carteira x mercado</h2>
-    <p style="color: var(--text-dim); font-size: .85rem; margin-top: -.5rem;">
-        Retorno da carteira comprada (aproximado) desde {{ comparativo_benchmark.data_inicio|date:"d/m/Y" }}
-        ({{ comparativo_benchmark.dias_periodo }} dia{{ comparativo_benchmark.dias_periodo|pluralize }}),
-        comparado ao Ibovespa e ao CDI acumulado no mesmo período.
-    </p>
-    <div class="grid-stats">
-        <div class="stat-tile">
-            <div class="label">Sua carteira</div>
-            <div class="value {% if comparativo_benchmark.retorno_carteira_pct > 0 %}valor-positivo{% elif comparativo_benchmark.retorno_carteira_pct < 0 %}valor-negativo{% else %}valor-neutro{% endif %}">
-                {{ comparativo_benchmark.retorno_carteira_pct }}%
-            </div>
-        </div>
-        <div class="stat-tile">
-            <div class="label">Ibovespa no período</div>
-            <div class="value valor-neutro">
-                {% if comparativo_benchmark.retorno_ibovespa_pct is not None %}{{ comparativo_benchmark.retorno_ibovespa_pct }}%{% else %}<span style="color: var(--text-dim); font-size: .8rem;">sem dados</span>{% endif %}
-            </div>
-        </div>
-        <div class="stat-tile">
-            <div class="label">CDI no período</div>
-            <div class="value valor-neutro">
-                {% if comparativo_benchmark.retorno_cdi_pct is not None %}{{ comparativo_benchmark.retorno_cdi_pct }}%{% else %}<span style="color: var(--text-dim); font-size: .8rem;">sem dados</span>{% endif %}
-            </div>
-        </div>
-    </div>
-    {% if comparativo_benchmark.retorno_ibovespa_pct is not None or comparativo_benchmark.retorno_cdi_pct is not None %}
-    <p style="color: var(--text-dim); font-size: .85rem;">
-        {% if comparativo_benchmark.carteira_bateu_ibovespa %}✅ Sua carteira bateu o Ibovespa no período.{% else %}⚠️ Sua carteira não bateu o Ibovespa no período.{% endif %}
-        {% if comparativo_benchmark.carteira_bateu_cdi %}✅ Sua carteira bateu o CDI no período.{% else %}⚠️ Sua carteira não bateu o CDI no período.{% endif %}
-    </p>
-    {% else %}
-    <a href="{% url 'core:atualizar_benchmarks' %}?next={{ request.path|urlencode }}" class="btn-futurista btn-secundario">🔄 Atualizar benchmarks (Ibovespa / CDI)</a>
-    {% endif %}
-</div>
-{% endif %}
-
+{% comment %}
+Layout em duas colunas pensado como um painel analítico: a coluna da
+esquerda (mais larga) concentra a análise da carteira em si (comparação com
+o mercado + a grid de posições); a da direita funciona como uma barra
+lateral de acompanhamento (gráfico do dia, últimos registros e alertas),
+sempre mais estreita e com listas de altura limitada pra não destoar da
+coluna principal.
+{% endcomment %}
 <div class="grid-duas-colunas">
-<div class="card-glass">
-    <h2>Posições em carteira</h2>
-    {% include "core/_tabela_posicoes_compradas.html" with ocultar_acoes=True %}
+<div>
+    {% if comparativo_benchmark %}
+    <div class="card-glass">
+        <h2>Sua carteira x mercado</h2>
+        <p style="color: var(--text-dim); font-size: .85rem; margin-top: -.5rem;">
+            Retorno da carteira comprada (aproximado) desde {{ comparativo_benchmark.data_inicio|date:"d/m/Y" }}
+            ({{ comparativo_benchmark.dias_periodo }} dia{{ comparativo_benchmark.dias_periodo|pluralize }}),
+            comparado ao Ibovespa e ao CDI acumulado no mesmo período.
+        </p>
+        <div class="grid-stats">
+            <div class="stat-tile">
+                <div class="label">Sua carteira</div>
+                <div class="value {% if comparativo_benchmark.retorno_carteira_pct > 0 %}valor-positivo{% elif comparativo_benchmark.retorno_carteira_pct < 0 %}valor-negativo{% else %}valor-neutro{% endif %}">
+                    {{ comparativo_benchmark.retorno_carteira_pct }}%
+                </div>
+            </div>
+            <div class="stat-tile">
+                <div class="label">Ibovespa no período</div>
+                <div class="value valor-neutro">
+                    {% if comparativo_benchmark.retorno_ibovespa_pct is not None %}{{ comparativo_benchmark.retorno_ibovespa_pct }}%{% else %}<span style="color: var(--text-dim); font-size: .8rem;">sem dados</span>{% endif %}
+                </div>
+            </div>
+            <div class="stat-tile">
+                <div class="label">CDI no período</div>
+                <div class="value valor-neutro">
+                    {% if comparativo_benchmark.retorno_cdi_pct is not None %}{{ comparativo_benchmark.retorno_cdi_pct }}%{% else %}<span style="color: var(--text-dim); font-size: .8rem;">sem dados</span>{% endif %}
+                </div>
+            </div>
+        </div>
+        {% if comparativo_benchmark.retorno_ibovespa_pct is not None or comparativo_benchmark.retorno_cdi_pct is not None %}
+        <p style="color: var(--text-dim); font-size: .85rem;">
+            {% if comparativo_benchmark.carteira_bateu_ibovespa %}✅ Sua carteira bateu o Ibovespa no período.{% else %}⚠️ Sua carteira não bateu o Ibovespa no período.{% endif %}
+            {% if comparativo_benchmark.carteira_bateu_cdi %}✅ Sua carteira bateu o CDI no período.{% else %}⚠️ Sua carteira não bateu o CDI no período.{% endif %}
+        </p>
+        {% else %}
+        <a href="{% url 'core:atualizar_benchmarks' %}?next={{ request.path|urlencode }}" class="btn-futurista btn-secundario">🔄 Atualizar benchmarks (Ibovespa / CDI)</a>
+        {% endif %}
+    </div>
+    {% endif %}
+
+    <div class="card-glass" {% if comparativo_benchmark %}style="margin-top: 1.2rem;"{% endif %}>
+        <h2>Posições em carteira</h2>
+        {% include "core/_tabela_posicoes_compradas.html" with ocultar_acoes=True %}
+    </div>
 </div>
 
 <div>
@@ -122,12 +132,42 @@
             <span>{{ grafico_dia.faixa_max_label }}</span>
         </div>
     </div>
-    <a href="{% url 'core:historico_atualizacoes' %}" class="link-secundario">Ver histórico completo →</a>
     {% else %}
     <p style="color: var(--text-dim);">
         Ainda não há pelo menos 2 registros de hoje para montar o gráfico. Clique em "Atualizar cotações agora"
         em qualquer tela do sistema para gerar um novo registro.
     </p>
+    {% endif %}
+</div>
+
+<div class="card-glass" style="margin-top: 1.2rem;">
+    <h2>Registros recentes</h2>
+    {% if registros_com_variacao %}
+    <div class="tabela-scroll">
+    <table class="tabela-futurista">
+        <thead>
+            <tr>
+                <th>Data/hora</th>
+                <th>Valor atual</th>
+                <th>Lucro/Perda</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for item in registros_com_variacao|slice:":5" %}
+            <tr>
+                <td>{{ item.registro.criado_em|date:"d/m H:i" }}</td>
+                <td>R$ {{ item.registro.valor_atual }}</td>
+                <td class="{% if item.registro.lucro_perda > 0 %}valor-positivo{% elif item.registro.lucro_perda < 0 %}valor-negativo{% else %}valor-neutro{% endif %}">
+                    R$ {{ item.registro.lucro_perda }}{% if item.registro.lucro_perda_pct is not None %} ({{ item.registro.lucro_perda_pct }}%){% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    </div>
+    <a href="{% url 'core:historico_atualizacoes' %}" class="link-secundario">Ver histórico completo →</a>
+    {% else %}
+    <p style="color: var(--text-dim);">Nenhum registro ainda &mdash; clique em "Atualizar cotações agora".</p>
     {% endif %}
 </div>
 
@@ -149,6 +189,17 @@
     {% endif %}
 </div>
 </div>
+</div>
+
+<div class="card-glass card-desenvolvedor">
+    <div class="desenvolvedor-icone">👨‍💻</div>
+    <p class="desenvolvedor-nome">Antonio Roberto Pereira Junior</p>
+    <p class="desenvolvedor-cargo">Desenvolvedor do BolsaTrader</p>
+    <p class="desenvolvedor-contato">
+        <a href="mailto:arpjunior40@gmail.com">✉️ arpjunior40@gmail.com</a>
+        <span class="desenvolvedor-separador">&middot;</span>
+        <a href="https://wa.me/5565981132995" target="_blank" rel="noopener">📱 +55 65 98113-2995</a>
+    </p>
 </div>
 
 <script src="{% static 'js/grafico.js' %}" defer></script>

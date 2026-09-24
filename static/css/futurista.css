@@ -230,14 +230,16 @@ a:hover { color: var(--neon-magenta); }
 }
 
 /*
- * Duas colunas de mesma largura lado a lado, ocupando 100% da largura
- * disponível (ex: "Posições em carteira" + "Variações de hoje" no Painel de
- * Controle) - min-width:0 nos dois filhos pela mesma razão de
- * .coluna-principal acima (evita que uma tabela larga estoure a coluna).
+ * Duas colunas lado a lado, ocupando 100% da largura disponível - a
+ * esquerda mais larga (análise principal: comparativo de mercado + grid de
+ * posições) e a direita mais estreita (barra lateral de acompanhamento:
+ * gráfico do dia, registros recentes e alertas), no Painel de Controle.
+ * min-width:0 nos dois filhos pela mesma razão de .coluna-principal acima
+ * (evita que uma tabela larga estoure a coluna).
  */
 .grid-duas-colunas {
     display: grid;
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: 1.6fr 1fr;
     gap: 1.5rem;
     align-items: start;
 }
@@ -902,6 +904,62 @@ form.form-futurista label {
     padding: 2rem 1rem;
     font-size: 0.8rem;
     letter-spacing: 0.04em;
+}
+
+/*
+ * Cartão de crédito do desenvolvedor, em destaque no Painel de Controle -
+ * mesmo degradê ciano/roxo usado na marca "BOLSATRADER" do cabeçalho, com um
+ * brilho mais forte que os demais cartões pra chamar atenção de propósito.
+ */
+.card-desenvolvedor {
+    text-align: center;
+    border-color: var(--neon-purple);
+    background: linear-gradient(135deg, rgba(168, 85, 247, 0.1), rgba(0, 240, 255, 0.06));
+    box-shadow: 0 0 35px rgba(168, 85, 247, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+.card-desenvolvedor .desenvolvedor-icone {
+    font-size: 1.8rem;
+}
+
+.card-desenvolvedor .desenvolvedor-nome {
+    font-family: 'Orbitron', sans-serif;
+    font-weight: 700;
+    font-size: 1.2rem;
+    letter-spacing: 0.02em;
+    margin: 0.4rem 0 0.15rem;
+    background: linear-gradient(90deg, var(--neon-cyan), var(--neon-purple), var(--neon-magenta));
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+}
+
+.card-desenvolvedor .desenvolvedor-cargo {
+    color: var(--text-dim);
+    font-size: 0.85rem;
+    margin: 0 0 0.9rem;
+}
+
+.card-desenvolvedor .desenvolvedor-contato {
+    margin: 0;
+    font-weight: 600;
+}
+
+.card-desenvolvedor .desenvolvedor-contato a {
+    color: var(--text-main);
+}
+
+.card-desenvolvedor .desenvolvedor-contato a:hover {
+    color: var(--neon-cyan);
+}
+
+.card-desenvolvedor .desenvolvedor-separador {
+    color: var(--text-dim);
+    margin: 0 0.6rem;
+}
+
+@media (max-width: 480px) {
+    .card-desenvolvedor .desenvolvedor-separador { display: block; margin: 0.4rem 0; }
 }
 
 .whatsapp-flutuante {

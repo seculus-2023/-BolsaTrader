@@ -3,6 +3,7 @@
 {% block titulo %}Painel - BolsaTrader{% endblock %}
 {% block conteudo %}
 <h1>Painel de Controle</h1>
+<span id="marcador-ultima-atualizacao" data-ultima="{% if ultima_atualizacao_cotacoes %}{{ ultima_atualizacao_cotacoes|date:'c' }}{% endif %}" hidden></span>
 
 <div class="grid-stats">
     <div class="stat-tile">
@@ -151,4 +152,32 @@
 </div>
 
 <script src="{% static 'js/grafico.js' %}" defer></script>
+<script>
+    (function () {
+        // Verifica de tempos em tempos se as cotações foram atualizadas em
+        // segundo plano (pelo agendador embutido no servidor ou pelo comando
+        // "atualizar_cotacoes --loop") e recarrega a tela sozinha quando
+        // percebe uma atualização mais nova - assim a grid de posições e o
+        // gráfico "Variações de hoje" ficam em dia sem o usuário precisar
+        // apertar F5 (mesmo mecanismo de Posições em Carteira e Histórico de
+        // Atualizações - ver core.views.verificar_atualizacao_cotacoes).
+        var marcador = document.getElementById("marcador-ultima-atualizacao");
+        if (!marcador) return;
+        var ultimaConhecida = marcador.dataset.ultima || "";
+
+        setInterval(function () {
+            fetch("{% url 'core:verificar_atualizacao_cotacoes' %}")
+                .then(function (resposta) { return resposta.json(); })
+                .then(function (dados) {
+                    var atual = dados.ultima_atualizacao || "";
+                    if (atual && atual !== ultimaConhecida) {
+                        window.location.reload();
+                    }
+                })
+                .catch(function () {
+                    // falha de rede pontual - tenta de novo no próximo intervalo
+                });
+        }, 30000);
+    })();
+</script>
 {% endblock %}

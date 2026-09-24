@@ -823,12 +823,13 @@ def atualizar_cotacoes_agora(request):
 @login_required
 def verificar_atualizacao_cotacoes(request):
     """
-    Endpoint leve (JSON) consultado por polling pela tela Posições em
-    Carteira - permite ao navegador perceber quando as cotações foram
-    atualizadas em segundo plano (pelo agendador embutido no servidor, ver
-    core.services.iniciar_agendador_cotacoes_embutido, ou pelo comando
-    "atualizar_cotacoes --loop") e recarregar a tela sozinha, sem o usuário
-    precisar apertar F5 manualmente pra ver o resultado.
+    Endpoint leve (JSON) consultado por polling pelo Painel de Controle,
+    Posições em Carteira e Histórico de Atualizações - permite ao navegador
+    perceber quando as cotações foram atualizadas em segundo plano (pelo
+    agendador embutido no servidor, ver core.services.
+    iniciar_agendador_cotacoes_embutido, ou pelo comando "atualizar_cotacoes
+    --loop") e recarregar a tela sozinha, sem o usuário precisar apertar F5
+    manualmente pra ver o resultado.
     """
     ultima = Ativo.objects.filter(operacoes__usuario=request.user).aggregate(Max("atualizado_em"))
     ultima_atualizacao = ultima["atualizado_em__max"]

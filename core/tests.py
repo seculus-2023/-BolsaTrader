@@ -3678,6 +3678,14 @@ class RedistribuicaoPainelTests(TestCase):
         self.assertContains(resposta, 'id="marcador-ultima-atualizacao"')
         self.assertContains(resposta, reverse("core:verificar_atualizacao_cotacoes"))
 
+    def test_painel_tambem_tem_o_mesmo_mecanismo_de_refresh_automatico(self):
+        # a grid "Posições em carteira" e o gráfico "Variações de hoje" do
+        # Painel também precisam recarregar sozinhos após uma atualização de
+        # cotações em segundo plano, igual às outras duas telas.
+        resposta = self.client.get(reverse("core:dashboard"))
+        self.assertContains(resposta, 'id="marcador-ultima-atualizacao"')
+        self.assertContains(resposta, reverse("core:verificar_atualizacao_cotacoes"))
+
     def test_painel_mostra_posicoes_e_variacoes_de_hoje_lado_a_lado(self):
         ativo = Ativo.objects.create(ticker="LADO3")
         Operacao.objects.create(

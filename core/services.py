@@ -3317,7 +3317,10 @@ def gerar_pdf_scanner_e_analise_ia(
     estilo_celula = ParagraphStyle("celula_scanner_ia", parent=estilos["Normal"], fontSize=8, leading=10)
 
     elementos = [
-        Paragraph("BolsaTrader - Scanner Técnico e Análise da B3 hoje", estilos["Title"]),
+        Paragraph(
+            f"BolsaTrader - Scanner Técnico e Análise da B3 {timezone.localdate().strftime('%d/%m/%Y')}",
+            estilos["Title"],
+        ),
         Paragraph(
             f"{nome_usuario} - gerado em {timezone.localtime().strftime('%d/%m/%Y %H:%M')} - "
             "referência de apoio à decisão, não constitui recomendação de investimento.",

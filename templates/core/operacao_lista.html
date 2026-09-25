@@ -99,6 +99,7 @@
                 <th>Dias</th>
                 <th>Ativo</th>
                 <th>Qtd. comprada</th>
+                <th class="coluna-destaque">Cotação atual</th>
                 <th>Preço compra</th>
                 <th>Total compra</th>
                 <th>Qtd. vendida</th>
@@ -133,6 +134,7 @@
                     {% endif %}
                 </td>
                 <td>{{ op.quantidade }}</td>
+                <td class="coluna-destaque">{% if op.preco_atual is not None %}R$ {{ op.preco_atual }}{% else %}&mdash;{% endif %}</td>
                 <td>R$ {{ op.preco_unitario }}</td>
                 <td>R$ {{ op.valor_total }}</td>
                 <td>{{ op.quantidade_vendida }}</td>
@@ -188,6 +190,7 @@
                 <th>Dias</th>
                 <th>Ativo</th>
                 <th>Quantidade</th>
+                <th class="coluna-destaque">Cotação atual</th>
                 <th>Preço pretendido</th>
                 <th>Total pretendido</th>
                 <th>Variação desde a reserva</th>
@@ -221,6 +224,7 @@
                     {% endif %}
                 </td>
                 <td>{{ op.quantidade }}</td>
+                <td class="coluna-destaque">{% if op.preco_atual is not None %}R$ {{ op.preco_atual }}{% else %}&mdash;{% endif %}</td>
                 <td>R$ {{ op.preco_unitario }}</td>
                 <td>R$ {{ op.valor_total }}</td>
                 <td class="{% if op.variacao_pct_reserva > 0 %}valor-positivo{% elif op.variacao_pct_reserva < 0 %}valor-negativo{% else %}valor-neutro{% endif %}">

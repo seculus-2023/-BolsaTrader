@@ -316,6 +316,41 @@ class OperacaoModelTests(TestCase):
         self.assertContains(resposta, "R$ 300,00")  # total compra: 10 * 30
         self.assertContains(resposta, "R$ 140,00")  # total venda: 4 * 35
 
+    def test_grid_em_carteira_mostra_cotacao_atual_em_destaque(self):
+        self.client.login(username="investidor_op", password="SenhaForte123!")
+        Operacao.objects.create(
+            usuario=self.usuario, ativo=self.ativo, tipo=Operacao.COMPRA,
+            quantidade=10, preco_unitario=Decimal("30.00"), data_operacao=date.today(),
+        )
+        Cotacao.objects.create(ativo=self.ativo, data=date.today(), preco_fechamento=Decimal("35.50"))
+
+        resposta = self.client.get(reverse("core:operacao_lista"))
+
+        self.assertContains(resposta, "Cotação atual")
+        self.assertContains(resposta, 'class="coluna-destaque">R$ 35,50')
+
+    def test_grid_em_carteira_sem_cotacao_mostra_travessao(self):
+        self.client.login(username="investidor_op", password="SenhaForte123!")
+        Operacao.objects.create(
+            usuario=self.usuario, ativo=self.ativo, tipo=Operacao.COMPRA,
+            quantidade=10, preco_unitario=Decimal("30.00"), data_operacao=date.today(),
+        )
+        resposta = self.client.get(reverse("core:operacao_lista"))
+        self.assertContains(resposta, 'class="coluna-destaque">&mdash;')
+
+    def test_grid_reservadas_mostra_cotacao_atual_em_destaque(self):
+        self.client.login(username="investidor_op", password="SenhaForte123!")
+        Operacao.objects.create(
+            usuario=self.usuario, ativo=self.ativo, tipo=Operacao.RESERVAR,
+            quantidade=1, preco_unitario=Decimal("20.00"), data_operacao=date.today(),
+        )
+        Cotacao.objects.create(ativo=self.ativo, data=date.today(), preco_fechamento=Decimal("18.90"))
+
+        resposta = self.client.get(reverse("core:operacao_lista"))
+
+        self.assertContains(resposta, "Cotação atual")
+        self.assertContains(resposta, 'class="coluna-destaque">R$ 18,90')
+
 
 class ResumoVendasTests(TestCase):
     """Resumo (compra/venda/lucro) na tela de operações, considerando só lotes com venda."""

@@ -10,12 +10,11 @@ echo.
 git status --short
 echo.
 
-set /p MENSAGEM="Mensagem do commit (descreva o que mudou): "
-if "%MENSAGEM%"=="" (
-    echo ERRO: a mensagem do commit nao pode ser vazia.
-    pause
-    exit /b 1
-)
+for /f "tokens=1-4 delims=/ " %%a in ('date /t') do set DATA_HOJE=%%a_%%b_%%c
+for /f "tokens=1-2 delims=: " %%a in ('time /t') do set HORA_AGORA=%%a%%b
+set MENSAGEM=%DATA_HOJE%_%HORA_AGORA%
+echo Mensagem do commit (automatica): %MENSAGEM%
+echo.
 
 git add .
 git commit -m "%MENSAGEM%"

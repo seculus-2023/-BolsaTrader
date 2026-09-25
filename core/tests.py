@@ -3834,12 +3834,15 @@ class ScannerTecnicoViewTests(TestCase):
         self.assertContains(resposta, "Reservado")
         self.assertNotContains(resposta, "ALHEIO3")
 
-    def test_menu_e_posicoes_tem_link_para_o_scanner(self):
+    def test_menu_posicoes_e_analise_mercado_tem_link_para_o_scanner(self):
         resposta_menu = self.client.get(reverse("core:menu"))
         self.assertContains(resposta_menu, reverse("core:scanner_tecnico"))
 
         resposta_posicoes = self.client.get(reverse("core:posicoes"))
         self.assertContains(resposta_posicoes, reverse("core:scanner_tecnico"))
+
+        resposta_analise = self.client.get(reverse("core:analise_mercado"))
+        self.assertContains(resposta_analise, reverse("core:scanner_tecnico"))
 
 
 class PostItServicosTests(TestCase):

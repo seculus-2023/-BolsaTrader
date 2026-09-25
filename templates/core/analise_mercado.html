@@ -10,8 +10,52 @@
 <a href="{% url 'core:atualizar_cotacoes' %}" class="btn-futurista btn-atualizar-cotacoes" data-overlay-texto="Atualizando cotações...">Atualizar cotações agora</a>
 <a href="{% url 'core:historico_graficos' %}" class="btn-futurista btn-secundario">Ver histórico e gráficos</a>
 <a href="{% url 'core:backtest_robo' %}" class="btn-futurista btn-secundario">🎯 Backtesting do robô</a>
+{% if ia_configurada %}
+<a href="{% url 'core:analise_mercado_ia' %}" class="btn-futurista btn-analise-ia" data-overlay-texto="Consultando a IA sobre a B3 hoje...">🤖 Análise da B3 hoje (IA)</a>
+{% endif %}
 {% if ultima_atualizacao_cotacoes %}
 <p class="badge-atualizacao">⏱ Última atualização das cotações: {{ ultima_atualizacao_cotacoes|date:"d/m/Y H:i" }}</p>
+{% endif %}
+
+{% if not ia_configurada %}
+<div class="card-glass" style="margin-top: 1rem;">
+    <p style="color: var(--text-dim); margin: 0;">
+        A Análise da B3 hoje por IA ainda não está configurada neste sistema (falta a chave de API no .env).
+    </p>
+</div>
+{% endif %}
+
+{% if erro_ia %}
+<div class="card-glass" style="margin-top: 1rem;">
+    <p style="color: var(--text-dim); margin: 0;">{{ erro_ia }}</p>
+</div>
+{% endif %}
+
+{% if analise_ia %}
+<h2 style="margin-top: 1.8rem;">🤖 Análise da B3 hoje (IA)</h2>
+<div class="card-glass" style="margin-top: 1rem;">
+    {% if analise_ia.linhas %}
+    <div class="tabela-scroll">
+    <table class="tabela-futurista">
+        <thead><tr><th>Ativo</th><th>Situação</th><th>Comentário da IA</th></tr></thead>
+        <tbody>
+            {% for linha in analise_ia.linhas %}
+            <tr>
+                <td>{% if linha.eh_mercado_geral %}B3 (mercado geral){% else %}{{ linha.ticker }}{% endif %}</td>
+                <td><span class="badge-tendencia badge-{{ linha.situacao_classe }}">{{ linha.situacao }}</span></td>
+                <td>{{ linha.comentario }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    </div>
+    {% else %}
+    <p style="color: var(--text-dim); white-space: pre-line;">{{ analise_ia.texto }}</p>
+    {% endif %}
+    <p style="color: var(--text-dim); font-size: .8rem; margin: .8rem 0 0;">
+        Gerado por IA a partir dos dados desta tela - não constitui recomendação de investimento.
+    </p>
+</div>
 {% endif %}
 
 <h2 style="margin-top: 1.8rem;">Maiores altas e baixas do dia</h2>

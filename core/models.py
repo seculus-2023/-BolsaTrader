@@ -306,6 +306,14 @@ class Cotacao(models.Model):
         "Volume negociado", null=True, blank=True,
         help_text="Vem de graça no mesmo retorno da API que já busca o preço - nulo em registros salvos antes desse campo existir.",
     )
+    maxima = models.DecimalField(
+        "Máxima do dia (R$)", max_digits=12, decimal_places=2, null=True, blank=True,
+        help_text="Vem de graça no mesmo retorno da API que já busca o preço - usada no ATR e no suporte/resistência do Scanner Técnico.",
+    )
+    minima = models.DecimalField(
+        "Mínima do dia (R$)", max_digits=12, decimal_places=2, null=True, blank=True,
+        help_text="Vem de graça no mesmo retorno da API que já busca o preço - usada no ATR e no suporte/resistência do Scanner Técnico.",
+    )
     criado_em = models.DateTimeField(auto_now_add=True)
 
     class Meta:

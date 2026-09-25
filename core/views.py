@@ -88,6 +88,9 @@ from .services import (
     gerar_pdf_extrato_conta_corrente,
     escanear_carteira,
     salvar_post_it,
+    gerar_analise_b3_ia,
+    ia_configurada,
+    IAError,
 )
 
 TICKER_VALIDO = re.compile(r"^[A-Z0-9]{1,15}$")
@@ -582,11 +585,15 @@ def posicoes_exportar_pdf(request):
 @login_required
 def scanner_tecnico(request):
     """
-    Scanner Técnico: combina IFR, médias móveis, MACD, volume, volatilidade e
-    tendência de curto prazo de cada ação realmente comprada (saldo > 0) num
-    só veredito por ativo - deixando explícito quando os indicadores estão
+    Scanner Técnico: combina IFR, médias móveis, MACD, volume, suporte e
+    resistência e tendência de curto prazo de cada ativo em carteira - tanto
+    o realmente comprado (saldo > 0) quanto o apenas reservado (watchlist) -
+    num só veredito por ativo, deixando explícito quando os indicadores estão
     conflitantes entre si, em vez de fingir uma previsão certa de alta ou
-    baixa (ver core.services.escanear_carteira).
+    baixa. ATR entra como contexto de risco (não vota direção) e, quando o
+    veredito tem uma direção predominante, também sugere um plano de trade
+    (entrada/stop/alvo/relação risco-retorno) - ver
+    core.services.escanear_carteira.
     """
     resultados = escanear_carteira(request.user)
     return render(request, "core/scanner_tecnico.html", {"resultados": resultados})
@@ -653,6 +660,33 @@ def _sinais_robo(usuario):
     ]
 
 
+def _contexto_analise_mercado(usuario) -> dict:
+    """
+    Contexto comum das telas Análise de Mercado (core.views.analise_mercado) e
+    Análise da B3 hoje por IA (core.views.analise_mercado_ia): maiores altas e
+    baixas do dia no mercado geral, e os indicadores técnicos (tendência por
+    média móvel, RSI, MACD) de cada ativo acompanhado, com um sinal geral de
+    compra/venda - uma referência simples de apoio à decisão, não uma
+    recomendação de investimento.
+    """
+    sinais = _sinais_robo(usuario)
+
+    maiores_altas, maiores_baixas = [], []
+    erro_variacoes = None
+    try:
+        maiores_altas, maiores_baixas = buscar_maiores_variacoes(limite=10)
+    except BrapiError:
+        erro_variacoes = "Não foi possível carregar as maiores altas e baixas do dia agora. Tente novamente em instantes."
+
+    return {
+        "sinais": sinais,
+        "maiores_altas": maiores_altas,
+        "maiores_baixas": maiores_baixas,
+        "erro_variacoes": erro_variacoes,
+        "ia_configurada": ia_configurada(),
+    }
+
+
 @login_required
 def analise_mercado(request):
     """
@@ -662,21 +696,29 @@ def analise_mercado(request):
     de apoio à decisão, não uma recomendação de investimento. O histórico
     detalhado e o gráfico de cada ativo ficam na página "Histórico e Gráficos".
     """
-    sinais = _sinais_robo(request.user)
+    return render(request, "core/analise_mercado.html", _contexto_analise_mercado(request.user))
 
-    maiores_altas, maiores_baixas = [], []
-    erro_variacoes = None
+
+@login_required
+def analise_mercado_ia(request):
+    """
+    Botão "Análise da B3 hoje (IA)": consulta a IA configurada (ver
+    core.services.gerar_analise_b3_ia) pra comentar o pregão de hoje e os
+    ativos que o usuário acompanha, usando os mesmos dados já calculados
+    localmente por esta tela (maiores altas/baixas e indicadores técnicos)
+    como contexto - a IA só interpreta esses dados, não recalcula nem inventa
+    nada. Recarrega a mesma tela com o resultado (ou um aviso, se a IA não
+    estiver configurada ou a consulta falhar).
+    """
+    contexto = _contexto_analise_mercado(request.user)
+
     try:
-        maiores_altas, maiores_baixas = buscar_maiores_variacoes(limite=10)
-    except BrapiError:
-        erro_variacoes = "Não foi possível carregar as maiores altas e baixas do dia agora. Tente novamente em instantes."
+        contexto["analise_ia"] = gerar_analise_b3_ia(
+            contexto["sinais"], contexto["maiores_altas"], contexto["maiores_baixas"],
+        )
+    except IAError as exc:
+        contexto["erro_ia"] = str(exc)
 
-    contexto = {
-        "sinais": sinais,
-        "maiores_altas": maiores_altas,
-        "maiores_baixas": maiores_baixas,
-        "erro_variacoes": erro_variacoes,
-    }
     return render(request, "core/analise_mercado.html", contexto)
 
 

@@ -54,8 +54,10 @@ from .services import (
     calcular_medias_moveis, _classificar_medias_moveis, analisar_volume_precos,
     _classificar_volatilidade, _veredito_scanner, escanear_ativo_precos, escanear_ativo,
     escanear_carteira,
+    calcular_atr, calcular_suporte_resistencia, _classificar_suporte_resistencia, sugerir_plano_trade,
     obter_post_it, salvar_post_it,
     ultimo_valor_ibovespa,
+    ia_configurada, gerar_analise_b3_ia, _prompt_analise_b3_ia, _parsear_resposta_ia_em_grade, IAError,
 )
 
 
@@ -953,6 +955,10 @@ class BrapiIntegracaoTests(TestCase):
         # o mesmo volume também fica no histórico diário (Cotacao.volume) -
         # ver Scanner Técnico, core.services.analisar_volume_precos.
         self.assertEqual(cotacao.volume, 5689600)
+        # máxima/mínima do dia também ficam no histórico diário (Cotacao.maxima/minima) -
+        # usadas no ATR e no suporte/resistência do Scanner Técnico.
+        self.assertEqual(cotacao.maxima, Decimal("14.70"))
+        self.assertEqual(cotacao.minima, Decimal("14.31"))
         self.assertEqual(ativo.valor_mercado, Decimal("70010885753.00"))
         self.assertEqual(ativo.minima_52_semanas, Decimal("12.12"))
         self.assertEqual(ativo.maxima_52_semanas, Decimal("20.33"))
@@ -1955,6 +1961,66 @@ class BuscarHistoricoPrecosTests(TestCase):
         cotacao = Cotacao.objects.get(ativo=self.ativo, data=date(2026, 9, 1))
         self.assertEqual(cotacao.volume, 777)
 
+    @patch("core.services.requests.get")
+    def test_historico_traz_maxima_e_minima_de_cada_ponto_sem_custo_extra(self, mock_get):
+        base = int(datetime(2026, 9, 1, tzinfo=dt_timezone.utc).timestamp())
+        mock_get.return_value.raise_for_status = lambda: None
+        mock_get.return_value.json = lambda: {"results": [{"historicalDataPrice": [
+            {"date": base, "close": 30.0, "high": 31.5, "low": 29.2},
+        ]}]}
+        historico = buscar_historico_precos("PETR4", dias=30)
+        self.assertEqual(historico[0]["maxima"], Decimal("31.5"))
+        self.assertEqual(historico[0]["minima"], Decimal("29.2"))
+
+    @patch("core.services.requests.get")
+    def test_backfill_grava_maxima_e_minima_nas_cotacoes_novas(self, mock_get):
+        base = int(datetime(2026, 9, 1, tzinfo=dt_timezone.utc).timestamp())
+        mock_get.return_value.raise_for_status = lambda: None
+        mock_get.return_value.json = lambda: {"results": [{"historicalDataPrice": [
+            {"date": base, "close": 30.0, "high": 31.0, "low": 29.0},
+        ]}]}
+        backfill_historico_cotacoes(self.ativo)
+        cotacao = Cotacao.objects.get(ativo=self.ativo, data=date(2026, 9, 1))
+        self.assertEqual(cotacao.maxima, Decimal("31.0"))
+        self.assertEqual(cotacao.minima, Decimal("29.0"))
+
+    @patch("core.services.requests.get")
+    def test_backfill_completa_maxima_e_minima_faltantes_em_cotacao_ja_existente_sem_mexer_no_preco(self, mock_get):
+        Cotacao.objects.create(
+            ativo=self.ativo, data=date(2026, 9, 1), preco_fechamento=Decimal("99.00"), maxima=None, minima=None,
+        )
+        base = int(datetime(2026, 9, 1, tzinfo=dt_timezone.utc).timestamp())
+        mock_get.return_value.raise_for_status = lambda: None
+        mock_get.return_value.json = lambda: {"results": [{"historicalDataPrice": [
+            {"date": base, "close": 30.0, "high": 40.0, "low": 20.0},
+        ]}]}
+
+        gravadas = backfill_historico_cotacoes(self.ativo)
+
+        self.assertEqual(gravadas, 0)
+        cotacao = Cotacao.objects.get(ativo=self.ativo, data=date(2026, 9, 1))
+        self.assertEqual(cotacao.maxima, Decimal("40.0"))
+        self.assertEqual(cotacao.minima, Decimal("20.0"))
+        self.assertEqual(cotacao.preco_fechamento, Decimal("99.00"))
+
+    @patch("core.services.requests.get")
+    def test_backfill_nao_sobrescreve_maxima_e_minima_ja_preenchidas(self, mock_get):
+        Cotacao.objects.create(
+            ativo=self.ativo, data=date(2026, 9, 1), preco_fechamento=Decimal("99.00"),
+            maxima=Decimal("35.0"), minima=Decimal("28.0"),
+        )
+        base = int(datetime(2026, 9, 1, tzinfo=dt_timezone.utc).timestamp())
+        mock_get.return_value.raise_for_status = lambda: None
+        mock_get.return_value.json = lambda: {"results": [{"historicalDataPrice": [
+            {"date": base, "close": 30.0, "high": 40.0, "low": 20.0},
+        ]}]}
+
+        backfill_historico_cotacoes(self.ativo)
+
+        cotacao = Cotacao.objects.get(ativo=self.ativo, data=date(2026, 9, 1))
+        self.assertEqual(cotacao.maxima, Decimal("35.0"))
+        self.assertEqual(cotacao.minima, Decimal("28.0"))
+
 
 class BackfillAoRegistrarOperacaoTests(TestCase):
     """A primeira compra de um ativo novo aciona o backfill automático (ver core.views.operacao_nova)."""
@@ -2484,6 +2550,143 @@ class EnviarWhatsappTests(TestCase):
             gerar_alertas_para_usuario(self.usuario)
 
         mock_enviar.assert_not_called()
+
+
+class AnaliseB3IaTests(TestCase):
+    """core.services: ia_configurada, _parsear_resposta_ia_em_grade, gerar_analise_b3_ia."""
+
+    def _sinal_exemplo(self):
+        ativo = Ativo.objects.create(ticker="PETR4")
+        return {
+            "ativo": ativo, "tendencia_label": "Alta", "rsi": 45.0, "rsi_label": "Neutro",
+            "macd_label": "Cruzamento de alta", "sinal_geral_label": "Sinal de compra",
+            "votos_compra": 2, "votos_venda": 0,
+        }
+
+    def test_nao_configurada_sem_chave(self):
+        with override_settings(OPENAI_API_KEY=""):
+            self.assertFalse(ia_configurada())
+
+    def test_configurada_com_chave(self):
+        with override_settings(OPENAI_API_KEY="sk-teste"):
+            self.assertTrue(ia_configurada())
+
+    def test_gerar_analise_levanta_erro_sem_chave_configurada(self):
+        with override_settings(OPENAI_API_KEY=""):
+            with self.assertRaises(IAError):
+                gerar_analise_b3_ia([self._sinal_exemplo()], [], [])
+
+    def test_parsear_resposta_em_linhas_validas(self):
+        texto = "MERCADO|ALTA|Pregão positivo, puxado pelo setor financeiro.\nPETR4|NEUTRO|Sem direção clara no curto prazo."
+        linhas = _parsear_resposta_ia_em_grade(texto)
+        self.assertEqual(len(linhas), 2)
+        self.assertTrue(linhas[0]["eh_mercado_geral"])
+        self.assertEqual(linhas[0]["situacao_classe"], "alta")
+        self.assertFalse(linhas[1]["eh_mercado_geral"])
+        self.assertEqual(linhas[1]["ticker"], "PETR4")
+
+    def test_parsear_ignora_linhas_fora_do_formato(self):
+        texto = "isso não segue o formato pedido\nPETR4|ALTA|Comentário válido\nVALE3|SITUACAO_INVALIDA|Comentário"
+        linhas = _parsear_resposta_ia_em_grade(texto)
+        self.assertEqual(len(linhas), 1)
+        self.assertEqual(linhas[0]["ticker"], "PETR4")
+
+    def test_parsear_texto_totalmente_fora_do_formato_fica_vazio(self):
+        self.assertEqual(_parsear_resposta_ia_em_grade("Só um parágrafo qualquer, sem o formato pedido."), [])
+
+    def test_prompt_inclui_dados_do_sinal_e_das_variacoes(self):
+        maiores_altas = [{"stock": "VALE3", "name": "Vale", "change": 3.5}]
+        maiores_baixas = [{"stock": "MGLU3", "name": "Magazine Luiza", "change": -4.2}]
+        prompt = _prompt_analise_b3_ia([self._sinal_exemplo()], maiores_altas, maiores_baixas)
+        self.assertIn("PETR4", prompt)
+        self.assertIn("VALE3", prompt)
+        self.assertIn("MGLU3", prompt)
+        self.assertIn("TICKER|SITUACAO|COMENTARIO", prompt)
+
+    @patch("core.services.requests.post")
+    def test_gerar_analise_com_sucesso_retorna_texto_e_linhas(self, mock_post):
+        mock_post.return_value.raise_for_status = lambda: None
+        mock_post.return_value.json = lambda: {
+            "choices": [{"message": {"content": "MERCADO|ALTA|Pregão positivo hoje.\nPETR4|ALTA|Rompeu resistência."}}]
+        }
+        with override_settings(OPENAI_API_KEY="sk-teste"):
+            resultado = gerar_analise_b3_ia([self._sinal_exemplo()], [], [])
+
+        self.assertIn("MERCADO|ALTA", resultado["texto"])
+        self.assertEqual(len(resultado["linhas"]), 2)
+        headers_chamada = mock_post.call_args.kwargs["headers"]
+        self.assertEqual(headers_chamada["Authorization"], "Bearer sk-teste")
+
+    @patch("core.services.requests.post")
+    def test_gerar_analise_falha_de_rede_gera_iaerror(self, mock_post):
+        mock_post.side_effect = requests.RequestException("timeout")
+        with override_settings(OPENAI_API_KEY="sk-teste"):
+            with self.assertRaises(IAError):
+                gerar_analise_b3_ia([self._sinal_exemplo()], [], [])
+
+    @patch("core.services.requests.post")
+    def test_gerar_analise_resposta_com_formato_inesperado_gera_iaerror(self, mock_post):
+        mock_post.return_value.raise_for_status = lambda: None
+        mock_post.return_value.json = lambda: {"algo_diferente": True}
+        with override_settings(OPENAI_API_KEY="sk-teste"):
+            with self.assertRaises(IAError):
+                gerar_analise_b3_ia([self._sinal_exemplo()], [], [])
+
+
+class AnaliseMercadoIaViewTests(TestCase):
+    """Tela Análise de Mercado - botão "Análise da B3 hoje (IA)" (core.views.analise_mercado_ia)."""
+
+    def setUp(self):
+        self.usuario = User.objects.create_user(username="investidor_ia_view", password="SenhaForte123!")
+        self.client.login(username="investidor_ia_view", password="SenhaForte123!")
+
+    def test_botao_nao_aparece_sem_ia_configurada(self):
+        with override_settings(OPENAI_API_KEY=""):
+            resposta = self.client.get(reverse("core:analise_mercado"))
+        self.assertNotContains(resposta, reverse("core:analise_mercado_ia"))
+        self.assertContains(resposta, "ainda não está configurada")
+
+    def test_botao_aparece_com_ia_configurada(self):
+        with override_settings(OPENAI_API_KEY="sk-teste"):
+            resposta = self.client.get(reverse("core:analise_mercado"))
+        self.assertContains(resposta, reverse("core:analise_mercado_ia"))
+
+    def test_exige_login(self):
+        self.client.logout()
+        resposta = self.client.get(reverse("core:analise_mercado_ia"))
+        self.assertEqual(resposta.status_code, 302)
+
+    def test_sem_ia_configurada_mostra_aviso_sem_quebrar(self):
+        with override_settings(OPENAI_API_KEY=""):
+            resposta = self.client.get(reverse("core:analise_mercado_ia"))
+        self.assertEqual(resposta.status_code, 200)
+        self.assertContains(resposta, "ainda não está configurada")
+
+    @patch("core.services.requests.post")
+    def test_com_ia_configurada_mostra_grade_com_resultado(self, mock_post):
+        ativo = Ativo.objects.create(ticker="ITUB4")
+        Operacao.objects.create(
+            usuario=self.usuario, ativo=ativo, tipo=Operacao.COMPRA,
+            quantidade=10, preco_unitario=Decimal("30.00"), data_operacao=date.today(),
+        )
+        mock_post.return_value.raise_for_status = lambda: None
+        mock_post.return_value.json = lambda: {
+            "choices": [{"message": {"content": "MERCADO|ALTA|Pregão positivo hoje.\nITUB4|NEUTRO|Sem direção clara."}}]
+        }
+        with override_settings(OPENAI_API_KEY="sk-teste"):
+            resposta = self.client.get(reverse("core:analise_mercado_ia"))
+
+        self.assertContains(resposta, "B3 (mercado geral)")
+        self.assertContains(resposta, "ITUB4")
+        self.assertContains(resposta, "Sem direção clara.")
+
+    @patch("core.services.requests.post")
+    def test_falha_na_consulta_mostra_aviso_sem_quebrar_a_tela(self, mock_post):
+        mock_post.side_effect = requests.RequestException("timeout")
+        with override_settings(OPENAI_API_KEY="sk-teste"):
+            resposta = self.client.get(reverse("core:analise_mercado_ia"))
+        self.assertEqual(resposta.status_code, 200)
+        self.assertContains(resposta, "Não foi possível consultar a IA agora")
 
 
 class HistoricoAtualizacoesTests(TestCase):
@@ -3374,6 +3577,93 @@ class ScannerTecnicoServicosTests(TestCase):
         )
 
 
+class AtrSuporteResistenciaPlanoTradeTests(TestCase):
+    """core.services: calcular_atr, calcular_suporte_resistencia, sugerir_plano_trade."""
+
+    def test_atr_none_com_historico_insuficiente(self):
+        maximas = [11.0] * 10
+        minimas = [9.0] * 10
+        fechamentos = [10.0] * 10
+        self.assertIsNone(calcular_atr(maximas, minimas, fechamentos, periodo=14))
+
+    def test_atr_com_oscilacao_constante(self):
+        # sem gap entre fechamento e máxima/mínima do dia seguinte: TR = máxima - mínima = 2.0 todo dia.
+        maximas = [11.0] * 15
+        minimas = [9.0] * 15
+        fechamentos = [10.0] * 15
+        self.assertEqual(calcular_atr(maximas, minimas, fechamentos, periodo=14), 2.0)
+
+    def test_atr_tolera_gaps_de_maxima_minima_ausentes(self):
+        maximas = [None] * 5 + [11.0] * 14
+        minimas = [None] * 5 + [9.0] * 14
+        fechamentos = [10.0] * 19
+        self.assertEqual(calcular_atr(maximas, minimas, fechamentos, periodo=14), 2.0)
+
+    def test_suporte_resistencia_none_com_historico_insuficiente(self):
+        minimas = [9.0] * 19
+        maximas = [11.0] * 19
+        self.assertIsNone(calcular_suporte_resistencia(minimas, maximas, preco_atual=10.0, janela=20))
+
+    def test_suporte_resistencia_exclui_o_pregao_de_hoje_da_conta(self):
+        # 20 pregões anteriores oscilando entre 9 e 11, e hoje um rompimento forte pra 50 -
+        # o rompimento de hoje não pode "esticar" a própria resistência que ele está rompendo.
+        minimas = [9.0] * 20 + [40.0]
+        maximas = [11.0] * 20 + [50.0]
+        info = calcular_suporte_resistencia(minimas, maximas, preco_atual=50.0, janela=20)
+        self.assertEqual(info["suporte"], 9.0)
+        self.assertEqual(info["resistencia"], 11.0)
+        self.assertTrue(info["rompeu_resistencia"])
+        self.assertFalse(info["perdeu_suporte"])
+
+    def test_suporte_resistencia_perdeu_suporte(self):
+        minimas = [9.0] * 20 + [3.0]
+        maximas = [11.0] * 20 + [8.0]
+        info = calcular_suporte_resistencia(minimas, maximas, preco_atual=3.0, janela=20)
+        self.assertTrue(info["perdeu_suporte"])
+        self.assertFalse(info["rompeu_resistencia"])
+
+    def test_suporte_resistencia_dentro_do_canal_fica_neutro(self):
+        minimas = [9.0] * 21
+        maximas = [11.0] * 21
+        info = calcular_suporte_resistencia(minimas, maximas, preco_atual=10.0, janela=20)
+        self.assertEqual(_classificar_suporte_resistencia(info), "NEUTRO")
+
+    def test_classificar_suporte_resistencia_none_fica_dados_insuficientes(self):
+        self.assertEqual(_classificar_suporte_resistencia(None), "DADOS_INSUFICIENTES")
+
+    def test_plano_trade_none_quando_veredito_nao_e_direcional(self):
+        for veredito in ("CONFLITANTE", "NEUTRO", "DADOS_INSUFICIENTES"):
+            self.assertIsNone(sugerir_plano_trade(10.0, veredito, None, atr=1.0))
+
+    def test_plano_trade_de_compra_usa_suporte_e_resistencia_como_stop_e_alvo(self):
+        suporte_resistencia = {"suporte": 8.0, "resistencia": 12.0, "rompeu_resistencia": False, "perdeu_suporte": False}
+        plano = sugerir_plano_trade(10.0, "PREDOMINIO_ALTA", suporte_resistencia, atr=0.5)
+        self.assertEqual(plano["entrada"], 10.0)
+        self.assertEqual(plano["stop"], 8.0)
+        self.assertEqual(plano["alvo"], 12.0)
+        self.assertEqual(plano["relacao_risco_retorno"], 1.0)
+        self.assertIsNone(plano["observacao"])
+
+    def test_plano_trade_de_venda_usa_resistencia_como_stop_e_suporte_como_alvo(self):
+        suporte_resistencia = {"suporte": 8.0, "resistencia": 12.0, "rompeu_resistencia": False, "perdeu_suporte": False}
+        plano = sugerir_plano_trade(10.0, "PREDOMINIO_BAIXA", suporte_resistencia, atr=0.5)
+        self.assertEqual(plano["entrada"], 10.0)
+        self.assertEqual(plano["stop"], 12.0)
+        self.assertEqual(plano["alvo"], 8.0)
+        self.assertIsNotNone(plano["observacao"])
+        self.assertIn("não opera venda a descoberto", plano["observacao"])
+
+    def test_plano_trade_sem_suporte_resistencia_usa_buffer_do_atr(self):
+        plano = sugerir_plano_trade(10.0, "PREDOMINIO_ALTA", None, atr=1.0)
+        self.assertEqual(plano["stop"], 8.5)  # entrada - atr * 1.5
+        self.assertEqual(plano["alvo"], 12.0)  # entrada + atr * 2
+
+    def test_plano_trade_sem_atr_nem_suporte_resistencia_usa_2_por_cento_do_preco(self):
+        plano = sugerir_plano_trade(100.0, "PREDOMINIO_ALTA", None, atr=None)
+        self.assertEqual(plano["stop"], 97.0)  # entrada - (preco * 2%) * 1.5
+        self.assertEqual(plano["alvo"], 104.0)  # entrada + (preco * 2%) * 2
+
+
 class EscanearAtivoTests(TestCase):
     """core.services.escanear_ativo_precos / escanear_ativo / escanear_carteira."""
 
@@ -3421,20 +3711,48 @@ class EscanearAtivoTests(TestCase):
         resultado = escanear_ativo_precos([100.0, 101.0])
         self.assertEqual(resultado["veredito"], "NEUTRO")
 
-    def test_escanear_ativo_busca_precos_e_volumes_do_banco(self):
+    def test_sem_maxima_minima_suporte_resistencia_e_atr_ficam_sem_dados(self):
+        precos = [float(v) for v in range(100, 60, -1)]
+        resultado = escanear_ativo_precos(precos)
+        chaves = {item["nome"]: item["chave"] for item in resultado["indicadores"]}
+        self.assertEqual(chaves["Suporte e resistência"], "DADOS_INSUFICIENTES")
+        self.assertIsNone(resultado["atr"])
+        self.assertIsNone(resultado["suporte_resistencia"])
+
+    def test_rompimento_de_resistencia_vota_alta_e_gera_plano_de_trade(self):
+        # 25 pregões estáveis entre 9 e 11, e no último dia um rompimento forte pra 20 -
+        # o rompimento sozinho já basta pra votar ALTA no indicador de suporte/resistência.
+        precos = [10.0] * 25 + [20.0]
+        maximas = [11.0] * 25 + [21.0]
+        minimas = [9.0] * 25 + [19.0]
+
+        resultado = escanear_ativo_precos(precos, maximas_cronologico=maximas, minimas_cronologico=minimas)
+
+        chaves = {item["nome"]: item["chave"] for item in resultado["indicadores"]}
+        self.assertEqual(chaves["Suporte e resistência"], "ALTA")
+        self.assertIsNotNone(resultado["suporte_resistencia"])
+        self.assertTrue(resultado["suporte_resistencia"]["rompeu_resistencia"])
+        if resultado["veredito"] == "PREDOMINIO_ALTA":
+            self.assertIsNotNone(resultado["plano_trade"])
+            self.assertEqual(resultado["plano_trade"]["entrada"], 20.0)
+
+    def test_escanear_ativo_busca_precos_volumes_maxima_e_minima_do_banco(self):
         ativo = Ativo.objects.create(ticker="SCAN3")
         hoje = date.today()
         for i, preco in enumerate(range(100, 60, -1)):
             Cotacao.objects.create(
                 ativo=ativo, data=hoje - timedelta(days=(39 - i)), preco_fechamento=Decimal(str(preco)),
+                maxima=Decimal(str(preco + 1)), minima=Decimal(str(preco - 1)),
             )
 
         resultado = escanear_ativo(ativo)
 
         self.assertEqual(resultado["ativo"], ativo)
         self.assertEqual(resultado["veredito"], "CONFLITANTE")
+        self.assertIsNotNone(resultado["atr"])
+        self.assertIsNotNone(resultado["suporte_resistencia"])
 
-    def test_escanear_carteira_so_inclui_ativos_realmente_comprados(self):
+    def test_escanear_carteira_inclui_comprados_e_reservados_mas_nao_de_outro_usuario(self):
         usuario = User.objects.create_user(username="investidor_scanner", password="SenhaForte123!")
         outro_usuario = User.objects.create_user(username="investidor_scanner_outro", password="SenhaForte123!")
 
@@ -3457,7 +3775,10 @@ class EscanearAtivoTests(TestCase):
         resultados = escanear_carteira(usuario)
 
         tickers = [r["ativo"].ticker for r in resultados]
-        self.assertEqual(tickers, ["COMP3"])
+        self.assertEqual(tickers, ["COMP3", "RES3"])
+        por_ticker = {r["ativo"].ticker: r for r in resultados}
+        self.assertFalse(por_ticker["COMP3"]["apenas_reservado"])
+        self.assertTrue(por_ticker["RES3"]["apenas_reservado"])
 
 
 class ScannerTecnicoViewTests(TestCase):
@@ -3472,10 +3793,10 @@ class ScannerTecnicoViewTests(TestCase):
         resposta = self.client.get(reverse("core:scanner_tecnico"))
         self.assertEqual(resposta.status_code, 302)
 
-    def test_sem_ativos_comprados_mostra_mensagem(self):
+    def test_sem_ativos_em_carteira_mostra_mensagem(self):
         resposta = self.client.get(reverse("core:scanner_tecnico"))
         self.assertEqual(resposta.status_code, 200)
-        self.assertContains(resposta, "ainda não tem ações compradas")
+        self.assertContains(resposta, "ainda não tem ativos em carteira")
 
     def test_mostra_ativo_comprado_com_veredito_conflitante(self):
         ativo = Ativo.objects.create(ticker="SCVW3")
@@ -3494,7 +3815,7 @@ class ScannerTecnicoViewTests(TestCase):
         self.assertContains(resposta, "SCVW3")
         self.assertContains(resposta, "Indicadores conflitantes")
 
-    def test_nao_mostra_reserva_nem_ativo_de_outro_usuario(self):
+    def test_mostra_reserva_com_selo_mas_nao_ativo_de_outro_usuario(self):
         reservado = Ativo.objects.create(ticker="RESV3")
         Operacao.objects.create(
             usuario=self.usuario, ativo=reservado, tipo=Operacao.RESERVAR,
@@ -3509,7 +3830,8 @@ class ScannerTecnicoViewTests(TestCase):
 
         resposta = self.client.get(reverse("core:scanner_tecnico"))
 
-        self.assertNotContains(resposta, "RESV3")
+        self.assertContains(resposta, "RESV3")
+        self.assertContains(resposta, "Reservado")
         self.assertNotContains(resposta, "ALHEIO3")
 
     def test_menu_e_posicoes_tem_link_para_o_scanner(self):

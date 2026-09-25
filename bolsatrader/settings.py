@@ -308,3 +308,19 @@ WHATSAPP_APP_SECRET = config("WHATSAPP_APP_SECRET", default="")
 # em "Minha Conta" (ver accounts.models.PerfilUsuario).
 WHATSAPP_ACCESS_TOKEN = config("WHATSAPP_ACCESS_TOKEN", default="")
 WHATSAPP_PHONE_NUMBER_ID = config("WHATSAPP_PHONE_NUMBER_ID", default="")
+
+
+# --------------------------------------------------------------------------
+# IA para a "Análise da B3 hoje" (tela Análise de Mercado - ver
+# core.services.gerar_analise_b3_ia)
+# --------------------------------------------------------------------------
+# Qualquer provedor compatível com o formato de chat completions da OpenAI
+# funciona aqui, não precisa ser a OpenAI paga - basta trocar a BASE_URL e a
+# chave por um provedor com camada gratuita (ex: Groq em console.groq.com ou
+# OpenRouter em openrouter.ai, ambos com um endpoint /chat/completions igual
+# a este). Sem OPENAI_API_KEY configurada, o botão "Análise da B3 hoje (IA)"
+# fica desligado e o resto da tela Análise de Mercado continua funcionando
+# normalmente.
+OPENAI_API_KEY = config("OPENAI_API_KEY", default="")
+OPENAI_BASE_URL = config("OPENAI_BASE_URL", default="https://api.openai.com/v1")
+OPENAI_MODEL = config("OPENAI_MODEL", default="gpt-4o-mini")

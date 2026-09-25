@@ -3,16 +3,16 @@
 {% block conteudo %}
 <h1>Scanner Técnico</h1>
 <p style="color: var(--text-dim);">
-    Combina IFR, médias móveis, MACD, volume, volatilidade e tendência de curto prazo de cada ação comprada num só
-    painel. Quando os indicadores discordam entre si, o veredito é <strong>Indicadores conflitantes</strong> &mdash;
-    o scanner não escolhe um vencedor à força só pra parecer decidido. É apoio à leitura,
-    <strong>não é recomendação de investimento nem previsão de preço</strong>.
+    Combina IFR, médias móveis, MACD, volume, suporte/resistência e tendência de curto prazo de cada ativo em
+    carteira (comprado ou apenas reservado) num só painel. Quando os indicadores discordam entre si, o veredito é
+    <strong>Indicadores conflitantes</strong> &mdash; o scanner não escolhe um vencedor à força só pra parecer
+    decidido. É apoio à leitura, <strong>não é recomendação de investimento nem previsão de preço</strong>.
 </p>
 
 {% if not resultados %}
 <div class="card-glass" style="margin-top: 1rem;">
     <p style="color: var(--text-dim); margin: 0;">
-        Você ainda não tem ações compradas para escanear. Registre uma compra em
+        Você ainda não tem ativos em carteira para escanear. Registre uma compra ou reserva em
         <a href="{% url 'core:operacao_nova' %}">Compra / Venda</a>.
     </p>
 </div>
@@ -22,7 +22,10 @@
     {% for r in resultados %}
     <div class="card-glass">
         <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: .6rem; flex-wrap: wrap;">
-            <h3 style="margin: 0;">{{ r.ativo.ticker }}</h3>
+            <h3 style="margin: 0;">
+                {{ r.ativo.ticker }}
+                {% if r.apenas_reservado %}<span class="badge-tendencia badge-neutro" style="font-size: .62rem;">🔖 Reservado</span>{% endif %}
+            </h3>
             <span class="badge-tendencia badge-{{ r.veredito_classe }}">{{ r.veredito_label }}</span>
         </div>
         <p style="color: var(--text-dim); font-size: .82rem; margin: .5rem 0 1rem;">
@@ -40,12 +43,42 @@
             {% endfor %}
         </ul>
 
+        {% if r.suporte_resistencia %}
+        <p style="color: var(--text-dim); font-size: .78rem; margin: .6rem 0 0;">
+            Suporte R$ {{ r.suporte_resistencia.suporte }} &middot; Resistência R$ {{ r.suporte_resistencia.resistencia }}
+        </p>
+        {% endif %}
+
         <div style="margin-top: 1rem; padding-top: .8rem; border-top: 1px solid rgba(0, 240, 255, .1); display: flex; justify-content: space-between; align-items: center; gap: .6rem;">
             <span style="color: var(--text-dim); font-size: .87rem;">Volatilidade (30d)</span>
             <span class="badge-tendencia badge-{{ r.volatilidade_classe }}" style="font-size: .68rem;">
                 {{ r.volatilidade_label }}{% if r.volatilidade_pct is not None %} ({{ r.volatilidade_pct }}%){% endif %}
             </span>
         </div>
+        <div style="margin-top: .5rem; display: flex; justify-content: space-between; align-items: center; gap: .6rem;">
+            <span style="color: var(--text-dim); font-size: .87rem;">ATR (14d)</span>
+            <span style="color: var(--text-main); font-size: .82rem;">
+                {% if r.atr is not None %}R$ {{ r.atr }}{% else %}Aguardando histórico{% endif %}
+            </span>
+        </div>
+
+        {% if r.plano_trade %}
+        <div style="margin-top: 1rem; padding-top: .8rem; border-top: 1px solid rgba(0, 240, 255, .1);">
+            <p style="margin: 0 0 .5rem; font-size: .85rem; font-weight: 600; color: var(--text-main);">
+                Plano de trade sugerido
+            </p>
+            <p style="margin: 0 0 .4rem; font-size: .82rem; color: var(--text-dim);">{{ r.plano_trade.acao_label }}</p>
+            <ul style="list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: .3rem; font-size: .82rem;">
+                <li>Entrada: R$ {{ r.plano_trade.entrada }}</li>
+                <li>Stop: R$ {{ r.plano_trade.stop }}</li>
+                <li>Alvo: R$ {{ r.plano_trade.alvo }}</li>
+                {% if r.plano_trade.relacao_risco_retorno %}<li>Relação risco-retorno: 1:{{ r.plano_trade.relacao_risco_retorno }}</li>{% endif %}
+            </ul>
+            {% if r.plano_trade.observacao %}
+            <p style="margin: .5rem 0 0; font-size: .74rem; color: var(--text-dim);">{{ r.plano_trade.observacao }}</p>
+            {% endif %}
+        </div>
+        {% endif %}
     </div>
     {% endfor %}
 </div>
@@ -72,8 +105,8 @@
         </li>
     </ul>
     <p style="color: var(--text-dim); font-size: .8rem; margin-bottom: 0;">
-        Volume e volatilidade dependem de histórico indo se acumulando com o tempo - podem aparecer como "aguardando
-        histórico" por um tempo em ativos comprados recentemente.
+        Volume, suporte/resistência, ATR e volatilidade dependem de histórico indo se acumulando com o tempo - podem
+        aparecer como "aguardando histórico" por um tempo em ativos comprados ou reservados recentemente.
     </p>
 </div>
 {% endblock %}

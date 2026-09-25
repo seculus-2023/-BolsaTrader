@@ -94,7 +94,7 @@
             var overlay = document.getElementById("overlay-atualizando");
             var texto = document.getElementById("overlay-atualizando-texto");
             if (!overlay) return;
-            document.querySelectorAll(".btn-atualizar-cotacoes, .btn-atualizar-noticias, .btn-atualizar-acoes-b3").forEach(function (link) {
+            document.querySelectorAll(".btn-atualizar-cotacoes, .btn-atualizar-noticias, .btn-atualizar-acoes-b3, .btn-analise-ia").forEach(function (link) {
                 link.addEventListener("click", function () {
                     texto.textContent = link.dataset.overlayTexto || "Atualizando...";
                     overlay.hidden = false;

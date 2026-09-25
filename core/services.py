@@ -511,6 +511,8 @@ def atualizar_cotacao_diaria(ativo: Ativo, dados_api: dict | None = None) -> Cot
             if variacao is not None
             else None,
             "volume": dados.get("regularMarketVolume"),
+            "maxima": ativo.maxima_dia,
+            "minima": ativo.minima_dia,
         },
     )
     return cotacao
@@ -694,10 +696,12 @@ def _converter_data_historico(valor) -> date | None:
 
 def buscar_historico_precos(ticker: str, dias: int = 180) -> list[dict]:
     """
-    Busca o histórico diário de fechamento de um ticker (ação da B3, ou um
-    índice como "^BVSP" para o Ibovespa) na API brapi.dev.
+    Busca o histórico diário de fechamento (e máxima/mínima/volume) de um
+    ticker (ação da B3, ou um índice como "^BVSP" para o Ibovespa) na API
+    brapi.dev.
 
-    Retorna uma lista de {"data": date, "fechamento": Decimal}, em ordem
+    Retorna uma lista de {"data": date, "fechamento": Decimal, "volume": int
+    | None, "maxima": Decimal | None, "minima": Decimal | None}, em ordem
     cronológica (mais antigo primeiro) e sem datas duplicadas.
     """
     url = f"{settings.BRAPI_BASE_URL}/quote/{ticker.upper()}"
@@ -728,9 +732,14 @@ def buscar_historico_precos(ticker: str, dias: int = 180) -> list[dict]:
         vistos.add(data_convertida)
         preco = _para_decimal(fechamento)
         if preco is not None:
-            # volume já vem de graça no mesmo ponto do histórico (sem custo
-            # extra de API) - usado pelo Scanner Técnico (ver analisar_volume_precos)
-            historico.append({"data": data_convertida, "fechamento": preco, "volume": ponto.get("volume")})
+            # volume, máxima e mínima já vêm de graça no mesmo ponto do
+            # histórico (sem custo extra de API) - usados pelo Scanner
+            # Técnico (ver analisar_volume_precos, calcular_atr,
+            # calcular_suporte_resistencia)
+            historico.append({
+                "data": data_convertida, "fechamento": preco, "volume": ponto.get("volume"),
+                "maxima": _para_decimal(ponto.get("high")), "minima": _para_decimal(ponto.get("low")),
+            })
 
     historico.sort(key=lambda item: item["data"])
     return historico
@@ -748,12 +757,13 @@ def backfill_historico_cotacoes(ativo: Ativo, dias: int = 180) -> int:
     gravada por atualizar_cotacao_diaria) - só grava as datas que ainda
     faltam. Retorna quantas cotações novas foram gravadas.
 
-    Efeito colateral "auto-cura": o campo volume (ver Scanner Técnico,
-    core.services.analisar_volume_precos) foi adicionado depois de várias
-    cotações já existirem sem ele - como o histórico da brapi.dev já traz o
-    volume de graça (mesma chamada, sem custo extra), aproveita pra completar
-    o volume que estiver faltando em cotações JÁ existentes dentro do período
-    buscado, sem tocar no preço/variação delas.
+    Efeito colateral "auto-cura": os campos volume, máxima e mínima (ver
+    Scanner Técnico, core.services.analisar_volume_precos, calcular_atr e
+    calcular_suporte_resistencia) foram adicionados depois de várias
+    cotações já existirem sem eles - como o histórico da brapi.dev já traz
+    tudo isso de graça (mesma chamada, sem custo extra), aproveita pra
+    completar o que estiver faltando em cotações JÁ existentes dentro do
+    período buscado, sem tocar no preço/variação delas.
     """
     historico = buscar_historico_precos(ativo.ticker, dias=dias)
     if not historico:
@@ -765,21 +775,41 @@ def backfill_historico_cotacoes(ativo: Ativo, dias: int = 180) -> int:
     }
 
     novas = [
-        Cotacao(ativo=ativo, data=item["data"], preco_fechamento=item["fechamento"], volume=item.get("volume"))
+        Cotacao(
+            ativo=ativo,
+            data=item["data"],
+            preco_fechamento=item["fechamento"],
+            volume=item.get("volume"),
+            maxima=item.get("maxima"),
+            minima=item.get("minima"),
+        )
         for item in historico
         if item["data"] not in existentes
     ]
     if novas:
         Cotacao.objects.bulk_create(novas, ignore_conflicts=True)
 
-    por_data = {item["data"]: item.get("volume") for item in historico}
-    a_completar = [
-        Cotacao(id=cotacao.id, volume=por_data.get(data_))
-        for data_, cotacao in existentes.items()
-        if cotacao.volume is None and por_data.get(data_) is not None
-    ]
+    por_data = {item["data"]: item for item in historico}
+    a_completar = []
+    for data_, cotacao in existentes.items():
+        item = por_data.get(data_)
+        if not item:
+            continue
+        campos = []
+        if cotacao.volume is None and item.get("volume") is not None:
+            cotacao.volume = item["volume"]
+            campos.append("volume")
+        if cotacao.maxima is None and item.get("maxima") is not None:
+            cotacao.maxima = item["maxima"]
+            campos.append("maxima")
+        if cotacao.minima is None and item.get("minima") is not None:
+            cotacao.minima = item["minima"]
+            campos.append("minima")
+        if campos:
+            a_completar.append((cotacao, campos))
     if a_completar:
-        Cotacao.objects.bulk_update(a_completar, ["volume"])
+        todos_os_campos = {campo for _, campos in a_completar for campo in campos}
+        Cotacao.objects.bulk_update([c for c, _ in a_completar], list(todos_os_campos))
 
     return len(novas)
 
@@ -2827,6 +2857,150 @@ VOLATILIDADE_CLASSES = {
     "ALTA": "baixa", "MODERADA": "neutro", "BAIXA": "alta", "DADOS_INSUFICIENTES": "neutro",
 }
 
+def calcular_atr(maximas: list, minimas: list, fechamentos: list[float], periodo: int = 14) -> float | None:
+    """
+    ATR (Average True Range) pela suavização de Wilder, a partir de máxima,
+    mínima e fechamento em ordem cronológica (mais antigo primeiro) - mede o
+    "tamanho médio" da oscilação diária em R$. Não vota direção (é contexto
+    de risco, igual volatilidade_pct), mas serve pra dimensionar stop/alvo do
+    plano de trade sugerido (ver sugerir_plano_trade).
+
+    Tolera máxima/mínima faltando em pregões antigos (campos adicionados
+    depois de várias cotações já existirem, ver backfill_historico_cotacoes)
+    - descarta esses pregões da conta em vez de quebrar, igual
+    analisar_volume_precos faz com volume ausente. Precisa de pelo menos
+    `periodo` pregões com máxima E mínima para retornar um valor.
+    """
+    trs = []
+    fechamento_anterior = None
+    for maxima, minima, fechamento in zip(maximas, minimas, fechamentos):
+        if maxima is not None and minima is not None:
+            maxima, minima = float(maxima), float(minima)
+            if fechamento_anterior is None:
+                tr = maxima - minima
+            else:
+                tr = max(
+                    maxima - minima,
+                    abs(maxima - fechamento_anterior),
+                    abs(minima - fechamento_anterior),
+                )
+            trs.append(tr)
+        fechamento_anterior = fechamento
+
+    if len(trs) < periodo:
+        return None
+
+    atr = sum(trs[:periodo]) / periodo
+    for tr in trs[periodo:]:
+        atr = (atr * (periodo - 1) + tr) / periodo
+    return round(atr, 2)
+
+
+def calcular_suporte_resistencia(minimas: list, maximas: list, preco_atual: float, janela: int = 20) -> dict | None:
+    """
+    Suporte = menor mínima e resistência = maior máxima dos `janela` pregões
+    ANTERIORES ao atual (o próprio pregão de hoje fica de fora da conta, pra
+    não contaminar o nível com o rompimento que ele mesmo pode estar fazendo
+    agora). None sem pelo menos `janela` pregões anteriores com máxima E
+    mínima registradas (ver backfill_historico_cotacoes).
+    """
+    pares = [
+        (float(minima), float(maxima))
+        for minima, maxima in zip(minimas[:-1], maximas[:-1])
+        if minima is not None and maxima is not None
+    ]
+    if len(pares) < janela:
+        return None
+
+    janela_pares = pares[-janela:]
+    suporte = min(minima for minima, _ in janela_pares)
+    resistencia = max(maxima for _, maxima in janela_pares)
+
+    return {
+        "suporte": round(suporte, 2),
+        "resistencia": round(resistencia, 2),
+        "rompeu_resistencia": preco_atual > resistencia,
+        "perdeu_suporte": preco_atual < suporte,
+    }
+
+
+def _classificar_suporte_resistencia(info: dict | None) -> str:
+    if info is None:
+        return "DADOS_INSUFICIENTES"
+    if info["rompeu_resistencia"]:
+        return "ALTA"
+    if info["perdeu_suporte"]:
+        return "BAIXA"
+    return "NEUTRO"
+
+
+SUPORTE_RESISTENCIA_LABELS = {
+    "ALTA": "Rompeu a resistência recente",
+    "BAIXA": "Perdeu o suporte recente",
+    "NEUTRO": "Dentro do canal entre suporte e resistência",
+    "DADOS_INSUFICIENTES": "Aguardando histórico",
+}
+SUPORTE_RESISTENCIA_CLASSES = {
+    "ALTA": "alta", "BAIXA": "baixa", "NEUTRO": "neutro", "DADOS_INSUFICIENTES": "neutro",
+}
+
+
+def sugerir_plano_trade(
+    preco_atual: float, veredito: str, suporte_resistencia: dict | None, atr: float | None,
+) -> dict | None:
+    """
+    Plano de trade sugerido (entrada/stop/alvo/relação risco-retorno) - só
+    calculado quando o veredito do Scanner tem uma direção predominante
+    (PREDOMINIO_ALTA/PREDOMINIO_BAIXA); em CONFLITANTE/NEUTRO/DADOS_
+    INSUFICIENTES não há direção pra basear entrada nenhuma. Usa o suporte/
+    resistência como stop/alvo quando disponível, caindo pra um buffer
+    baseado no ATR (ou 2% do preço, se o ATR também não estiver disponível
+    ainda) quando não há suporte/resistência calculado.
+
+    A carteira é long-only (sem venda a descoberto - ver
+    Operacao.TIPO_CHOICES): no lado PREDOMINIO_BAIXA, o plano não sugere
+    "abrir uma venda", e sim usar os níveis como referência para decidir se
+    sai (total ou parcialmente) de uma posição já comprada.
+    """
+    if veredito not in ("PREDOMINIO_ALTA", "PREDOMINIO_BAIXA"):
+        return None
+
+    entrada = preco_atual
+    buffer = atr if atr else entrada * 0.02
+
+    if veredito == "PREDOMINIO_ALTA":
+        stop = suporte_resistencia["suporte"] if suporte_resistencia else entrada - buffer * 1.5
+        stop = min(stop, entrada - buffer * 0.5)
+        tem_resistencia_acima = suporte_resistencia and suporte_resistencia["resistencia"] > entrada
+        alvo = suporte_resistencia["resistencia"] if tem_resistencia_acima else entrada + buffer * 2
+        acao_label = "Considere comprar / reforçar a posição"
+        observacao = None
+    else:
+        stop = suporte_resistencia["resistencia"] if suporte_resistencia else entrada + buffer * 1.5
+        stop = max(stop, entrada + buffer * 0.5)
+        tem_suporte_abaixo = suporte_resistencia and suporte_resistencia["suporte"] < entrada
+        alvo = suporte_resistencia["suporte"] if tem_suporte_abaixo else entrada - buffer * 2
+        acao_label = "Considere reduzir ou sair da posição"
+        observacao = (
+            "Como a carteira não opera venda a descoberto, use estes níveis como "
+            "referência para decidir se sai (total ou parcialmente) da posição já comprada."
+        )
+
+    stop = round(max(stop, 0.01), 2)
+    alvo = round(max(alvo, 0.01), 2)
+    risco = abs(entrada - stop)
+    retorno = abs(alvo - entrada)
+
+    return {
+        "acao_label": acao_label,
+        "observacao": observacao,
+        "entrada": round(entrada, 2),
+        "stop": stop,
+        "alvo": alvo,
+        "relacao_risco_retorno": round(retorno / risco, 2) if risco else None,
+    }
+
+
 VEREDITO_SCANNER_LABELS = {
     "PREDOMINIO_ALTA": "Predomínio de sinais de alta",
     "PREDOMINIO_BAIXA": "Predomínio de sinais de baixa",
@@ -2872,15 +3046,23 @@ def _veredito_scanner(chaves: list[str]) -> str:
 def escanear_ativo_precos(
     precos_cronologico: list[float], volumes_cronologico: list | None = None,
     janela_curta: int = 3, janela_longa: int = 10,
+    maximas_cronologico: list | None = None, minimas_cronologico: list | None = None,
 ) -> dict:
     """
     Núcleo puro (sem acesso ao banco) do Scanner Técnico: combina IFR (RSI),
-    médias móveis, MACD, volume, volatilidade e tendência de curto prazo num
-    só veredito. Ver o comentário da seção acima para a regra do veredito
-    (CONFLITANTE sempre que houver indicadores discordando entre si).
+    médias móveis, MACD, volume, suporte/resistência e tendência de curto
+    prazo num só veredito. Ver o comentário da seção acima para a regra do
+    veredito (CONFLITANTE sempre que houver indicadores discordando entre
+    si). ATR e volatilidade são contexto de risco, não entram na votação.
+    Quando o veredito tem uma direção predominante, também sugere um plano de
+    trade (entrada/stop/alvo/relação risco-retorno - ver sugerir_plano_trade).
     """
     if volumes_cronologico is None:
         volumes_cronologico = [None] * len(precos_cronologico)
+    if maximas_cronologico is None:
+        maximas_cronologico = [None] * len(precos_cronologico)
+    if minimas_cronologico is None:
+        minimas_cronologico = [None] * len(precos_cronologico)
 
     rsi = calcular_rsi(precos_cronologico)
     rsi_chave = _classificar_rsi(rsi)
@@ -2894,12 +3076,21 @@ def escanear_ativo_precos(
     volume_info = analisar_volume_precos(volumes_cronologico, precos_cronologico)
     volume_chave = volume_info["classificacao"]
 
+    preco_atual = precos_cronologico[-1] if precos_cronologico else None
+    suporte_resistencia = (
+        calcular_suporte_resistencia(minimas_cronologico, maximas_cronologico, preco_atual)
+        if preco_atual is not None else None
+    )
+    suporte_resistencia_chave = _classificar_suporte_resistencia(suporte_resistencia)
+
     tendencia_chave = _tendencia_a_partir_de_precos_desc(
         list(reversed(precos_cronologico))[:janela_longa], janela_curta, janela_longa
     )
 
     volatilidade_metricas = _volatilidade_e_drawdown_precos(precos_cronologico)
     volatilidade_chave = _classificar_volatilidade(volatilidade_metricas["volatilidade_pct"])
+
+    atr = calcular_atr(maximas_cronologico, minimas_cronologico, precos_cronologico)
 
     indicadores = [
         {
@@ -2913,6 +3104,11 @@ def escanear_ativo_precos(
         {"nome": "MACD", "chave": macd_chave, "label": MACD_LABELS[macd_chave], "classe": MACD_CLASSES[macd_chave]},
         {"nome": "Volume", "chave": volume_chave, "label": VOLUME_LABELS[volume_chave], "classe": VOLUME_CLASSES[volume_chave]},
         {
+            "nome": "Suporte e resistência", "chave": suporte_resistencia_chave,
+            "label": SUPORTE_RESISTENCIA_LABELS[suporte_resistencia_chave],
+            "classe": SUPORTE_RESISTENCIA_CLASSES[suporte_resistencia_chave],
+        },
+        {
             "nome": "Tendência de curto prazo", "chave": tendencia_chave,
             "label": TENDENCIA_LABELS.get(tendencia_chave, tendencia_chave),
             "classe": tendencia_chave.lower() if tendencia_chave != "DADOS_INSUFICIENTES" else "neutro",
@@ -2925,12 +3121,21 @@ def escanear_ativo_precos(
     votos_sem_dados = chaves.count("DADOS_INSUFICIENTES")
     veredito = _veredito_scanner(chaves)
 
+    plano_trade = (
+        sugerir_plano_trade(preco_atual, veredito, suporte_resistencia, atr)
+        if preco_atual is not None else None
+    )
+
     return {
         "indicadores": indicadores,
         "rsi": rsi,
         "medias_moveis": medias,
         "macd": macd,
         "volume": volume_info,
+        "suporte_resistencia": suporte_resistencia,
+        "suporte_resistencia_label": SUPORTE_RESISTENCIA_LABELS[suporte_resistencia_chave],
+        "suporte_resistencia_classe": SUPORTE_RESISTENCIA_CLASSES[suporte_resistencia_chave],
+        "atr": atr,
         "volatilidade_pct": volatilidade_metricas["volatilidade_pct"],
         "drawdown_pct": volatilidade_metricas["drawdown_pct"],
         "volatilidade_chave": volatilidade_chave,
@@ -2943,30 +3148,40 @@ def escanear_ativo_precos(
         "veredito": veredito,
         "veredito_label": VEREDITO_SCANNER_LABELS[veredito],
         "veredito_classe": VEREDITO_SCANNER_CLASSES[veredito],
+        "plano_trade": plano_trade,
     }
 
 
 def escanear_ativo(ativo: Ativo, janela_curta: int = 3, janela_longa: int = 10) -> dict:
-    """Versão do Scanner Técnico que busca preços e volumes já salvos (Cotacao) de um ativo."""
-    cotacoes = list(ativo.cotacoes.order_by("data").values_list("preco_fechamento", "volume"))
-    precos = [float(preco) for preco, _ in cotacoes]
-    volumes = [volume for _, volume in cotacoes]
-    resultado = escanear_ativo_precos(precos, volumes, janela_curta, janela_longa)
+    """Versão do Scanner Técnico que busca preços, volumes, máximas e mínimas já salvos (Cotacao) de um ativo."""
+    cotacoes = list(
+        ativo.cotacoes.order_by("data").values_list("preco_fechamento", "volume", "maxima", "minima")
+    )
+    precos = [float(preco) for preco, _, _, _ in cotacoes]
+    volumes = [volume for _, volume, _, _ in cotacoes]
+    maximas = [maxima for _, _, maxima, _ in cotacoes]
+    minimas = [minima for _, _, _, minima in cotacoes]
+    resultado = escanear_ativo_precos(precos, volumes, janela_curta, janela_longa, maximas, minimas)
     resultado["ativo"] = ativo
     return resultado
 
 
 def escanear_carteira(usuario) -> list[dict]:
     """
-    Scanner Técnico de todos os ativos realmente comprados (saldo > 0) do
-    usuário, ordenados por ticker - ver core.views.scanner_tecnico.
+    Scanner Técnico de todos os ativos com posição em carteira do usuário -
+    tanto os realmente comprados (saldo > 0) quanto os apenas reservados
+    (watchlist, sem saldo comprado) - ordenados por ticker - ver
+    core.views.scanner_tecnico. calcular_posicoes já descarta posições
+    totalmente zeradas (nem comprada, nem reservada), então não é preciso
+    filtrar de novo aqui além de ordenar.
     """
-    posicoes = calcular_posicoes(usuario)
-    compradas = sorted(
-        (p for p in posicoes if not p.apenas_reservado and p.quantidade > 0),
-        key=lambda p: p.ativo.ticker,
-    )
-    return [escanear_ativo(p.ativo) for p in compradas]
+    posicoes = sorted(calcular_posicoes(usuario), key=lambda p: p.ativo.ticker)
+    resultados = []
+    for posicao in posicoes:
+        resultado = escanear_ativo(posicao.ativo)
+        resultado["apenas_reservado"] = posicao.apenas_reservado
+        resultados.append(resultado)
+    return resultados
 
 
 # --------------------------------------------------------------------------
@@ -3121,6 +3336,117 @@ def _notificar_whatsapp_usuario(usuario, mensagem: str) -> None:
         return
     if numero:
         enviar_whatsapp(numero, mensagem)
+
+
+# --------------------------------------------------------------------------
+# "Análise da B3 hoje" por IA (tela Análise de Mercado)
+#
+# A IA só interpreta e comenta dados que o sistema já calculou sozinho
+# (maiores altas/baixas do dia e os indicadores técnicos de cada ativo
+# acompanhado, ver analisar_indicadores_tecnicos) - não inventa preço,
+# indicador nem notícia nenhuma. Qualquer provedor compatível com o formato
+# de chat completions da OpenAI funciona (ver OPENAI_BASE_URL no .env) - não
+# precisa ser a OpenAI paga, provedores como Groq ou OpenRouter têm camada
+# gratuita com esse mesmo formato de API.
+# --------------------------------------------------------------------------
+IA_TIMEOUT_SEGUNDOS = 45
+IA_SITUACAO_CLASSES = {"ALTA": "alta", "BAIXA": "baixa", "NEUTRO": "neutro"}
+
+
+class IAError(Exception):
+    """Erro ao consultar a IA da "Análise da B3 hoje" - chave não configurada, rede, ou resposta inesperada."""
+
+
+def ia_configurada() -> bool:
+    """True quando há uma chave de API configurada (OPENAI_API_KEY no .env) para a Análise da B3 hoje por IA."""
+    return bool(settings.OPENAI_API_KEY)
+
+
+def _prompt_analise_b3_ia(sinais: list[dict], maiores_altas: list[dict], maiores_baixas: list[dict]) -> str:
+    """Monta o prompt com o contexto do pregão de hoje já calculado localmente, pedindo a resposta em linhas "TICKER|SITUACAO|COMENTARIO" (ver _parsear_resposta_ia_em_grade) em vez de texto corrido."""
+    linhas_altas = "\n".join(f"- {a['stock']} ({a['name']}): +{a['change']}%" for a in maiores_altas[:10]) or "sem dados"
+    linhas_baixas = "\n".join(f"- {a['stock']} ({a['name']}): {a['change']}%" for a in maiores_baixas[:10]) or "sem dados"
+
+    linhas_ativos = "\n".join(
+        f"- {item['ativo'].ticker}: tendência {item['tendencia_label']}, RSI {item['rsi_label']}"
+        + (f" ({item['rsi']})" if item["rsi"] is not None else "")
+        + f", MACD {item['macd_label']}, sinal geral {item['sinal_geral_label']}"
+        f" ({item['votos_compra']} compra / {item['votos_venda']} venda)"
+        for item in sinais
+    ) or "o usuário ainda não acompanha nenhum ativo"
+
+    return (
+        "Você é um analista comentando o pregão de hoje da B3 (bolsa brasileira) para um investidor pessoa "
+        "física. Use SOMENTE os dados abaixo, já calculados pelo sistema - não invente preços, indicadores "
+        "nem notícias que não estão aqui.\n\n"
+        f"Maiores altas do dia:\n{linhas_altas}\n\n"
+        f"Maiores baixas do dia:\n{linhas_baixas}\n\n"
+        f"Indicadores técnicos dos ativos acompanhados pelo usuário:\n{linhas_ativos}\n\n"
+        "Responda APENAS com linhas no formato exato abaixo (sem cabeçalho, sem markdown, sem texto antes ou "
+        "depois):\nTICKER|SITUACAO|COMENTARIO\n\n"
+        "- Uma linha \"MERCADO|SITUACAO|comentário\" resumindo o pregão geral da B3 hoje.\n"
+        "- Uma linha para cada ativo acompanhado pelo usuário, na mesma ordem listada acima.\n"
+        "- SITUACAO deve ser exatamente uma destas palavras: ALTA, BAIXA ou NEUTRO.\n"
+        "- COMENTARIO em português, direto ao ponto, no máximo 160 caracteres.\n"
+        "- Isto não é recomendação de investimento, só uma leitura dos dados apresentados."
+    )
+
+
+def _parsear_resposta_ia_em_grade(texto: str) -> list[dict]:
+    """
+    Converte a resposta da IA (linhas "TICKER|SITUACAO|COMENTARIO") numa lista
+    de dicts prontos pra tabela. Linhas fora do formato esperado são
+    ignoradas silenciosamente (a IA às vezes decora a resposta com algo a
+    mais, apesar do pedido) - se nenhuma linha for aproveitável, quem chama
+    trata a lista vazia mostrando o texto bruto como alternativa.
+    """
+    linhas = []
+    for bruta in texto.strip().splitlines():
+        partes = [p.strip() for p in bruta.split("|")]
+        if len(partes) != 3:
+            continue
+        ticker, situacao, comentario = partes
+        situacao = situacao.upper()
+        if situacao not in IA_SITUACAO_CLASSES or not ticker or not comentario:
+            continue
+        linhas.append({
+            "ticker": ticker,
+            "eh_mercado_geral": ticker.upper() == "MERCADO",
+            "situacao": situacao,
+            "situacao_classe": IA_SITUACAO_CLASSES[situacao],
+            "comentario": comentario,
+        })
+    return linhas
+
+
+def gerar_analise_b3_ia(sinais: list[dict], maiores_altas: list[dict], maiores_baixas: list[dict]) -> dict:
+    """
+    Consulta a IA configurada (ver ia_configurada) pra comentar o pregão de
+    hoje e os ativos acompanhados, devolvendo tanto o texto bruto quanto a
+    versão já organizada em linhas (ver _parsear_resposta_ia_em_grade) pra
+    montar a tabela na tela Análise de Mercado. Levanta IAError se a IA não
+    estiver configurada ou a chamada falhar (rede, chave inválida, resposta
+    fora do esperado etc.).
+    """
+    if not ia_configurada():
+        raise IAError("A Análise da B3 hoje por IA ainda não está configurada neste sistema (falta a chave de API).")
+
+    prompt = _prompt_analise_b3_ia(sinais, maiores_altas, maiores_baixas)
+    url = f"{settings.OPENAI_BASE_URL.rstrip('/')}/chat/completions"
+    headers = {"Authorization": f"Bearer {settings.OPENAI_API_KEY}", "Content-Type": "application/json"}
+    payload = {
+        "model": settings.OPENAI_MODEL,
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0.4,
+    }
+    try:
+        resposta = requests.post(url, json=payload, headers=headers, timeout=IA_TIMEOUT_SEGUNDOS)
+        resposta.raise_for_status()
+        texto = resposta.json()["choices"][0]["message"]["content"]
+    except (requests.RequestException, KeyError, IndexError, TypeError, ValueError) as exc:
+        raise IAError("Não foi possível consultar a IA agora. Tente novamente em instantes.") from exc
+
+    return {"texto": texto.strip(), "linhas": _parsear_resposta_ia_em_grade(texto)}
 
 
 # --------------------------------------------------------------------------

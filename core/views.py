@@ -91,6 +91,8 @@ from .services import (
     gerar_analise_b3_ia,
     ia_configurada,
     IAError,
+    gerar_excel_scanner_e_analise_ia,
+    gerar_pdf_scanner_e_analise_ia,
 )
 
 TICKER_VALIDO = re.compile(r"^[A-Z0-9]{1,15}$")
@@ -720,6 +722,52 @@ def analise_mercado_ia(request):
         contexto["erro_ia"] = str(exc)
 
     return render(request, "core/analise_mercado.html", contexto)
+
+
+def _analise_ia_para_relatorio(usuario) -> tuple[dict | None, str | None]:
+    """
+    Mesma consulta à IA do botão "Análise da B3 hoje (IA)" (ver
+    analise_mercado_ia), reaproveitada pelos relatórios Excel/PDF do Scanner
+    Técnico + Análise da B3 (ver scanner_ia_exportar_excel/pdf) - devolve
+    (analise_ia, erro) em vez de gravar num contexto de template.
+    """
+    contexto = _contexto_analise_mercado(usuario)
+    try:
+        return gerar_analise_b3_ia(contexto["sinais"], contexto["maiores_altas"], contexto["maiores_baixas"]), None
+    except IAError as exc:
+        return None, str(exc)
+
+
+@login_required
+def scanner_ia_exportar_excel(request):
+    """
+    Relatório combinado (planilha .xlsx com duas abas) do Scanner Técnico
+    completo e da Análise da B3 hoje por IA - ver
+    core.services.gerar_excel_scanner_e_analise_ia.
+    """
+    resultados = escanear_carteira(request.user)
+    analise_ia, erro_ia = _analise_ia_para_relatorio(request.user)
+    conteudo = gerar_excel_scanner_e_analise_ia(resultados, analise_ia, erro_ia)
+    resposta = HttpResponse(
+        conteudo,
+        content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+    nome_arquivo = f"scanner_tecnico_e_analise_ia_{timezone.localdate().isoformat()}.xlsx"
+    resposta["Content-Disposition"] = f'attachment; filename="{nome_arquivo}"'
+    return resposta
+
+
+@login_required
+def scanner_ia_exportar_pdf(request):
+    """PDF combinado do Scanner Técnico completo e da Análise da B3 hoje por IA - ver core.services.gerar_pdf_scanner_e_analise_ia."""
+    nome_usuario = request.user.first_name or request.user.username
+    resultados = escanear_carteira(request.user)
+    analise_ia, erro_ia = _analise_ia_para_relatorio(request.user)
+    conteudo = gerar_pdf_scanner_e_analise_ia(resultados, analise_ia, erro_ia, nome_usuario)
+    resposta = HttpResponse(conteudo, content_type="application/pdf")
+    nome_arquivo = f"scanner_tecnico_e_analise_ia_{timezone.localdate().isoformat()}.pdf"
+    resposta["Content-Disposition"] = f'attachment; filename="{nome_arquivo}"'
+    return resposta
 
 
 @login_required

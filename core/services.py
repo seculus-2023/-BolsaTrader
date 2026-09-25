@@ -3184,6 +3184,221 @@ def escanear_carteira(usuario) -> list[dict]:
     return resultados
 
 
+COLUNAS_SCANNER = [
+    "Ativo", "Reservado", "Veredito", "IFR (RSI)", "Médias móveis", "MACD", "Volume",
+    "Suporte e resistência", "Tendência", "Volatilidade (30d, %)", "ATR (14d, R$)",
+    "Suporte (R$)", "Resistência (R$)", "Entrada", "Stop", "Alvo", "Relação R:R",
+]
+
+
+def _linha_scanner(item: dict) -> list:
+    indicadores = {i["nome"]: i["label"] for i in item["indicadores"]}
+    plano = item.get("plano_trade")
+    sr = item.get("suporte_resistencia")
+    return [
+        item["ativo"].ticker,
+        "Sim" if item.get("apenas_reservado") else "Não",
+        item["veredito_label"],
+        indicadores.get("IFR (RSI)", "—"),
+        indicadores.get("Médias móveis", "—"),
+        indicadores.get("MACD", "—"),
+        indicadores.get("Volume", "—"),
+        indicadores.get("Suporte e resistência", "—"),
+        indicadores.get("Tendência de curto prazo", "—"),
+        item["volatilidade_pct"] if item["volatilidade_pct"] is not None else "—",
+        item["atr"] if item["atr"] is not None else "—",
+        sr["suporte"] if sr else "—",
+        sr["resistencia"] if sr else "—",
+        plano["entrada"] if plano else "—",
+        plano["stop"] if plano else "—",
+        plano["alvo"] if plano else "—",
+        f"1:{plano['relacao_risco_retorno']}" if plano and plano.get("relacao_risco_retorno") else "—",
+    ]
+
+
+def gerar_excel_scanner_e_analise_ia(
+    resultados_scanner: list[dict], analise_ia: dict | None, erro_ia: str | None,
+) -> bytes:
+    """
+    Gera uma planilha .xlsx com duas abas: o Scanner Técnico completo (cada
+    indicador, suporte/resistência, ATR e o plano de trade sugerido) de todo
+    ativo em carteira, e a Análise da B3 hoje por IA (ver
+    gerar_analise_b3_ia), quando configurada - `analise_ia`/`erro_ia` vêm de
+    uma chamada já feita por quem chama esta função (não recalcula sozinha,
+    pra não repetir a mesma consulta à IA de graça).
+    """
+    import io
+
+    from openpyxl import Workbook
+    from openpyxl.styles import Alignment, Font, PatternFill
+    from openpyxl.utils import get_column_letter
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Scanner Técnico"
+    ws.append(["Scanner Técnico"])
+    ws.append([f"Gerado em {timezone.localtime().strftime('%d/%m/%Y %H:%M')}"])
+    ws.append(["Referência de apoio à leitura técnica - não constitui recomendação de investimento."])
+    ws.append([])
+    ws.append(COLUNAS_SCANNER)
+    for celula in ws[5]:
+        celula.font = Font(bold=True, color="FFFFFF")
+        celula.fill = PatternFill("solid", fgColor="0D1526")
+        celula.alignment = Alignment(horizontal="center")
+
+    for item in resultados_scanner:
+        ws.append(_linha_scanner(item))
+
+    for indice in range(1, len(COLUNAS_SCANNER) + 1):
+        ws.column_dimensions[get_column_letter(indice)].width = 16
+    ws.freeze_panes = "A6"
+
+    ws2 = wb.create_sheet("Análise da B3 (IA)")
+    ws2.append(["Análise da B3 hoje (IA)"])
+    ws2.append([f"Gerado em {timezone.localtime().strftime('%d/%m/%Y %H:%M')}"])
+    ws2.append([
+        "Comentário gerado por IA a partir de dados já calculados pelo sistema - "
+        "não constitui recomendação de investimento.",
+    ])
+    ws2.append([])
+    if erro_ia:
+        ws2.append([erro_ia])
+    elif not analise_ia:
+        ws2.append(["A Análise da B3 hoje por IA não está configurada neste sistema."])
+    elif analise_ia["linhas"]:
+        ws2.append(["Ativo", "Situação", "Comentário"])
+        for celula in ws2[5]:
+            celula.font = Font(bold=True, color="FFFFFF")
+            celula.fill = PatternFill("solid", fgColor="0D1526")
+            celula.alignment = Alignment(horizontal="center")
+        for linha in analise_ia["linhas"]:
+            ws2.append([
+                "B3 (mercado geral)" if linha["eh_mercado_geral"] else linha["ticker"],
+                linha["situacao"],
+                linha["comentario"],
+            ])
+        ws2.column_dimensions["A"].width = 22
+        ws2.column_dimensions["B"].width = 14
+        ws2.column_dimensions["C"].width = 80
+    else:
+        ws2.append([analise_ia["texto"]])
+
+    buffer = io.BytesIO()
+    wb.save(buffer)
+    return buffer.getvalue()
+
+
+def gerar_pdf_scanner_e_analise_ia(
+    resultados_scanner: list[dict], analise_ia: dict | None, erro_ia: str | None, nome_usuario: str,
+) -> bytes:
+    """
+    Gera um PDF com duas seções: o Scanner Técnico (veredito, suporte/
+    resistência, ATR e plano de trade sugerido) de todo ativo em carteira, e
+    a Análise da B3 hoje por IA, quando configurada - mesma observação de
+    gerar_excel_scanner_e_analise_ia sobre `analise_ia`/`erro_ia` já virem
+    prontos de quem chama.
+    """
+    import io
+    from xml.sax.saxutils import escape
+
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import A4, landscape
+    from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+    from reportlab.lib.units import cm
+    from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+
+    nome_usuario = escape(nome_usuario)
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(
+        buffer, pagesize=landscape(A4),
+        topMargin=1.5 * cm, bottomMargin=1.5 * cm, leftMargin=1.2 * cm, rightMargin=1.2 * cm,
+    )
+    estilos = getSampleStyleSheet()
+    estilo_celula = ParagraphStyle("celula_scanner_ia", parent=estilos["Normal"], fontSize=8, leading=10)
+
+    elementos = [
+        Paragraph("BolsaTrader - Scanner Técnico e Análise da B3 hoje", estilos["Title"]),
+        Paragraph(
+            f"{nome_usuario} - gerado em {timezone.localtime().strftime('%d/%m/%Y %H:%M')} - "
+            "referência de apoio à decisão, não constitui recomendação de investimento.",
+            estilos["Normal"],
+        ),
+        Spacer(1, 0.4 * cm),
+        Paragraph("Scanner Técnico", estilos["Heading2"]),
+    ]
+
+    if not resultados_scanner:
+        elementos.append(Paragraph("Nenhum ativo em carteira para escanear.", estilos["Normal"]))
+    else:
+        colunas_pdf = ["Ativo", "Reservado", "Veredito", "Suporte", "Resistência", "ATR", "Entrada", "Stop", "Alvo", "R:R"]
+        dados = [colunas_pdf]
+        for item in resultados_scanner:
+            plano = item.get("plano_trade")
+            sr = item.get("suporte_resistencia")
+            dados.append([
+                item["ativo"].ticker,
+                "Sim" if item.get("apenas_reservado") else "Não",
+                item["veredito_label"],
+                f"R$ {sr['suporte']}" if sr else "—",
+                f"R$ {sr['resistencia']}" if sr else "—",
+                f"R$ {item['atr']}" if item["atr"] is not None else "—",
+                f"R$ {plano['entrada']}" if plano else "—",
+                f"R$ {plano['stop']}" if plano else "—",
+                f"R$ {plano['alvo']}" if plano else "—",
+                f"1:{plano['relacao_risco_retorno']}" if plano and plano.get("relacao_risco_retorno") else "—",
+            ])
+        tabela = Table(dados, repeatRows=1)
+        tabela.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#0D1526")),
+            ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+            ("FONTSIZE", (0, 0), (-1, -1), 8),
+            ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#cccccc")),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#eef2f7")]),
+            ("ALIGN", (1, 0), (-1, -1), "CENTER"),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("TOPPADDING", (0, 0), (-1, -1), 5),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+        ]))
+        elementos.append(tabela)
+
+    elementos.append(Spacer(1, 0.7 * cm))
+    elementos.append(Paragraph("Análise da B3 hoje (IA)", estilos["Heading2"]))
+
+    if erro_ia:
+        elementos.append(Paragraph(escape(erro_ia), estilos["Normal"]))
+    elif not analise_ia:
+        elementos.append(Paragraph(
+            "A Análise da B3 hoje por IA não está configurada neste sistema.", estilos["Normal"],
+        ))
+    elif analise_ia["linhas"]:
+        dados_ia = [["Ativo", "Situação", "Comentário"]]
+        for linha in analise_ia["linhas"]:
+            ativo_label = "B3 (mercado geral)" if linha["eh_mercado_geral"] else linha["ticker"]
+            dados_ia.append([
+                ativo_label,
+                linha["situacao"],
+                Paragraph(escape(linha["comentario"]), estilo_celula),
+            ])
+        tabela_ia = Table(dados_ia, colWidths=[3.5 * cm, 2.5 * cm, 18 * cm], repeatRows=1)
+        tabela_ia.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#0D1526")),
+            ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+            ("FONTSIZE", (0, 0), (0, -1), 8),
+            ("FONTSIZE", (1, 0), (1, -1), 8),
+            ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#cccccc")),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#eef2f7")]),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("TOPPADDING", (0, 0), (-1, -1), 5),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+        ]))
+        elementos.append(tabela_ia)
+    else:
+        elementos.append(Paragraph(escape(analise_ia["texto"]), estilos["Normal"]))
+
+    doc.build(elementos)
+    return buffer.getvalue()
+
+
 # --------------------------------------------------------------------------
 # Backtesting do robô consultor
 #

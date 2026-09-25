@@ -58,6 +58,7 @@ from .services import (
     obter_post_it, salvar_post_it,
     ultimo_valor_ibovespa,
     ia_configurada, gerar_analise_b3_ia, _prompt_analise_b3_ia, _parsear_resposta_ia_em_grade, IAError,
+    gerar_excel_scanner_e_analise_ia, gerar_pdf_scanner_e_analise_ia,
 )
 
 
@@ -2687,6 +2688,175 @@ class AnaliseMercadoIaViewTests(TestCase):
             resposta = self.client.get(reverse("core:analise_mercado_ia"))
         self.assertEqual(resposta.status_code, 200)
         self.assertContains(resposta, "Não foi possível consultar a IA agora")
+
+
+class RelatorioScannerEIaServicosTests(TestCase):
+    """core.services.gerar_excel_scanner_e_analise_ia / gerar_pdf_scanner_e_analise_ia."""
+
+    def _resultado_scanner_exemplo(self, apenas_reservado=False):
+        ativo = Ativo.objects.create(ticker="SCIA3")
+        return {
+            "ativo": ativo,
+            "apenas_reservado": apenas_reservado,
+            "veredito_label": "Predomínio de sinais de alta",
+            "indicadores": [
+                {"nome": "IFR (RSI)", "chave": "ALTA", "label": "Sobrevendido (RSI baixo)", "classe": "alta"},
+                {"nome": "Médias móveis", "chave": "ALTA", "label": "Preço e médias em alinhamento de alta", "classe": "alta"},
+                {"nome": "MACD", "chave": "ALTA", "label": "Cruzamento de alta", "classe": "alta"},
+                {"nome": "Volume", "chave": "NEUTRO", "label": "Volume dentro do normal", "classe": "neutro"},
+                {"nome": "Suporte e resistência", "chave": "ALTA", "label": "Rompeu a resistência recente", "classe": "alta"},
+                {"nome": "Tendência de curto prazo", "chave": "ALTA", "label": "Alta", "classe": "alta"},
+            ],
+            "volatilidade_pct": 22.5,
+            "atr": 1.5,
+            "suporte_resistencia": {"suporte": 8.0, "resistencia": 12.0, "rompeu_resistencia": True, "perdeu_suporte": False},
+            "plano_trade": {
+                "acao_label": "Considere comprar / reforçar a posição", "observacao": None,
+                "entrada": 12.5, "stop": 11.0, "alvo": 15.0, "relacao_risco_retorno": 1.67,
+            },
+        }
+
+    def test_excel_traz_scanner_e_ia_em_abas_separadas(self):
+        resultado = self._resultado_scanner_exemplo()
+        analise_ia = {
+            "texto": "MERCADO|ALTA|Pregão positivo.\nSCIA3|ALTA|Rompeu resistência.",
+            "linhas": [
+                {"ticker": "MERCADO", "eh_mercado_geral": True, "situacao": "ALTA", "situacao_classe": "alta", "comentario": "Pregão positivo."},
+                {"ticker": "SCIA3", "eh_mercado_geral": False, "situacao": "ALTA", "situacao_classe": "alta", "comentario": "Rompeu resistência."},
+            ],
+        }
+        conteudo = gerar_excel_scanner_e_analise_ia([resultado], analise_ia, None)
+
+        import io
+        import openpyxl
+        wb = openpyxl.load_workbook(io.BytesIO(conteudo))
+        self.assertEqual(wb.sheetnames, ["Scanner Técnico", "Análise da B3 (IA)"])
+
+        ws1 = wb["Scanner Técnico"]
+        cabecalho = [c.value for c in ws1[5]]
+        self.assertIn("Suporte e resistência", cabecalho)
+        self.assertIn("Relação R:R", cabecalho)
+        linha_dados = [c.value for c in ws1[6]]
+        self.assertEqual(linha_dados[0], "SCIA3")
+        self.assertEqual(linha_dados[1], "Não")
+
+        ws2 = wb["Análise da B3 (IA)"]
+        valores_ws2 = [c.value for row in ws2.iter_rows() for c in row if c.value]
+        self.assertIn("B3 (mercado geral)", valores_ws2)
+        self.assertIn("SCIA3", valores_ws2)
+        self.assertIn("Rompeu resistência.", valores_ws2)
+
+    def test_excel_mostra_selo_reservado(self):
+        resultado = self._resultado_scanner_exemplo(apenas_reservado=True)
+        conteudo = gerar_excel_scanner_e_analise_ia([resultado], None, None)
+        import io
+        import openpyxl
+        wb = openpyxl.load_workbook(io.BytesIO(conteudo))
+        linha_dados = [c.value for c in wb["Scanner Técnico"][6]]
+        self.assertEqual(linha_dados[1], "Sim")
+
+    def test_excel_sem_ia_configurada_mostra_aviso(self):
+        conteudo = gerar_excel_scanner_e_analise_ia([], None, None)
+        import io
+        import openpyxl
+        wb = openpyxl.load_workbook(io.BytesIO(conteudo))
+        valores = [c.value for row in wb["Análise da B3 (IA)"].iter_rows() for c in row if c.value]
+        self.assertTrue(any("não está configurada" in v for v in valores))
+
+    def test_excel_com_erro_na_ia_mostra_a_mensagem_de_erro(self):
+        conteudo = gerar_excel_scanner_e_analise_ia([], None, "Falha simulada de rede.")
+        import io
+        import openpyxl
+        wb = openpyxl.load_workbook(io.BytesIO(conteudo))
+        valores = [c.value for row in wb["Análise da B3 (IA)"].iter_rows() for c in row if c.value]
+        self.assertIn("Falha simulada de rede.", valores)
+
+    def test_pdf_sem_ativos_nao_quebra(self):
+        conteudo = gerar_pdf_scanner_e_analise_ia([], None, None, "Investidor Teste")
+        self.assertTrue(conteudo.startswith(b"%PDF"))
+
+    def test_pdf_com_ativos_e_ia_gera_bytes_validos(self):
+        resultado = self._resultado_scanner_exemplo()
+        analise_ia = {
+            "texto": "MERCADO|ALTA|Pregão positivo.",
+            "linhas": [
+                {"ticker": "MERCADO", "eh_mercado_geral": True, "situacao": "ALTA", "situacao_classe": "alta", "comentario": "Pregão positivo."},
+            ],
+        }
+        conteudo = gerar_pdf_scanner_e_analise_ia([resultado], analise_ia, None, "Investidor Teste")
+        self.assertTrue(conteudo.startswith(b"%PDF"))
+
+
+class RelatorioScannerEIaViewTests(TestCase):
+    """Tela Análise de Mercado - relatório combinado Scanner Técnico + IA (core.views.scanner_ia_exportar_excel/pdf)."""
+
+    def setUp(self):
+        self.usuario = User.objects.create_user(username="investidor_relatorio_scanner_ia", password="SenhaForte123!")
+        self.client.login(username="investidor_relatorio_scanner_ia", password="SenhaForte123!")
+        self.ativo = Ativo.objects.create(ticker="RELS3")
+        Operacao.objects.create(
+            usuario=self.usuario, ativo=self.ativo, tipo=Operacao.COMPRA,
+            quantidade=10, preco_unitario=Decimal("20.00"), data_operacao=date.today(),
+        )
+
+    def test_exige_login(self):
+        self.client.logout()
+        self.assertEqual(self.client.get(reverse("core:scanner_ia_exportar_excel")).status_code, 302)
+        self.assertEqual(self.client.get(reverse("core:scanner_ia_exportar_pdf")).status_code, 302)
+
+    def test_botoes_aparecem_na_tela_analise_de_mercado(self):
+        resposta = self.client.get(reverse("core:analise_mercado"))
+        self.assertContains(resposta, reverse("core:scanner_ia_exportar_excel"))
+        self.assertContains(resposta, reverse("core:scanner_ia_exportar_pdf"))
+
+    def test_exportar_excel_responde_ok_com_content_type_correto(self):
+        with override_settings(OPENAI_API_KEY=""):
+            resposta = self.client.get(reverse("core:scanner_ia_exportar_excel"))
+        self.assertEqual(resposta.status_code, 200)
+        self.assertEqual(
+            resposta["Content-Type"],
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+        self.assertIn("scanner_tecnico_e_analise_ia", resposta["Content-Disposition"])
+
+    def test_exportar_pdf_responde_ok_com_content_type_correto(self):
+        with override_settings(OPENAI_API_KEY=""):
+            resposta = self.client.get(reverse("core:scanner_ia_exportar_pdf"))
+        self.assertEqual(resposta.status_code, 200)
+        self.assertEqual(resposta["Content-Type"], "application/pdf")
+        self.assertIn("scanner_tecnico_e_analise_ia", resposta["Content-Disposition"])
+
+    @patch("core.services.requests.post")
+    def test_exportar_excel_inclui_ativo_comprado_e_resposta_da_ia(self, mock_post):
+        mock_post.return_value.raise_for_status = lambda: None
+        mock_post.return_value.json = lambda: {
+            "choices": [{"message": {"content": "MERCADO|ALTA|Pregão positivo.\nRELS3|ALTA|Bom sinal."}}]
+        }
+        with override_settings(OPENAI_API_KEY="sk-teste"):
+            resposta = self.client.get(reverse("core:scanner_ia_exportar_excel"))
+
+        import io
+        import openpyxl
+        wb = openpyxl.load_workbook(io.BytesIO(resposta.content))
+        valores_scanner = [c.value for row in wb["Scanner Técnico"].iter_rows() for c in row if c.value]
+        self.assertIn("RELS3", valores_scanner)
+        valores_ia = [c.value for row in wb["Análise da B3 (IA)"].iter_rows() for c in row if c.value]
+        self.assertIn("Bom sinal.", valores_ia)
+
+    def test_nao_mostra_ativo_de_outro_usuario(self):
+        outro_usuario = User.objects.create_user(username="investidor_relatorio_outro", password="SenhaForte123!")
+        ativo_de_outro = Ativo.objects.create(ticker="ALHEIA3")
+        Operacao.objects.create(
+            usuario=outro_usuario, ativo=ativo_de_outro, tipo=Operacao.COMPRA,
+            quantidade=5, preco_unitario=Decimal("15.00"), data_operacao=date.today(),
+        )
+        with override_settings(OPENAI_API_KEY=""):
+            resposta = self.client.get(reverse("core:scanner_ia_exportar_excel"))
+        import io
+        import openpyxl
+        wb = openpyxl.load_workbook(io.BytesIO(resposta.content))
+        valores = [c.value for row in wb["Scanner Técnico"].iter_rows() for c in row if c.value]
+        self.assertNotIn("ALHEIA3", valores)
 
 
 class HistoricoAtualizacoesTests(TestCase):

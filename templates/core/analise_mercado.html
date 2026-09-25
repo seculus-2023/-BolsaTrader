@@ -18,6 +18,10 @@
 <p class="badge-atualizacao">⏱ Última atualização das cotações: {{ ultima_atualizacao_cotacoes|date:"d/m/Y H:i" }}</p>
 {% endif %}
 
+<p style="color: var(--text-dim); font-size: .85rem; margin: 1rem 0 .4rem;">Relatório combinado do Scanner Técnico com a Análise da B3 hoje:</p>
+<a href="{% url 'core:scanner_ia_exportar_excel' %}" class="btn-futurista btn-secundario">⬇ Exportar Scanner + IA (Excel)</a>
+<a href="{% url 'core:scanner_ia_exportar_pdf' %}" class="btn-futurista btn-secundario">⬇ Exportar Scanner + IA (PDF)</a>
+
 {% if not ia_configurada %}
 <div class="card-glass" style="margin-top: 1rem;">
     <p style="color: var(--text-dim); margin: 0;">

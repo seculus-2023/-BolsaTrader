@@ -79,6 +79,8 @@
             {% endif %}
         </div>
         {% endif %}
+
+        <a href="{% url 'core:operacao_nova' %}?ticker={{ r.ativo.ticker }}&tipo=COMPRA" class="btn-futurista btn-secundario" style="margin-top: 1rem; width: 100%; text-align: center;">🛒 Comprar {{ r.ativo.ticker }}</a>
     </div>
     {% endfor %}
 </div>

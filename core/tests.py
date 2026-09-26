@@ -45,6 +45,7 @@ from .services import (
     calcular_variacoes_historico, executar_ciclo_atualizacao_cotacoes, iniciar_agendador_cotacoes_embutido,
     buscar_cotacoes_em_lote, atualizar_cotacoes_ativos, buscar_cotacao_atual_com_historico,
     _ciclo_agendador_embutido, _mensagem_falha_api,
+    mercado_b3_aberto,
     buscar_cotacao_atual,
     calcular_rsi,
     BrapiError,
@@ -1412,6 +1413,59 @@ class CoreConfigReadyTests(TestCase):
         mock_iniciar.assert_called_once()
 
 
+class MercadoB3AbertoTests(TestCase):
+    """
+    core.services.mercado_b3_aberto - portão único usado tanto pelo botão manual
+    "Atualizar cotações agora" quanto pelo agendador automático (embutido e
+    --loop): sem ele, o agendador gastaria requisições de API todo dia, a
+    qualquer hora, inclusive fins de semana - aqui se testa a regra em si
+    (dia útil E dentro do horário configurado), não só o uso dela em outros
+    lugares (que já é coberto com mock em AgendadorCotacoesEmbutidoTests etc.).
+    """
+
+    def _agora(self, ano, mes, dia, hora, minuto):
+        return timezone.make_aware(datetime(ano, mes, dia, hora, minuto))
+
+    @override_settings(B3_HORARIO_ABERTURA="10:00", B3_HORARIO_FECHAMENTO="17:00")
+    @patch("core.services.timezone.localtime")
+    def test_dia_util_dentro_do_horario_fica_aberto(self, mock_localtime):
+        mock_localtime.return_value = self._agora(2026, 9, 28, 12, 0)  # segunda-feira
+        self.assertTrue(mercado_b3_aberto())
+
+    @override_settings(B3_HORARIO_ABERTURA="10:00", B3_HORARIO_FECHAMENTO="17:00")
+    @patch("core.services.timezone.localtime")
+    def test_dia_util_antes_da_abertura_fica_fechado(self, mock_localtime):
+        mock_localtime.return_value = self._agora(2026, 9, 28, 9, 0)  # segunda, antes das 10h
+        self.assertFalse(mercado_b3_aberto())
+
+    @override_settings(B3_HORARIO_ABERTURA="10:00", B3_HORARIO_FECHAMENTO="17:00")
+    @patch("core.services.timezone.localtime")
+    def test_dia_util_depois_do_fechamento_fica_fechado(self, mock_localtime):
+        mock_localtime.return_value = self._agora(2026, 9, 28, 18, 0)  # segunda, depois das 17h
+        self.assertFalse(mercado_b3_aberto())
+
+    @override_settings(B3_HORARIO_ABERTURA="10:00", B3_HORARIO_FECHAMENTO="17:00")
+    @patch("core.services.timezone.localtime")
+    def test_sabado_fica_fechado_mesmo_dentro_do_horario(self, mock_localtime):
+        mock_localtime.return_value = self._agora(2026, 9, 26, 12, 0)  # sábado
+        self.assertFalse(mercado_b3_aberto())
+
+    @override_settings(B3_HORARIO_ABERTURA="10:00", B3_HORARIO_FECHAMENTO="17:00")
+    @patch("core.services.timezone.localtime")
+    def test_domingo_fica_fechado_mesmo_dentro_do_horario(self, mock_localtime):
+        mock_localtime.return_value = self._agora(2026, 9, 27, 12, 0)  # domingo
+        self.assertFalse(mercado_b3_aberto())
+
+    @override_settings(B3_HORARIO_ABERTURA="09:00", B3_HORARIO_FECHAMENTO="18:30")
+    @patch("core.services.timezone.localtime")
+    def test_respeita_horario_configurado_no_env_nao_so_o_padrao(self, mock_localtime):
+        # com o horário configurado mais largo, um horário que ficaria fechado
+        # no teste padrão (10h-17h) passa a ficar aberto - confirma que a
+        # função lê B3_HORARIO_ABERTURA/FECHAMENTO de verdade, não um valor fixo.
+        mock_localtime.return_value = self._agora(2026, 9, 28, 9, 30)  # segunda, 9h30
+        self.assertTrue(mercado_b3_aberto())
+
+
 class AgendadorCotacoesEmbutidoTests(TestCase):
     """core.services.iniciar_agendador_cotacoes_embutido - thread de atualização automática ligada em bolsatrader/wsgi.py."""
 
@@ -1537,6 +1591,14 @@ class DetalhesCotacoesTests(TestCase):
         self.assertContains(resposta, "Consultar cotação avulsa")
         self.assertContains(resposta, 'id="campo-ticker-avulso"')
         self.assertContains(resposta, "Preço alvo (R$)")  # calculadora de lucro/perda do card da consulta
+
+    def test_pagina_mostra_simulador_de_compra(self):
+        resposta = self.client.get(reverse("core:detalhes_cotacoes"))
+        self.assertContains(resposta, "🧮 Simulador de compra")
+        self.assertContains(resposta, "campo-simulador-quantidade")
+        self.assertContains(resposta, "campo-simulador-preco-compra")
+        self.assertContains(resposta, "campo-simulador-preco-alvo")
+        self.assertContains(resposta, "resultado-simulador-compra")
 
     def test_pagina_mostra_explicacao_do_ifr(self):
         resposta = self.client.get(reverse("core:detalhes_cotacoes"))
@@ -2056,6 +2118,32 @@ class BuscarHistoricoPrecosTests(TestCase):
         cotacao = Cotacao.objects.get(ativo=self.ativo, data=date(2026, 9, 1))
         self.assertEqual(cotacao.maxima, Decimal("35.0"))
         self.assertEqual(cotacao.minima, Decimal("28.0"))
+
+
+class OperacaoNovaPreenchimentoViaQueryStringTests(TestCase):
+    """
+    core.views.operacao_nova aceita "?ticker=" e "?tipo=" opcionais na URL pra
+    vir com o formulário já preenchido - usado pelo botão "🛒 Comprar" do
+    Scanner Técnico (ver core.views.scanner_tecnico).
+    """
+
+    def setUp(self):
+        self.usuario = User.objects.create_user(username="investidor_form_prefill", password="SenhaForte123!")
+        self.client.login(username="investidor_form_prefill", password="SenhaForte123!")
+
+    def test_preenche_ticker_e_tipo_vindos_da_url(self):
+        resposta = self.client.get(reverse("core:operacao_nova"), {"ticker": "petr4", "tipo": "COMPRA"})
+        self.assertContains(resposta, 'value="PETR4"')  # normaliza pra maiúsculo, igual ao clean_ticker do form
+        self.assertContains(resposta, '<option value="COMPRA" selected>', html=False)
+
+    def test_sem_parametros_no_formulario_fica_em_branco_normalmente(self):
+        resposta = self.client.get(reverse("core:operacao_nova"))
+        self.assertEqual(resposta.status_code, 200)
+        self.assertNotContains(resposta, 'value="PETR4"')
+
+    def test_tipo_invalido_na_url_e_ignorado(self):
+        resposta = self.client.get(reverse("core:operacao_nova"), {"tipo": "ALGO_INVALIDO"})
+        self.assertEqual(resposta.status_code, 200)
 
 
 class BackfillAoRegistrarOperacaoTests(TestCase):
@@ -4019,6 +4107,19 @@ class ScannerTecnicoViewTests(TestCase):
 
         self.assertContains(resposta, "SCVW3")
         self.assertContains(resposta, "Indicadores conflitantes")
+
+    def test_mostra_botao_de_comprar_com_ticker_preenchido(self):
+        ativo = Ativo.objects.create(ticker="COMP3")
+        Operacao.objects.create(
+            usuario=self.usuario, ativo=ativo, tipo=Operacao.COMPRA,
+            quantidade=10, preco_unitario=Decimal("30.00"), data_operacao=date.today(),
+        )
+
+        resposta = self.client.get(reverse("core:scanner_tecnico"))
+
+        url_esperada = reverse("core:operacao_nova") + "?ticker=COMP3&tipo=COMPRA"
+        self.assertContains(resposta, url_esperada)
+        self.assertContains(resposta, "🛒 Comprar COMP3")
 
     def test_mostra_reserva_com_selo_mas_nao_ativo_de_outro_usuario(self):
         reservado = Ativo.objects.create(ticker="RESV3")

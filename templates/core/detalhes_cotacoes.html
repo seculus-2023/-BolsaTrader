@@ -4,8 +4,8 @@
 <h1>Detalhes de Cotações</h1>
 <p style="color: var(--text-dim);">
     Consulte a cotação atual de qualquer ação, na hora, direto da API &mdash; preço, IFR (RSI), máxima/mínima do dia,
-    abertura, fechamento anterior, volume, valor de mercado, faixa de 52 semanas e o percentual de lucro/perda para
-    um preço alvo.
+    abertura, fechamento anterior, volume, valor de mercado, faixa de 52 semanas e um simulador de compra (lucro/perda
+    em R$ e % para uma quantidade, preço de compra e preço alvo).
 </p>
 
 <div class="card-glass" style="margin: 1.5rem 0 2rem;">
@@ -238,13 +238,26 @@
                         '</div>' +
                         '<div class="cotacao-calculadora-alvo">' +
                             '<label style="margin-top: .6rem; display: block; font-size: .85rem; color: var(--text-dim);">' +
-                                'Preço alvo (R$) &mdash; qual seria o lucro/perda?' +
+                                '🧮 Simulador de compra &mdash; se eu comprasse a este preço, qual seria o resultado num preço alvo?' +
                             '</label>' +
-                            '<div style="display: flex; gap: .6rem; align-items: center; flex-wrap: wrap; margin-top: .3rem;">' +
-                                '<input type="number" step="0.01" min="0" class="campo-preco-alvo form-control-futurista" ' +
-                                       'data-preco-atual="' + dados.preco + '" placeholder="Ex.: 11.44" style="max-width: 140px;">' +
-                                '<strong class="resultado-preco-alvo valor-neutro">&mdash;</strong>' +
+                            '<div style="display: flex; gap: .6rem; align-items: flex-end; flex-wrap: wrap; margin-top: .5rem;">' +
+                                '<div>' +
+                                    '<label style="font-size: .75rem; color: var(--text-dim); margin: 0;">Quantidade</label>' +
+                                    '<input type="number" step="1" min="1" class="campo-simulador-quantidade form-control-futurista" ' +
+                                           'placeholder="Ex.: 100" style="max-width: 110px;">' +
+                                '</div>' +
+                                '<div>' +
+                                    '<label style="font-size: .75rem; color: var(--text-dim); margin: 0;">Preço de compra (R$)</label>' +
+                                    '<input type="number" step="0.01" min="0" class="campo-simulador-preco-compra form-control-futurista" ' +
+                                           'value="' + dados.preco + '" style="max-width: 130px;">' +
+                                '</div>' +
+                                '<div>' +
+                                    '<label style="font-size: .75rem; color: var(--text-dim); margin: 0;">Preço alvo (R$)</label>' +
+                                    '<input type="number" step="0.01" min="0" class="campo-simulador-preco-alvo form-control-futurista" ' +
+                                           'placeholder="Ex.: 11.44" style="max-width: 130px;">' +
+                                '</div>' +
                             '</div>' +
+                            '<p style="margin: .6rem 0 0;">Resultado: <strong class="resultado-simulador-compra valor-neutro">&mdash;</strong></p>' +
                         '</div>' +
                         '<div class="cotacao-grid-campos">' +
                             '<div><span>IFR (RSI, 14 períodos)</span><strong>' +
@@ -285,36 +298,54 @@
     })();
 
     (function () {
-        // Calculadora de lucro/perda por preço alvo do card da consulta
-        // avulsa (montado por JS acima) - delegação de evento no documento,
-        // então não precisa religar o listener toda vez que o card é
-        // recriado a cada nova pesquisa.
+        // Simulador de compra do card da consulta avulsa (montado por JS
+        // acima) - "se eu comprasse X ações a R$Y, qual seria o lucro/perda
+        // num preço alvo R$Z?". Delegação de evento no documento, então não
+        // precisa religar o listener toda vez que o card é recriado a cada
+        // nova pesquisa.
         function formatarPercentual(valor) {
             var sinal = valor > 0 ? "+" : "";
             return sinal + valor.toFixed(2).replace(".", ",") + "%";
         }
 
-        document.addEventListener("input", function (evento) {
-            if (!evento.target.classList.contains("campo-preco-alvo")) return;
-            var campo = evento.target;
-            var resultado = campo.parentElement.querySelector(".resultado-preco-alvo");
+        function formatarReal(valor) {
+            var sinal = valor > 0 ? "+" : valor < 0 ? "-" : "";
+            return sinal + "R$ " + Math.abs(valor).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        }
+
+        function recalcular(container) {
+            var resultado = container.querySelector(".resultado-simulador-compra");
             if (!resultado) return;
 
-            var precoAtual = parseFloat(campo.dataset.precoAtual);
-            var precoAlvo = parseFloat(campo.value.replace(",", "."));
+            var quantidade = parseInt(container.querySelector(".campo-simulador-quantidade").value, 10);
+            var precoCompra = parseFloat(container.querySelector(".campo-simulador-preco-compra").value.replace(",", "."));
+            var precoAlvo = parseFloat(container.querySelector(".campo-simulador-preco-alvo").value.replace(",", "."));
 
-            if (!precoAtual || isNaN(precoAlvo)) {
+            if (!precoCompra || isNaN(precoAlvo)) {
                 resultado.textContent = "—";
-                resultado.className = "resultado-preco-alvo valor-neutro";
+                resultado.className = "resultado-simulador-compra valor-neutro";
                 return;
             }
 
-            var percentual = ((precoAlvo - precoAtual) / precoAtual) * 100;
-            var rotulo = percentual > 0 ? "lucro" : percentual < 0 ? "perda" : "sem variação";
-            resultado.textContent = formatarPercentual(percentual) + " de " + rotulo;
-            resultado.className = "resultado-preco-alvo " + (
-                percentual > 0 ? "valor-positivo" : percentual < 0 ? "valor-negativo" : "valor-neutro"
-            );
+            var percentual = ((precoAlvo - precoCompra) / precoCompra) * 100;
+            var classe = percentual > 0 ? "valor-positivo" : percentual < 0 ? "valor-negativo" : "valor-neutro";
+
+            if (!quantidade || isNaN(quantidade) || quantidade <= 0) {
+                resultado.textContent = formatarPercentual(percentual);
+                resultado.className = "resultado-simulador-compra " + classe;
+                return;
+            }
+
+            var lucroPerda = (precoAlvo - precoCompra) * quantidade;
+            resultado.textContent = formatarReal(lucroPerda) + " (" + formatarPercentual(percentual) + ")";
+            resultado.className = "resultado-simulador-compra " + classe;
+        }
+
+        document.addEventListener("input", function (evento) {
+            var classes = ["campo-simulador-quantidade", "campo-simulador-preco-compra", "campo-simulador-preco-alvo"];
+            var eAlvo = classes.some(function (c) { return evento.target.classList.contains(c); });
+            if (!eAlvo) return;
+            recalcular(evento.target.closest(".cotacao-calculadora-alvo"));
         });
     })();
 </script>

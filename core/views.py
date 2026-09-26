@@ -346,6 +346,13 @@ def operacoes_exportar_pdf(request):
 
 @login_required
 def operacao_nova(request):
+    """
+    Registra uma nova compra ou reserva. Aceita opcionalmente "?ticker=" e
+    "?tipo=" na URL (GET) pra vir com o ticker já preenchido - usado pelo
+    botão "🛒 Comprar" do Scanner Técnico (ver core.views.scanner_tecnico) -
+    o restante do formulário (quantidade, preço, data) continua em branco
+    pro usuário conferir e preencher antes de confirmar.
+    """
     if request.method == "POST":
         form = OperacaoForm(request.POST, usuario=request.user)
         if form.is_valid():
@@ -378,7 +385,14 @@ def operacao_nova(request):
             )
             return redirect("core:operacao_lista")
     else:
-        form = OperacaoForm(usuario=request.user, initial={"data_operacao": timezone.localdate()})
+        initial = {"data_operacao": timezone.localdate()}
+        ticker = request.GET.get("ticker", "").strip().upper()
+        if ticker:
+            initial["ticker"] = ticker
+        tipo = request.GET.get("tipo", "").strip().upper()
+        if tipo in dict(Operacao.TIPO_CHOICES):
+            initial["tipo"] = tipo
+        form = OperacaoForm(usuario=request.user, initial=initial)
 
     return render(request, "core/operacao_form.html", {"form": form})
 

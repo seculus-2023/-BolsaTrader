@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% load static l10n %}
 {% block titulo %}Criptomoedas - BolsaTrader{% endblock %}
 {% block conteudo %}
 <h1>Criptomoedas</h1>
@@ -31,6 +32,43 @@
             {% if lucro_perda_pct_total is not None %}({{ lucro_perda_pct_total|floatformat:2 }}%){% endif %}
         </div>
     </div>
+</div>
+
+<h2 style="margin-top: 2rem;">Variações de hoje</h2>
+<div class="card-glass" style="margin-top: 1rem;">
+    {% if grafico_dia_cripto %}
+    <p style="color: var(--text-dim); font-size: .85rem; margin-top: -.2rem;">
+        Lucro/perda (%) da carteira de cripto em cada atualização registrada hoje ({{ total_registros_cripto_hoje }} registro{{ total_registros_cripto_hoje|pluralize }}).
+    </p>
+    <div class="grafico-wrap">
+        {% localize off %}
+        <svg viewBox="0 0 {{ grafico_dia_cripto.largura }} {{ grafico_dia_cripto.altura }}"
+             class="grafico-carteira-dia" preserveAspectRatio="none"
+             data-pontos-id="{{ grafico_dia_cripto.id_svg }}"
+             role="img" aria-label="Variação do lucro/perda da carteira de cripto ao longo das atualizações de hoje">
+            <line x1="{{ grafico_dia_cripto.x_inicio }}" y1="{{ grafico_dia_cripto.y_topo }}"
+                  x2="{{ grafico_dia_cripto.x_fim }}" y2="{{ grafico_dia_cripto.y_topo }}" class="grafico-grid" />
+            <line x1="{{ grafico_dia_cripto.x_inicio }}" y1="{{ grafico_dia_cripto.y_base }}"
+                  x2="{{ grafico_dia_cripto.x_fim }}" y2="{{ grafico_dia_cripto.y_base }}" class="grafico-grid" />
+            <path d="{{ grafico_dia_cripto.path_d }}" fill="none" class="grafico-linha {% if grafico_dia_cripto.tendencia_alta %}linha-alta{% else %}linha-baixa{% endif %}" />
+            {% for p in grafico_dia_cripto.pontos %}
+                {% if forloop.first or forloop.last %}
+                <circle cx="{{ p.x }}" cy="{{ p.y }}" r="4" class="grafico-marcador {% if grafico_dia_cripto.tendencia_alta %}linha-alta{% else %}linha-baixa{% endif %}" />
+                {% endif %}
+            {% endfor %}
+        </svg>
+        {% endlocalize %}
+        {{ grafico_dia_cripto.pontos|json_script:grafico_dia_cripto.id_svg }}
+        <div class="grafico-eixos">
+            <span>{{ grafico_dia_cripto.faixa_min_label }}</span>
+            <span>{{ grafico_dia_cripto.faixa_max_label }}</span>
+        </div>
+    </div>
+    {% else %}
+    <p style="color: var(--text-dim);">
+        Ainda não há pelo menos 2 registros de hoje para montar o gráfico. Clique em "Atualizar cotações agora" para gerar um novo registro.
+    </p>
+    {% endif %}
 </div>
 
 <h2 style="margin-top: 2rem;">Cotações</h2>
@@ -156,4 +194,6 @@
     <a href="{% url 'core:cripto_operacao_lista' %}" class="link-secundario">Ver e gerenciar reservas em Minhas Operações de Cripto →</a>
 </div>
 {% endif %}
+
+<script src="{% static 'js/grafico.js' %}" defer></script>
 {% endblock %}

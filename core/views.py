@@ -32,7 +32,7 @@ from .forms import (
 )
 from .models import (
     Operacao, Alerta, Ativo, Cotacao, MensagemWhatsapp, FonteNoticia, AcaoB3, RegistroAtualizacaoCarteira,
-    LancamentoContaCorrente, CriptoAtivo, OperacaoCripto,
+    LancamentoContaCorrente, CriptoAtivo, OperacaoCripto, RegistroAtualizacaoCarteiraCripto,
 )
 from .services import (
     calcular_posicoes,
@@ -106,6 +106,7 @@ from .services import (
     atualizar_cotacao_cripto_diaria,
     gerar_excel_operacoes_cripto,
     gerar_pdf_operacoes_cripto,
+    registrar_atualizacao_carteira_cripto,
 )
 
 TICKER_VALIDO = re.compile(r"^[A-Z0-9]{1,15}$")
@@ -151,6 +152,9 @@ def dashboard(request):
     # lado de "Posições em carteira" - só precisa de grafico_dia/
     # total_registros_hoje daqui, mas reaproveita o helper inteiro.
     contexto.update(_contexto_historico_atualizacoes(request.user, limite=20))
+    # mesma ideia, mas pro gráfico "Variações de hoje (cripto)" ao lado do
+    # cartão "Cotações de cripto" - ver _contexto_historico_atualizacoes_cripto.
+    contexto.update(_contexto_historico_atualizacoes_cripto(request.user, limite=20))
     return render(request, "core/dashboard.html", contexto)
 
 
@@ -1036,6 +1040,32 @@ def _contexto_historico_atualizacoes(usuario, limite=500):
     }
 
 
+def _contexto_historico_atualizacoes_cripto(usuario, limite=500):
+    """
+    Como _contexto_historico_atualizacoes, mas para a carteira de
+    criptomoeda (RegistroAtualizacaoCarteiraCripto) - usado pela tela
+    Criptomoedas e pelo cartão "Variações de hoje (cripto)" do Painel de
+    Controle. `id_svg` diferente do gráfico de ações é obrigatório aqui
+    porque as duas telas mostram os dois gráficos juntos (ver
+    core.views.dashboard) - dois SVGs com o mesmo id quebrariam o
+    crosshair/tooltip (grafico.js).
+    """
+    registros = list(
+        RegistroAtualizacaoCarteiraCripto.objects.filter(usuario=usuario).order_by("-criado_em")[:limite]
+    )
+    hoje = timezone.localdate()
+    registros_hoje = [r for r in registros if timezone.localtime(r.criado_em).date() == hoje]
+
+    return {
+        "registros_cripto": registros,
+        "registros_cripto_com_variacao": calcular_variacoes_historico(registros),
+        "grafico_dia_cripto": construir_grafico_atualizacoes_dia(
+            list(reversed(registros_hoje)), id_svg="pontos-atualizacoes-dia-cripto",
+        ),
+        "total_registros_cripto_hoje": len(registros_hoje),
+    }
+
+
 @login_required
 def historico_atualizacoes(request):
     """
@@ -1614,6 +1644,7 @@ def criptomoedas(request):
         "lucro_perda_pct_total": lucro_perda_pct_total,
         "total_moedas": len(posicoes_compradas),
     }
+    contexto.update(_contexto_historico_atualizacoes_cripto(request.user, limite=20))
     return render(request, "core/criptomoedas.html", contexto)
 
 
@@ -1638,6 +1669,7 @@ def cripto_atualizar_cotacoes(request):
         messages.warning(
             request, f"Não foi possível atualizar {falhas} criptomoeda(s) agora. Tente novamente em instantes.",
         )
+    registrar_atualizacao_carteira_cripto(request.user)
     return redirect("core:criptomoedas")
 
 

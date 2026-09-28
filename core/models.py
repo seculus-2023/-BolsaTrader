@@ -881,3 +881,36 @@ class PostIt(models.Model):
 
     def __str__(self):
         return f"Post-it de {self.usuario}"
+
+
+class RegistroAtualizacaoCarteiraCripto(models.Model):
+    """
+    Espelha RegistroAtualizacaoCarteira (ações), mas para a carteira de
+    criptomoedas - grava toda vez que as cotações de cripto são atualizadas
+    (ver core.views.cripto_atualizar_cotacoes e core.services.
+    registrar_atualizacao_carteira_cripto). Usa os mesmos nomes de campo
+    (criado_em/valor_atual/lucro_perda/lucro_perda_pct) que
+    RegistroAtualizacaoCarteira de propósito, pra poder reaproveitar
+    construir_grafico_atualizacoes_dia/calcular_variacoes_historico sem
+    duplicar essas funções.
+    """
+
+    usuario = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="registros_atualizacao_carteira_cripto",
+    )
+    criado_em = models.DateTimeField("Data/hora", auto_now_add=True)
+    total_moedas = models.PositiveIntegerField("Total de moedas")
+    valor_investido = models.DecimalField("Valor investido", max_digits=14, decimal_places=2)
+    valor_atual = models.DecimalField("Valor atual", max_digits=14, decimal_places=2)
+    lucro_perda = models.DecimalField("Lucro/Perda (R$)", max_digits=14, decimal_places=2)
+    lucro_perda_pct = models.DecimalField(
+        "Lucro/Perda (%)", max_digits=8, decimal_places=2, null=True, blank=True,
+    )
+
+    class Meta:
+        verbose_name = "Registro de atualização da carteira de cripto"
+        verbose_name_plural = "Registros de atualização da carteira de cripto"
+        ordering = ["-criado_em"]
+
+    def __str__(self):
+        return f"{self.usuario} - {self.criado_em:%d/%m/%Y %H:%M}"

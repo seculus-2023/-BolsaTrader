@@ -33,7 +33,7 @@ from .forms import OperacaoForm, VendaLoteForm
 from .models import (
     Ativo, Cotacao, Operacao, Alerta, MensagemWhatsapp, CotacaoIndice, RegistroAtualizacaoCarteira,
     ContaCorrente, LancamentoContaCorrente, PostIt,
-    CriptoAtivo, OperacaoCripto, CotacaoCripto,
+    CriptoAtivo, OperacaoCripto, CotacaoCripto, RegistroAtualizacaoCarteiraCripto,
 )
 from .services import (
     calcular_posicoes, analisar_tendencia, gerar_alertas_para_usuario, construir_comparativo_valores,
@@ -67,6 +67,7 @@ from .services import (
     gerar_sugestoes_ia, _prompt_sugestoes_ia, _parsear_sugestoes_ia_em_grade,
     MOEDAS_CRIPTO_SUGERIDAS, buscar_cotacoes_cripto, atualizar_cotacao_cripto_diaria,
     atualizar_cotacoes_cripto_ativos, calcular_posicoes_cripto,
+    registrar_atualizacao_carteira_cripto,
 )
 
 
@@ -5427,3 +5428,103 @@ class CotacoesCriptoNoPainelTests(TestCase):
     def test_link_para_tela_completa_de_cripto(self):
         resposta = self.client.get(reverse("core:dashboard"))
         self.assertContains(resposta, reverse("core:criptomoedas"))
+
+
+class HistoricoAtualizacoesCriptoTests(TestCase):
+    """core.services: registrar_atualizacao_carteira_cripto, construir_grafico_atualizacoes_dia
+    reaproveitado para cripto + gráfico "Variações de hoje" nas telas Criptomoedas e Painel."""
+
+    def setUp(self):
+        self.usuario = User.objects.create_user(username="investidor_historico_cripto", password="SenhaForte123!")
+        self.cripto_ativo = CriptoAtivo.objects.create(coin="BTC", preco_atual=Decimal("400000.00"))
+        OperacaoCripto.objects.create(
+            usuario=self.usuario, cripto_ativo=self.cripto_ativo, tipo=OperacaoCripto.COMPRA,
+            quantidade=Decimal("0.01"), preco_unitario=Decimal("380000.00"), data_operacao=date.today(),
+        )
+        CotacaoCripto.objects.create(
+            cripto_ativo=self.cripto_ativo, data=date.today(), preco_fechamento=Decimal("400000.00"),
+        )
+
+    def test_registrar_atualizacao_carteira_cripto_grava_totais_corretos(self):
+        registro = registrar_atualizacao_carteira_cripto(self.usuario)
+
+        self.assertIsInstance(registro, RegistroAtualizacaoCarteiraCripto)
+        self.assertEqual(registro.total_moedas, 1)
+        self.assertEqual(registro.valor_investido, Decimal("3800.00"))
+        self.assertEqual(registro.valor_atual, Decimal("4000.00"))
+        self.assertEqual(registro.lucro_perda, Decimal("200.00"))
+        self.assertEqual(registro.lucro_perda_pct, Decimal("5.26"))
+
+    def test_registrar_atualizacao_carteira_cripto_sem_posicoes_grava_zeros(self):
+        usuario_vazio = User.objects.create_user(username="investidor_cripto_vazio", password="SenhaForte123!")
+        registro = registrar_atualizacao_carteira_cripto(usuario_vazio)
+
+        self.assertEqual(registro.total_moedas, 0)
+        self.assertEqual(registro.valor_investido, Decimal("0"))
+        self.assertIsNone(registro.lucro_perda_pct)
+
+    def test_grafico_atualizacoes_dia_none_com_menos_de_dois_registros(self):
+        registro = registrar_atualizacao_carteira_cripto(self.usuario)
+        self.assertIsNone(construir_grafico_atualizacoes_dia([registro]))
+
+    def test_grafico_atualizacoes_dia_com_dois_registros_usa_id_svg_de_cripto(self):
+        r1 = registrar_atualizacao_carteira_cripto(self.usuario)
+        CriptoAtivo.objects.filter(id=self.cripto_ativo.id).update(preco_atual=Decimal("420000.00"))
+        r2 = registrar_atualizacao_carteira_cripto(self.usuario)
+
+        grafico = construir_grafico_atualizacoes_dia([r1, r2], id_svg="pontos-atualizacoes-dia-cripto")
+
+        self.assertIsNotNone(grafico)
+        self.assertEqual(len(grafico["pontos"]), 2)
+        self.assertEqual(grafico["id_svg"], "pontos-atualizacoes-dia-cripto")
+
+    def test_atualizar_cotacoes_cripto_registra_atualizacao_da_carteira(self):
+        self.client.login(username="investidor_historico_cripto", password="SenhaForte123!")
+        with patch("core.services.requests.get") as mock_get:
+            mock_get.return_value.raise_for_status = lambda: None
+            mock_get.return_value.json = lambda: {"coins": [
+                {"coin": coin, "regularMarketPrice": 100.0} for coin in MOEDAS_CRIPTO_SUGERIDAS
+            ]}
+            self.client.get(reverse("core:cripto_atualizar_cotacoes"), follow=True)
+
+        self.assertEqual(RegistroAtualizacaoCarteiraCripto.objects.filter(usuario=self.usuario).count(), 1)
+
+    def test_tela_criptomoedas_mostra_grafico_com_dois_registros_hoje(self):
+        self.client.login(username="investidor_historico_cripto", password="SenhaForte123!")
+        registrar_atualizacao_carteira_cripto(self.usuario)
+        CriptoAtivo.objects.filter(id=self.cripto_ativo.id).update(preco_atual=Decimal("420000.00"))
+        registrar_atualizacao_carteira_cripto(self.usuario)
+
+        resposta = self.client.get(reverse("core:criptomoedas"))
+
+        self.assertContains(resposta, "Variações de hoje")
+        self.assertContains(resposta, "pontos-atualizacoes-dia-cripto")
+
+    def test_tela_criptomoedas_sem_registros_mostra_mensagem_padrao(self):
+        self.client.login(username="investidor_historico_cripto", password="SenhaForte123!")
+        resposta = self.client.get(reverse("core:criptomoedas"))
+        self.assertContains(resposta, "Ainda não há pelo menos 2 registros de hoje")
+
+    def test_painel_mostra_grafico_de_cripto_ao_lado_do_de_acoes_sem_colisao_de_id(self):
+        self.client.login(username="investidor_historico_cripto", password="SenhaForte123!")
+        ativo = Ativo.objects.create(ticker="VALE3")
+        Operacao.objects.create(
+            usuario=self.usuario, ativo=ativo, tipo=Operacao.COMPRA,
+            quantidade=10, preco_unitario=Decimal("60.00"), data_operacao=date.today(),
+        )
+        Cotacao.objects.create(ativo=ativo, data=date.today(), preco_fechamento=Decimal("66.00"))
+        registrar_atualizacao_carteira(self.usuario)
+        Cotacao.objects.filter(ativo=ativo, data=date.today()).update(preco_fechamento=Decimal("72.00"))
+        registrar_atualizacao_carteira(self.usuario)
+
+        registrar_atualizacao_carteira_cripto(self.usuario)
+        CotacaoCripto.objects.filter(cripto_ativo=self.cripto_ativo, data=date.today()).update(
+            preco_fechamento=Decimal("420000.00")
+        )
+        registrar_atualizacao_carteira_cripto(self.usuario)
+
+        resposta = self.client.get(reverse("core:dashboard"))
+
+        self.assertContains(resposta, "Variações de hoje (cripto)")
+        self.assertContains(resposta, 'data-pontos-id="pontos-atualizacoes-dia"', 1)
+        self.assertContains(resposta, 'data-pontos-id="pontos-atualizacoes-dia-cripto"', 1)

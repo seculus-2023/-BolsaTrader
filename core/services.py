@@ -38,7 +38,7 @@ from .models import (
     ConsumoApiBrapi,
     Ativo, Cotacao, Operacao, Alerta, FonteNoticia, Noticia, AcaoB3, CotacaoIndice,
     RegistroAtualizacaoCarteira, ContaCorrente, LancamentoContaCorrente, PostIt,
-    CriptoAtivo, OperacaoCripto, CotacaoCripto,
+    CriptoAtivo, OperacaoCripto, CotacaoCripto, RegistroAtualizacaoCarteiraCripto,
 )
 
 
@@ -1379,12 +1379,20 @@ def calcular_variacoes_historico(registros_desc: list[RegistroAtualizacaoCarteir
 
 def construir_grafico_atualizacoes_dia(
     registros_dia: list[RegistroAtualizacaoCarteira], largura: int = 640, altura: int = 200, padding: int = 40,
+    id_svg: str = "pontos-atualizacoes-dia",
 ) -> dict | None:
     """
     Monta os dados (SVG) do gráfico "Variações do dia" da tela Histórico de
     Atualizações: evolução do lucro/perda (%) da carteira ao longo dos
     registros de hoje, na ordem em que foram gravados. Recebe os registros
     já filtrados pelo dia atual, em ordem cronológica (mais antigo primeiro).
+
+    Funciona com qualquer objeto que tenha os campos criado_em/valor_atual/
+    lucro_perda/lucro_perda_pct - RegistroAtualizacaoCarteira (ações) ou
+    RegistroAtualizacaoCarteiraCripto, sem precisar duplicar esta função.
+    `id_svg` deve ser único na página quando os dois gráficos (ações e
+    cripto) aparecem juntos (ver core.views.dashboard), senão o crosshair/
+    tooltip (grafico.js) quebra por causa do id de SVG duplicado.
 
     Retorna None quando não há pelo menos 2 registros hoje (não dá pra
     traçar uma linha com um ponto só).
@@ -1419,7 +1427,7 @@ def construir_grafico_atualizacoes_dia(
         })
 
     return {
-        "id_svg": "pontos-atualizacoes-dia",
+        "id_svg": id_svg,
         "largura": largura,
         "altura": altura,
         "x_inicio": padding,
@@ -5036,3 +5044,36 @@ def calcular_posicoes_cripto(usuario) -> list[PosicaoCripto]:
         p.cripto_ativo.coin,
     ))
     return posicoes
+
+
+def registrar_atualizacao_carteira_cripto(
+    usuario, posicoes_cripto: list[PosicaoCripto] | None = None,
+) -> RegistroAtualizacaoCarteiraCripto:
+    """
+    Grava um retrato (snapshot) dos totais da carteira de criptomoeda do
+    usuário - espelha registrar_atualizacao_carteira (ações), chamado toda
+    vez que as cotações de cripto são atualizadas (ver core.views.
+    cripto_atualizar_cotacoes). Alimenta o gráfico "Variações de hoje" da
+    tela Criptomoedas e do Painel de Controle (reaproveita
+    construir_grafico_atualizacoes_dia, que só depende dos nomes de campo,
+    iguais aos de RegistroAtualizacaoCarteira).
+    """
+    if posicoes_cripto is None:
+        posicoes_cripto = calcular_posicoes_cripto(usuario)
+
+    compradas = [p for p in posicoes_cripto if not p.apenas_reservado]
+    valor_investido = sum((p.valor_investido for p in compradas), Decimal("0"))
+    valor_atual = sum((p.valor_atual for p in compradas if p.valor_atual is not None), Decimal("0"))
+    lucro_perda = valor_atual - valor_investido
+    lucro_perda_pct = (
+        (lucro_perda / valor_investido * 100).quantize(Decimal("0.01")) if valor_investido else None
+    )
+
+    return RegistroAtualizacaoCarteiraCripto.objects.create(
+        usuario=usuario,
+        total_moedas=len(compradas),
+        valor_investido=valor_investido,
+        valor_atual=valor_atual,
+        lucro_perda=lucro_perda,
+        lucro_perda_pct=lucro_perda_pct,
+    )

@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block titulo %}Nova operação de cripto - BolsaTrader{% endblock %}
+{% block conteudo %}
+<h1>Registrar Compra / Reserva de Criptomoeda</h1>
+<p style="color: var(--text-dim);">
+    Para vender, registre a compra primeiro e depois use o botão "Vender" na lista de
+    <a href="{% url 'core:cripto_operacao_lista' %}">Minhas Operações de Cripto</a>.
+</p>
+
+<div class="card-glass" style="max-width: 640px;">
+    <form method="post" class="form-futurista">
+        {% csrf_token %}
+        {% for field in form %}
+            <label for="{{ field.id_for_label }}">{{ field.label }}</label>
+            {{ field }}
+            {{ field.errors }}
+        {% endfor %}
+        <button type="submit" class="btn-futurista" style="margin-top: 1.6rem;">Salvar operação</button>
+        <a href="{% url 'core:cripto_operacao_lista' %}" class="btn-futurista btn-secundario">Cancelar</a>
+    </form>
+</div>
+{% endblock %}

@@ -93,6 +93,33 @@ coluna principal.
         <h2>Posições em carteira</h2>
         {% include "core/_tabela_posicoes_compradas.html" with ocultar_acoes=True %}
     </div>
+
+    <div class="card-glass" style="margin-top: 1.2rem;">
+        <h2>Cotações de cripto</h2>
+        <div class="tabela-scroll">
+        <table class="tabela-futurista">
+            <thead>
+                <tr>
+                    <th>Moeda</th>
+                    <th class="coluna-destaque">Preço atual</th>
+                    <th>Variação do dia</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for c in cotacoes_cripto %}
+                <tr>
+                    <td><strong>{{ c.coin }}</strong></td>
+                    <td class="coluna-destaque">{% if c.preco_atual is not None %}R$ {{ c.preco_atual }}{% else %}sem dados{% endif %}</td>
+                    <td class="{% if c.variacao_dia_pct > 0 %}valor-positivo{% elif c.variacao_dia_pct < 0 %}valor-negativo{% else %}valor-neutro{% endif %}">
+                        {% if c.variacao_dia_pct is not None %}{{ c.variacao_dia_pct }}%{% else %}&mdash;{% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        </div>
+        <a href="{% url 'core:criptomoedas' %}" class="link-secundario">Ver carteira de cripto completa →</a>
+    </div>
 </div>
 
 <div>

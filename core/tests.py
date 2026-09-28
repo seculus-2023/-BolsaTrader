@@ -19,6 +19,7 @@ import requests
 from django.apps import apps as django_apps
 from django.conf import settings
 from django.contrib.auth.models import User
+from django.core.exceptions import ValidationError
 from django.core.management import call_command
 from django.core.management.base import CommandError
 from django.test import TestCase, override_settings
@@ -32,6 +33,7 @@ from .forms import OperacaoForm, VendaLoteForm
 from .models import (
     Ativo, Cotacao, Operacao, Alerta, MensagemWhatsapp, CotacaoIndice, RegistroAtualizacaoCarteira,
     ContaCorrente, LancamentoContaCorrente, PostIt,
+    CriptoAtivo, OperacaoCripto, CotacaoCripto,
 )
 from .services import (
     calcular_posicoes, analisar_tendencia, gerar_alertas_para_usuario, construir_comparativo_valores,
@@ -51,6 +53,8 @@ from .services import (
     BrapiError,
     obter_ou_criar_conta_corrente, saldo_conta_corrente, sincronizar_lancamento_compra,
     sincronizar_lancamento_venda, registrar_transferencia_conta_corrente, extrato_conta_corrente,
+    sincronizar_lancamento_compra_cripto, sincronizar_lancamento_venda_cripto,
+    gerar_excel_operacoes_cripto, gerar_pdf_operacoes_cripto,
     gerar_excel_extrato_conta_corrente, gerar_pdf_extrato_conta_corrente,
     calcular_medias_moveis, _classificar_medias_moveis, analisar_volume_precos,
     _classificar_volatilidade, _veredito_scanner, escanear_ativo_precos, escanear_ativo,
@@ -61,6 +65,8 @@ from .services import (
     ia_configurada, gerar_analise_b3_ia, _prompt_analise_b3_ia, _parsear_resposta_ia_em_grade, IAError,
     gerar_excel_scanner_e_analise_ia, gerar_pdf_scanner_e_analise_ia,
     gerar_sugestoes_ia, _prompt_sugestoes_ia, _parsear_sugestoes_ia_em_grade,
+    MOEDAS_CRIPTO_SUGERIDAS, buscar_cotacoes_cripto, atualizar_cotacao_cripto_diaria,
+    atualizar_cotacoes_cripto_ativos, calcular_posicoes_cripto,
 )
 
 
@@ -4737,3 +4743,687 @@ class IbovespaNoPainelTests(TestCase):
         resposta = self.client.get(reverse("core:dashboard"))
         self.assertContains(resposta, "sem dados")
         self.assertNotContains(resposta, "130000")
+
+
+# ==========================================================================
+# Criptomoedas - tela própria, à parte das ações da B3 (ver CriptoAtivo/
+# OperacaoCripto/CotacaoCripto em core.models e o comentário no topo da
+# seção de cripto em core.services).
+# ==========================================================================
+class OperacaoCriptoModelTests(TestCase):
+    def setUp(self):
+        self.usuario = User.objects.create_user(username="investidor_cripto_model", password="SenhaForte123!")
+        self.cripto_ativo = CriptoAtivo.objects.create(coin="BTC")
+
+    def test_valor_total_e_quantidade_vezes_preco_unitario(self):
+        op = OperacaoCripto.objects.create(
+            usuario=self.usuario, cripto_ativo=self.cripto_ativo, tipo=OperacaoCripto.COMPRA,
+            quantidade=Decimal("0.01"), preco_unitario=Decimal("400000.00"), data_operacao=date.today(),
+        )
+        self.assertEqual(op.valor_total, Decimal("4000.0000000000"))
+
+    def test_saldo_e_quantidade_menos_vendida(self):
+        op = OperacaoCripto.objects.create(
+            usuario=self.usuario, cripto_ativo=self.cripto_ativo, tipo=OperacaoCripto.COMPRA,
+            quantidade=Decimal("0.01"), preco_unitario=Decimal("400000.00"), data_operacao=date.today(),
+            quantidade_vendida=Decimal("0.004"),
+        )
+        self.assertEqual(op.saldo, Decimal("0.006"))
+
+    def test_lucro_perda_realizado(self):
+        op = OperacaoCripto.objects.create(
+            usuario=self.usuario, cripto_ativo=self.cripto_ativo, tipo=OperacaoCripto.COMPRA,
+            quantidade=Decimal("0.01"), preco_unitario=Decimal("400000.00"), data_operacao=date.today(),
+            quantidade_vendida=Decimal("0.01"), preco_venda=Decimal("420000.00"), data_venda=date.today(),
+        )
+        self.assertEqual(op.lucro_perda_realizado, Decimal("200.00000000"))
+        self.assertEqual(op.lucro_perda_pct_realizado, Decimal("5.00"))
+
+    def test_reserva_nao_pode_ter_quantidade_vendida(self):
+        op = OperacaoCripto(
+            usuario=self.usuario, cripto_ativo=self.cripto_ativo, tipo=OperacaoCripto.RESERVAR,
+            quantidade=Decimal("0.5"), preco_unitario=Decimal("13000.00"), data_operacao=date.today(),
+            quantidade_vendida=Decimal("0.1"),
+        )
+        with self.assertRaises(ValidationError):
+            op.full_clean()
+
+    def test_reserva_aceita_quantidade_fracionaria_maior_que_1(self):
+        # ao contrário de Operacao (ações), OperacaoCripto não limita a
+        # quantidade de uma reserva a 1 - faz sentido reservar 2.5 ETH.
+        op = OperacaoCripto(
+            usuario=self.usuario, cripto_ativo=self.cripto_ativo, tipo=OperacaoCripto.RESERVAR,
+            quantidade=Decimal("2.5"), preco_unitario=Decimal("13000.00"), data_operacao=date.today(),
+        )
+        op.full_clean()  # não deve levantar
+
+    def test_preco_atual_vem_da_ultima_cotacao_cripto(self):
+        CotacaoCripto.objects.create(
+            cripto_ativo=self.cripto_ativo, data=date.today(), preco_fechamento=Decimal("410000.00"),
+        )
+        op = OperacaoCripto.objects.create(
+            usuario=self.usuario, cripto_ativo=self.cripto_ativo, tipo=OperacaoCripto.COMPRA,
+            quantidade=Decimal("0.01"), preco_unitario=Decimal("400000.00"), data_operacao=date.today(),
+        )
+        self.assertEqual(op.preco_atual, Decimal("410000.00"))
+        self.assertEqual(op.lucro_perda_pct_atual, Decimal("2.50"))
+
+    def test_meta_lucro_atingida(self):
+        CotacaoCripto.objects.create(
+            cripto_ativo=self.cripto_ativo, data=date.today(), preco_fechamento=Decimal("440000.00"),
+        )
+        op = OperacaoCripto.objects.create(
+            usuario=self.usuario, cripto_ativo=self.cripto_ativo, tipo=OperacaoCripto.COMPRA,
+            quantidade=Decimal("0.01"), preco_unitario=Decimal("400000.00"), data_operacao=date.today(),
+            meta_lucro_pct=Decimal("5.0"),
+        )
+        self.assertTrue(op.meta_lucro_atingida)
+
+    def test_variacao_pct_reserva_e_meta_compra_atingida(self):
+        CotacaoCripto.objects.create(
+            cripto_ativo=self.cripto_ativo, data=date.today(), preco_fechamento=Decimal("370000.00"),
+        )
+        op = OperacaoCripto.objects.create(
+            usuario=self.usuario, cripto_ativo=self.cripto_ativo, tipo=OperacaoCripto.RESERVAR,
+            quantidade=Decimal("0.01"), preco_unitario=Decimal("400000.00"), data_operacao=date.today(),
+            meta_perda_pct=Decimal("-5.0"),
+        )
+        self.assertEqual(op.variacao_pct_reserva, Decimal("-7.50"))
+        self.assertTrue(op.meta_compra_atingida)
+
+
+class CriptoServicosTests(TestCase):
+    """core.services: buscar_cotacoes_cripto, atualizar_cotacao_cripto_diaria, atualizar_cotacoes_cripto_ativos."""
+
+    def setUp(self):
+        self.cripto_ativo = CriptoAtivo.objects.create(coin="BTC")
+
+    @patch("core.services.requests.get")
+    def test_buscar_cotacoes_cripto_uma_chamada_para_varias_moedas(self, mock_get):
+        mock_get.return_value.raise_for_status = lambda: None
+        mock_get.return_value.json = lambda: {"coins": [
+            {"coin": "BTC", "coinName": "Bitcoin", "regularMarketPrice": 400000.0, "regularMarketChangePercent": 1.5},
+            {"coin": "ETH", "coinName": "Ethereum", "regularMarketPrice": 13000.0, "regularMarketChangePercent": -0.5},
+        ]}
+        resultado = buscar_cotacoes_cripto(["BTC", "ETH"])
+        self.assertEqual(mock_get.call_count, 1)  # uma única chamada, não uma por moeda
+        self.assertEqual(set(resultado.keys()), {"BTC", "ETH"})
+        self.assertEqual(resultado["BTC"]["coinName"], "Bitcoin")
+        params_chamada = mock_get.call_args.kwargs["params"]
+        self.assertEqual(params_chamada["coin"], "BTC,ETH")
+
+    def test_buscar_cotacoes_cripto_sem_moedas_nao_chama_api(self):
+        self.assertEqual(buscar_cotacoes_cripto([]), {})
+
+    @patch("core.services.requests.get")
+    def test_buscar_cotacoes_cripto_falha_de_rede_gera_brapierror(self, mock_get):
+        mock_get.side_effect = requests.RequestException("timeout")
+        with self.assertRaises(BrapiError):
+            buscar_cotacoes_cripto(["BTC"])
+
+    def test_atualizar_cotacao_cripto_diaria_com_dados_ja_prontos(self):
+        dados_api = {
+            "coin": "BTC", "coinName": "Bitcoin", "currency": "BRL", "coinImageUrl": "https://x/btc.svg",
+            "regularMarketPrice": 405000.5, "regularMarketChangePercent": 2.1, "regularMarketChange": 8000.0,
+            "regularMarketDayHigh": 410000.0, "regularMarketDayLow": 395000.0, "regularMarketVolume": 123456.78,
+            "marketCap": 999999.0, "regularMarketTime": "2026-09-28T12:00:00.000Z",
+        }
+        cotacao = atualizar_cotacao_cripto_diaria(self.cripto_ativo, dados_api=dados_api)
+
+        self.cripto_ativo.refresh_from_db()
+        self.assertEqual(self.cripto_ativo.nome, "Bitcoin")
+        self.assertEqual(self.cripto_ativo.preco_atual, Decimal("405000.50000000"))
+        self.assertEqual(cotacao.preco_fechamento, Decimal("405000.50000000"))
+        self.assertEqual(cotacao.data, timezone.localdate())
+        self.assertEqual(CotacaoCripto.objects.filter(cripto_ativo=self.cripto_ativo).count(), 1)
+
+    def test_atualizar_cotacao_cripto_diaria_sem_preco_gera_brapierror(self):
+        with self.assertRaises(BrapiError):
+            atualizar_cotacao_cripto_diaria(self.cripto_ativo, dados_api={"coin": "BTC"})
+
+    def test_atualizar_no_mesmo_dia_altera_em_vez_de_duplicar(self):
+        atualizar_cotacao_cripto_diaria(self.cripto_ativo, dados_api={"coin": "BTC", "regularMarketPrice": 400000.0})
+        atualizar_cotacao_cripto_diaria(self.cripto_ativo, dados_api={"coin": "BTC", "regularMarketPrice": 410000.0})
+        self.assertEqual(CotacaoCripto.objects.filter(cripto_ativo=self.cripto_ativo).count(), 1)
+        cotacao = CotacaoCripto.objects.get(cripto_ativo=self.cripto_ativo)
+        self.assertEqual(cotacao.preco_fechamento, Decimal("410000.00000000"))
+
+    @patch("core.services.requests.get")
+    def test_atualizar_cotacoes_cripto_ativos_em_lote(self, mock_get):
+        eth = CriptoAtivo.objects.create(coin="ETH")
+        mock_get.return_value.raise_for_status = lambda: None
+        mock_get.return_value.json = lambda: {"coins": [
+            {"coin": "BTC", "regularMarketPrice": 400000.0},
+            {"coin": "ETH", "regularMarketPrice": 13000.0},
+        ]}
+        atualizados, falhas = atualizar_cotacoes_cripto_ativos([self.cripto_ativo, eth])
+        self.assertEqual(atualizados, 2)
+        self.assertEqual(falhas, 0)
+        self.assertEqual(mock_get.call_count, 1)
+
+    @patch("core.services.requests.get")
+    def test_atualizar_cotacoes_cripto_ativos_moeda_ausente_conta_como_falha(self, mock_get):
+        mock_get.return_value.raise_for_status = lambda: None
+        mock_get.return_value.json = lambda: {"coins": []}
+        atualizados, falhas = atualizar_cotacoes_cripto_ativos([self.cripto_ativo])
+        self.assertEqual(atualizados, 0)
+        self.assertEqual(falhas, 1)
+
+
+class CalcularPosicoesCriptoTests(TestCase):
+    """core.services.calcular_posicoes_cripto."""
+
+    def setUp(self):
+        self.usuario = User.objects.create_user(username="investidor_posicoes_cripto", password="SenhaForte123!")
+        self.btc = CriptoAtivo.objects.create(coin="BTC")
+
+    def test_sem_operacoes_fica_vazio(self):
+        self.assertEqual(calcular_posicoes_cripto(self.usuario), [])
+
+    def test_preco_medio_ponderado_entre_dois_lotes(self):
+        OperacaoCripto.objects.create(
+            usuario=self.usuario, cripto_ativo=self.btc, tipo=OperacaoCripto.COMPRA,
+            quantidade=Decimal("0.01"), preco_unitario=Decimal("400000.00"), data_operacao=date(2026, 9, 1),
+        )
+        OperacaoCripto.objects.create(
+            usuario=self.usuario, cripto_ativo=self.btc, tipo=OperacaoCripto.COMPRA,
+            quantidade=Decimal("0.01"), preco_unitario=Decimal("420000.00"), data_operacao=date(2026, 9, 10),
+        )
+        posicoes = calcular_posicoes_cripto(self.usuario)
+        self.assertEqual(len(posicoes), 1)
+        posicao = posicoes[0]
+        self.assertEqual(posicao.quantidade, Decimal("0.02"))
+        self.assertEqual(posicao.preco_medio, Decimal("410000.00000000"))
+        self.assertEqual(posicao.data_abertura, date(2026, 9, 1))
+
+    def test_lote_totalmente_vendido_nao_conta_na_posicao(self):
+        OperacaoCripto.objects.create(
+            usuario=self.usuario, cripto_ativo=self.btc, tipo=OperacaoCripto.COMPRA,
+            quantidade=Decimal("0.01"), preco_unitario=Decimal("400000.00"), data_operacao=date.today(),
+            quantidade_vendida=Decimal("0.01"), preco_venda=Decimal("420000.00"), data_venda=date.today(),
+        )
+        self.assertEqual(calcular_posicoes_cripto(self.usuario), [])
+
+    def test_apenas_reservado_sem_compra_de_verdade(self):
+        OperacaoCripto.objects.create(
+            usuario=self.usuario, cripto_ativo=self.btc, tipo=OperacaoCripto.RESERVAR,
+            quantidade=Decimal("0.02"), preco_unitario=Decimal("395000.00"), data_operacao=date.today(),
+        )
+        posicoes = calcular_posicoes_cripto(self.usuario)
+        self.assertEqual(len(posicoes), 1)
+        posicao = posicoes[0]
+        self.assertTrue(posicao.apenas_reservado)
+        self.assertEqual(posicao.quantidade, Decimal("0"))
+        self.assertEqual(posicao.quantidade_reservada, Decimal("0.02"))
+        self.assertEqual(posicao.valor_investido, Decimal("0.00"))
+
+    def test_lucro_perda_com_cotacao_atual(self):
+        CotacaoCripto.objects.create(cripto_ativo=self.btc, data=date.today(), preco_fechamento=Decimal("440000.00"))
+        OperacaoCripto.objects.create(
+            usuario=self.usuario, cripto_ativo=self.btc, tipo=OperacaoCripto.COMPRA,
+            quantidade=Decimal("0.01"), preco_unitario=Decimal("400000.00"), data_operacao=date.today(),
+        )
+        posicao = calcular_posicoes_cripto(self.usuario)[0]
+        self.assertEqual(posicao.valor_atual, Decimal("4400.00"))
+        self.assertEqual(posicao.lucro_perda_valor, Decimal("400.00"))
+        self.assertEqual(posicao.lucro_perda_pct, Decimal("10.00"))
+
+    def test_nao_mistura_posicoes_de_usuarios_diferentes(self):
+        outro_usuario = User.objects.create_user(username="investidor_posicoes_cripto_outro", password="SenhaForte123!")
+        OperacaoCripto.objects.create(
+            usuario=outro_usuario, cripto_ativo=self.btc, tipo=OperacaoCripto.COMPRA,
+            quantidade=Decimal("1.0"), preco_unitario=Decimal("400000.00"), data_operacao=date.today(),
+        )
+        self.assertEqual(calcular_posicoes_cripto(self.usuario), [])
+
+
+class CriptomoedasViewTests(TestCase):
+    """Tela Criptomoedas (core.views.criptomoedas / cripto_atualizar_cotacoes)."""
+
+    def setUp(self):
+        self.usuario = User.objects.create_user(username="investidor_cripto_view", password="SenhaForte123!")
+        self.client.login(username="investidor_cripto_view", password="SenhaForte123!")
+
+    def test_exige_login(self):
+        self.client.logout()
+        resposta = self.client.get(reverse("core:criptomoedas"))
+        self.assertEqual(resposta.status_code, 302)
+
+    def test_mostra_moedas_sugeridas_mesmo_sem_nenhuma_operacao(self):
+        resposta = self.client.get(reverse("core:criptomoedas"))
+        self.assertEqual(resposta.status_code, 200)
+        for coin in MOEDAS_CRIPTO_SUGERIDAS:
+            self.assertContains(resposta, coin)
+
+    def test_nao_mostra_nenhum_dado_de_acoes_da_b3(self):
+        # a tela de cripto não deve puxar nada de Ativo/Operacao (ações) -
+        # verifica que a página renderiza normalmente sem esses dados influenciarem.
+        ativo = Ativo.objects.create(ticker="PETR4")
+        Operacao.objects.create(
+            usuario=self.usuario, ativo=ativo, tipo=Operacao.COMPRA,
+            quantidade=10, preco_unitario=Decimal("30.00"), data_operacao=date.today(),
+        )
+        resposta = self.client.get(reverse("core:criptomoedas"))
+        self.assertNotContains(resposta, "PETR4")
+
+    def test_mostra_posicao_comprada(self):
+        btc = CriptoAtivo.objects.create(coin="BTC")
+        OperacaoCripto.objects.create(
+            usuario=self.usuario, cripto_ativo=btc, tipo=OperacaoCripto.COMPRA,
+            quantidade=Decimal("0.01"), preco_unitario=Decimal("400000.00"), data_operacao=date.today(),
+        )
+        resposta = self.client.get(reverse("core:criptomoedas"))
+        self.assertContains(resposta, "0,01000000")  # locale pt-br (vírgula), 8 casas decimais
+        self.assertContains(resposta, "BTC")
+
+    @patch("core.services.requests.get")
+    def test_atualizar_cotacoes_chama_a_api_e_redireciona(self, mock_get):
+        mock_get.return_value.raise_for_status = lambda: None
+        mock_get.return_value.json = lambda: {"coins": [
+            {"coin": coin, "regularMarketPrice": 100.0} for coin in MOEDAS_CRIPTO_SUGERIDAS
+        ]}
+        resposta = self.client.get(reverse("core:cripto_atualizar_cotacoes"), follow=True)
+        self.assertEqual(resposta.status_code, 200)
+        self.assertEqual(CriptoAtivo.objects.filter(preco_atual__isnull=False).count(), len(MOEDAS_CRIPTO_SUGERIDAS))
+
+
+class CriptoOperacaoViewsTests(TestCase):
+    """CRUD de operações de cripto (core.views.cripto_operacao_*)."""
+
+    def setUp(self):
+        self.usuario = User.objects.create_user(username="investidor_cripto_crud", password="SenhaForte123!")
+        self.client.login(username="investidor_cripto_crud", password="SenhaForte123!")
+
+    def test_exige_login_em_todas_as_urls(self):
+        self.client.logout()
+        for url in [
+            reverse("core:criptomoedas"),
+            reverse("core:cripto_operacao_lista"),
+            reverse("core:cripto_operacao_nova"),
+        ]:
+            self.assertEqual(self.client.get(url).status_code, 302)
+
+    def test_registrar_nova_compra(self):
+        resposta = self.client.post(reverse("core:cripto_operacao_nova"), {
+            "tipo": OperacaoCripto.COMPRA, "coin": "btc", "quantidade": "0.01",
+            "preco_unitario": "400000.00", "data_operacao": date.today().isoformat(),
+            "meta_lucro_pct": "", "meta_perda_pct": "", "observacao": "",
+        }, follow=True)
+        self.assertEqual(resposta.status_code, 200)
+        op = OperacaoCripto.objects.get(usuario=self.usuario)
+        self.assertEqual(op.cripto_ativo.coin, "BTC")  # normalizado pra maiúsculo
+        self.assertEqual(op.quantidade, Decimal("0.01"))
+
+    def test_operacao_nova_preenche_coin_via_query_string(self):
+        resposta = self.client.get(reverse("core:cripto_operacao_nova"), {"coin": "eth", "tipo": "COMPRA"})
+        self.assertContains(resposta, 'value="ETH"')
+
+    def test_registrar_nova_reserva(self):
+        self.client.post(reverse("core:cripto_operacao_nova"), {
+            "tipo": OperacaoCripto.RESERVAR, "coin": "eth", "quantidade": "0.5",
+            "preco_unitario": "13000.00", "data_operacao": date.today().isoformat(),
+            "meta_lucro_pct": "", "meta_perda_pct": "", "observacao": "",
+        })
+        op = OperacaoCripto.objects.get(usuario=self.usuario)
+        self.assertEqual(op.tipo, OperacaoCripto.RESERVAR)
+
+    def test_vender_lote_parcialmente(self):
+        btc = CriptoAtivo.objects.create(coin="BTC")
+        op = OperacaoCripto.objects.create(
+            usuario=self.usuario, cripto_ativo=btc, tipo=OperacaoCripto.COMPRA,
+            quantidade=Decimal("0.01"), preco_unitario=Decimal("400000.00"), data_operacao=date.today(),
+        )
+        resposta = self.client.post(reverse("core:cripto_operacao_vender", args=[op.id]), {
+            "quantidade_vendida": "0.004", "preco_venda": "420000.00", "data_venda": date.today().isoformat(),
+        }, follow=True)
+        self.assertEqual(resposta.status_code, 200)
+        op.refresh_from_db()
+        self.assertEqual(op.quantidade_vendida, Decimal("0.004"))
+        self.assertEqual(op.saldo, Decimal("0.006"))
+
+    def test_efetivar_reserva_como_compra(self):
+        btc = CriptoAtivo.objects.create(coin="BTC")
+        op = OperacaoCripto.objects.create(
+            usuario=self.usuario, cripto_ativo=btc, tipo=OperacaoCripto.RESERVAR,
+            quantidade=Decimal("0.01"), preco_unitario=Decimal("395000.00"), data_operacao=date.today(),
+        )
+        resposta = self.client.post(reverse("core:cripto_operacao_comprar", args=[op.id]), {
+            "quantidade": "0.01", "preco_unitario": "398000.00", "data_operacao": date.today().isoformat(),
+            "meta_lucro_pct": "", "meta_perda_pct": "",
+        }, follow=True)
+        self.assertEqual(resposta.status_code, 200)
+        op.refresh_from_db()
+        self.assertEqual(op.tipo, OperacaoCripto.COMPRA)
+        self.assertEqual(op.preco_unitario, Decimal("398000.00000000"))
+
+    def test_editar_compra(self):
+        btc = CriptoAtivo.objects.create(coin="BTC")
+        op = OperacaoCripto.objects.create(
+            usuario=self.usuario, cripto_ativo=btc, tipo=OperacaoCripto.COMPRA,
+            quantidade=Decimal("0.01"), preco_unitario=Decimal("400000.00"), data_operacao=date.today(),
+        )
+        resposta = self.client.post(reverse("core:cripto_operacao_editar", args=[op.id]), {
+            "coin": "btc", "quantidade": "0.02", "preco_unitario": "410000.00",
+            "data_operacao": date.today().isoformat(), "meta_lucro_pct": "", "meta_perda_pct": "", "observacao": "",
+        }, follow=True)
+        self.assertEqual(resposta.status_code, 200)
+        op.refresh_from_db()
+        self.assertEqual(op.quantidade, Decimal("0.02"))
+
+    def test_editar_reserva(self):
+        eth = CriptoAtivo.objects.create(coin="ETH")
+        op = OperacaoCripto.objects.create(
+            usuario=self.usuario, cripto_ativo=eth, tipo=OperacaoCripto.RESERVAR,
+            quantidade=Decimal("0.5"), preco_unitario=Decimal("13000.00"), data_operacao=date.today(),
+        )
+        resposta = self.client.post(reverse("core:cripto_operacao_editar_reserva", args=[op.id]), {
+            "coin": "eth", "quantidade": "1.0", "preco_unitario": "12500.00",
+            "data_operacao": date.today().isoformat(), "meta_lucro_pct": "", "meta_perda_pct": "",
+        }, follow=True)
+        self.assertEqual(resposta.status_code, 200)
+        op.refresh_from_db()
+        self.assertEqual(op.quantidade, Decimal("1.0"))
+
+    def test_excluir_operacao(self):
+        btc = CriptoAtivo.objects.create(coin="BTC")
+        op = OperacaoCripto.objects.create(
+            usuario=self.usuario, cripto_ativo=btc, tipo=OperacaoCripto.COMPRA,
+            quantidade=Decimal("0.01"), preco_unitario=Decimal("400000.00"), data_operacao=date.today(),
+        )
+        self.client.post(reverse("core:cripto_operacao_excluir", args=[op.id]))
+        self.assertFalse(OperacaoCripto.objects.filter(id=op.id).exists())
+
+    def test_nao_acessa_operacao_de_outro_usuario(self):
+        outro_usuario = User.objects.create_user(username="investidor_cripto_crud_outro", password="SenhaForte123!")
+        btc = CriptoAtivo.objects.create(coin="BTC")
+        op_de_outro = OperacaoCripto.objects.create(
+            usuario=outro_usuario, cripto_ativo=btc, tipo=OperacaoCripto.COMPRA,
+            quantidade=Decimal("0.01"), preco_unitario=Decimal("400000.00"), data_operacao=date.today(),
+        )
+        self.assertEqual(self.client.get(reverse("core:cripto_operacao_vender", args=[op_de_outro.id])).status_code, 404)
+        self.assertEqual(self.client.get(reverse("core:cripto_operacao_editar", args=[op_de_outro.id])).status_code, 404)
+        resposta_exclusao = self.client.post(reverse("core:cripto_operacao_excluir", args=[op_de_outro.id]))
+        self.assertEqual(resposta_exclusao.status_code, 404)
+        self.assertTrue(OperacaoCripto.objects.filter(id=op_de_outro.id).exists())
+
+    def test_lista_mostra_so_operacoes_do_usuario_logado(self):
+        outro_usuario = User.objects.create_user(username="investidor_cripto_crud_outro2", password="SenhaForte123!")
+        btc = CriptoAtivo.objects.create(coin="BTC")
+        OperacaoCripto.objects.create(
+            usuario=outro_usuario, cripto_ativo=btc, tipo=OperacaoCripto.COMPRA,
+            quantidade=Decimal("0.01"), preco_unitario=Decimal("400000.00"), data_operacao=date.today(),
+        )
+        resposta = self.client.get(reverse("core:cripto_operacao_lista"))
+        self.assertEqual(resposta.context["operacoes_compradas"], [])
+
+    def test_menu_e_criptomoedas_tem_link_cruzado(self):
+        resposta_menu = self.client.get(reverse("core:menu"))
+        self.assertContains(resposta_menu, reverse("core:criptomoedas"))
+
+    def test_minhas_operacoes_de_acoes_e_de_cripto_se_linkam(self):
+        resposta_acoes = self.client.get(reverse("core:operacao_lista"))
+        self.assertContains(resposta_acoes, reverse("core:criptomoedas"))
+
+        resposta_cripto = self.client.get(reverse("core:cripto_operacao_lista"))
+        self.assertContains(resposta_cripto, reverse("core:operacao_lista"))
+
+
+class ContaCorrenteCriptoTests(TestCase):
+    """
+    core.services: sincronizar_lancamento_compra_cripto/venda_cripto - Conta
+    Corrente é compartilhada entre ações e criptomoeda, mas cada lançamento
+    fica ligado a UM dos dois (operacao XOR operacao_cripto), nunca aos dois.
+    """
+
+    def setUp(self):
+        self.usuario = User.objects.create_user(username="investidor_cc_cripto", password="SenhaForte123!")
+        self.btc = CriptoAtivo.objects.create(coin="BTC")
+
+    def test_compra_cripto_debita_a_conta_corrente(self):
+        op = OperacaoCripto.objects.create(
+            usuario=self.usuario, cripto_ativo=self.btc, tipo=OperacaoCripto.COMPRA,
+            quantidade=Decimal("0.01"), preco_unitario=Decimal("400000.00"), data_operacao=date.today(),
+        )
+        sincronizar_lancamento_compra_cripto(op)
+
+        conta = obter_ou_criar_conta_corrente(self.usuario)
+        self.assertEqual(saldo_conta_corrente(conta), Decimal("-4000.00"))
+        lancamento = LancamentoContaCorrente.objects.get(
+            operacao_cripto=op, origem=LancamentoContaCorrente.ORIGEM_COMPRA_CRIPTO
+        )
+        self.assertEqual(lancamento.tipo, LancamentoContaCorrente.DEBITO)
+        self.assertEqual(lancamento.valor, Decimal("4000.00"))
+        self.assertIn("BTC", lancamento.descricao)
+        self.assertIsNone(lancamento.operacao)  # nunca liga nos dois FKs ao mesmo tempo
+
+    def test_venda_cripto_credita_a_conta_corrente(self):
+        op = OperacaoCripto.objects.create(
+            usuario=self.usuario, cripto_ativo=self.btc, tipo=OperacaoCripto.COMPRA,
+            quantidade=Decimal("0.01"), preco_unitario=Decimal("400000.00"), data_operacao=date.today(),
+            quantidade_vendida=Decimal("0.004"), preco_venda=Decimal("420000.00"), data_venda=date.today(),
+        )
+        sincronizar_lancamento_compra_cripto(op)
+        sincronizar_lancamento_venda_cripto(op)
+
+        conta = obter_ou_criar_conta_corrente(self.usuario)
+        # debita 4000 (compra) e credita 1680 (0.004 * 420000) = -2320
+        self.assertEqual(saldo_conta_corrente(conta), Decimal("-2320.00"))
+        lancamento = LancamentoContaCorrente.objects.get(
+            operacao_cripto=op, origem=LancamentoContaCorrente.ORIGEM_VENDA_CRIPTO
+        )
+        self.assertEqual(lancamento.tipo, LancamentoContaCorrente.CREDITO)
+        self.assertEqual(lancamento.valor, Decimal("1680.00"))
+
+    def test_reserva_nao_gera_lancamento(self):
+        op = OperacaoCripto.objects.create(
+            usuario=self.usuario, cripto_ativo=self.btc, tipo=OperacaoCripto.RESERVAR,
+            quantidade=Decimal("0.5"), preco_unitario=Decimal("12000.00"), data_operacao=date.today(),
+        )
+        sincronizar_lancamento_compra_cripto(op)
+        self.assertFalse(LancamentoContaCorrente.objects.filter(operacao_cripto=op).exists())
+
+    def test_desfazer_venda_remove_o_lancamento(self):
+        op = OperacaoCripto.objects.create(
+            usuario=self.usuario, cripto_ativo=self.btc, tipo=OperacaoCripto.COMPRA,
+            quantidade=Decimal("0.01"), preco_unitario=Decimal("400000.00"), data_operacao=date.today(),
+            quantidade_vendida=Decimal("0.004"), preco_venda=Decimal("420000.00"), data_venda=date.today(),
+        )
+        sincronizar_lancamento_venda_cripto(op)
+        self.assertTrue(LancamentoContaCorrente.objects.filter(operacao_cripto=op).exists())
+
+        op.quantidade_vendida = Decimal("0")
+        op.preco_venda = None
+        op.save()
+        sincronizar_lancamento_venda_cripto(op)
+        self.assertFalse(LancamentoContaCorrente.objects.filter(operacao_cripto=op).exists())
+
+    def test_excluir_operacao_cripto_remove_o_lancamento_por_cascade(self):
+        op = OperacaoCripto.objects.create(
+            usuario=self.usuario, cripto_ativo=self.btc, tipo=OperacaoCripto.COMPRA,
+            quantidade=Decimal("0.01"), preco_unitario=Decimal("400000.00"), data_operacao=date.today(),
+        )
+        sincronizar_lancamento_compra_cripto(op)
+        self.assertEqual(LancamentoContaCorrente.objects.filter(operacao_cripto=op).count(), 1)
+        op.delete()
+        self.assertEqual(LancamentoContaCorrente.objects.count(), 0)
+
+    def test_lancamentos_de_acoes_e_cripto_nao_se_misturam_no_saldo(self):
+        ativo = Ativo.objects.create(ticker="PETR4")
+        op_acao = Operacao.objects.create(
+            usuario=self.usuario, ativo=ativo, tipo=Operacao.COMPRA,
+            quantidade=10, preco_unitario=Decimal("30.00"), data_operacao=date.today(),
+        )
+        sincronizar_lancamento_compra(op_acao)
+
+        op_cripto = OperacaoCripto.objects.create(
+            usuario=self.usuario, cripto_ativo=self.btc, tipo=OperacaoCripto.COMPRA,
+            quantidade=Decimal("0.01"), preco_unitario=Decimal("400000.00"), data_operacao=date.today(),
+        )
+        sincronizar_lancamento_compra_cripto(op_cripto)
+
+        conta = obter_ou_criar_conta_corrente(self.usuario)
+        # -300 (ação) + -4000 (cripto) = -4300, os dois debitam a MESMA conta
+        self.assertEqual(saldo_conta_corrente(conta), Decimal("-4300.00"))
+        self.assertEqual(conta.lancamentos.count(), 2)
+
+    def test_views_de_compra_e_venda_de_cripto_sincronizam_a_conta_corrente(self):
+        self.client.login(username="investidor_cc_cripto", password="SenhaForte123!")
+        resposta = self.client.post(reverse("core:cripto_operacao_nova"), {
+            "tipo": OperacaoCripto.COMPRA, "coin": "btc", "quantidade": "0.01",
+            "preco_unitario": "400000.00", "data_operacao": date.today().isoformat(),
+            "meta_lucro_pct": "", "meta_perda_pct": "", "observacao": "",
+        })
+        op = OperacaoCripto.objects.get(usuario=self.usuario)
+        self.assertTrue(
+            LancamentoContaCorrente.objects.filter(
+                operacao_cripto=op, origem=LancamentoContaCorrente.ORIGEM_COMPRA_CRIPTO,
+            ).exists()
+        )
+
+        self.client.post(reverse("core:cripto_operacao_vender", args=[op.id]), {
+            "quantidade_vendida": "0.005", "preco_venda": "420000.00", "data_venda": date.today().isoformat(),
+        })
+        self.assertTrue(
+            LancamentoContaCorrente.objects.filter(
+                operacao_cripto=op, origem=LancamentoContaCorrente.ORIGEM_VENDA_CRIPTO,
+            ).exists()
+        )
+
+
+class RelatorioOperacoesCriptoTests(TestCase):
+    """core.services.gerar_excel_operacoes_cripto / gerar_pdf_operacoes_cripto e as views de exportação."""
+
+    def setUp(self):
+        self.usuario = User.objects.create_user(username="investidor_relatorio_cripto", password="SenhaForte123!")
+        self.btc = CriptoAtivo.objects.create(coin="BTC")
+
+    def _operacao_comprada(self):
+        return OperacaoCripto.objects.create(
+            usuario=self.usuario, cripto_ativo=self.btc, tipo=OperacaoCripto.COMPRA,
+            quantidade=Decimal("0.02"), preco_unitario=Decimal("400000.00"), data_operacao=date.today(),
+        )
+
+    def test_excel_tem_as_tres_abas_com_dados_corretos(self):
+        comprada = self._operacao_comprada()
+        vendida = OperacaoCripto.objects.create(
+            usuario=self.usuario, cripto_ativo=self.btc, tipo=OperacaoCripto.COMPRA,
+            quantidade=Decimal("1.0"), preco_unitario=Decimal("12000.00"), data_operacao=date.today(),
+            quantidade_vendida=Decimal("1.0"), preco_venda=Decimal("13000.00"), data_venda=date.today(),
+        )
+        reservada = OperacaoCripto.objects.create(
+            usuario=self.usuario, cripto_ativo=self.btc, tipo=OperacaoCripto.RESERVAR,
+            quantidade=Decimal("0.5"), preco_unitario=Decimal("395000.00"), data_operacao=date.today(),
+        )
+
+        conteudo = gerar_excel_operacoes_cripto([comprada], [vendida], [reservada])
+
+        import io
+        import openpyxl
+        wb = openpyxl.load_workbook(io.BytesIO(conteudo))
+        self.assertEqual(wb.sheetnames, ["Em carteira", "Vendidas", "Reservadas"])
+
+        linha_carteira = [c.value for c in wb["Em carteira"][5]]
+        self.assertEqual(linha_carteira[2], "BTC")
+        self.assertEqual(linha_carteira[3], 0.02)
+
+        valores_vendidas = [c.value for row in wb["Vendidas"].iter_rows() for c in row if c.value]
+        self.assertIn("BTC", valores_vendidas)
+
+        valores_reservadas = [c.value for row in wb["Reservadas"].iter_rows() for c in row if c.value]
+        self.assertIn("BTC", valores_reservadas)
+
+    def test_excel_sem_operacoes_nao_quebra(self):
+        conteudo = gerar_excel_operacoes_cripto([], [], [])
+        import io
+        import openpyxl
+        wb = openpyxl.load_workbook(io.BytesIO(conteudo))
+        self.assertEqual(wb.sheetnames, ["Em carteira", "Vendidas", "Reservadas"])
+
+    def test_pdf_gera_bytes_validos(self):
+        comprada = self._operacao_comprada()
+        conteudo = gerar_pdf_operacoes_cripto([comprada], [], [], "Investidor Teste")
+        self.assertTrue(conteudo.startswith(b"%PDF"))
+
+    def test_pdf_sem_operacoes_nao_quebra(self):
+        conteudo = gerar_pdf_operacoes_cripto([], [], [], "Investidor Teste")
+        self.assertTrue(conteudo.startswith(b"%PDF"))
+
+    def test_exige_login(self):
+        self.assertEqual(self.client.get(reverse("core:cripto_operacoes_exportar_excel")).status_code, 302)
+        self.assertEqual(self.client.get(reverse("core:cripto_operacoes_exportar_pdf")).status_code, 302)
+
+    def test_view_excel_responde_ok_com_content_type_correto(self):
+        self.client.login(username="investidor_relatorio_cripto", password="SenhaForte123!")
+        self._operacao_comprada()
+        resposta = self.client.get(reverse("core:cripto_operacoes_exportar_excel"))
+        self.assertEqual(resposta.status_code, 200)
+        self.assertEqual(
+            resposta["Content-Type"],
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+        self.assertIn("operacoes_cripto", resposta["Content-Disposition"])
+
+    def test_view_pdf_responde_ok_com_content_type_correto(self):
+        self.client.login(username="investidor_relatorio_cripto", password="SenhaForte123!")
+        self._operacao_comprada()
+        resposta = self.client.get(reverse("core:cripto_operacoes_exportar_pdf"))
+        self.assertEqual(resposta.status_code, 200)
+        self.assertEqual(resposta["Content-Type"], "application/pdf")
+
+    def test_botoes_de_exportacao_aparecem_so_com_operacoes(self):
+        self.client.login(username="investidor_relatorio_cripto", password="SenhaForte123!")
+        resposta_vazia = self.client.get(reverse("core:cripto_operacao_lista"))
+        self.assertNotContains(resposta_vazia, reverse("core:cripto_operacoes_exportar_excel"))
+
+        self._operacao_comprada()
+        resposta_com_dados = self.client.get(reverse("core:cripto_operacao_lista"))
+        self.assertContains(resposta_com_dados, reverse("core:cripto_operacoes_exportar_excel"))
+        self.assertContains(resposta_com_dados, reverse("core:cripto_operacoes_exportar_pdf"))
+
+    def test_relatorio_nao_mistura_operacoes_de_outro_usuario(self):
+        outro_usuario = User.objects.create_user(username="investidor_relatorio_cripto_outro", password="SenhaForte123!")
+        OperacaoCripto.objects.create(
+            usuario=outro_usuario, cripto_ativo=self.btc, tipo=OperacaoCripto.COMPRA,
+            quantidade=Decimal("5.0"), preco_unitario=Decimal("400000.00"), data_operacao=date.today(),
+        )
+        self.client.login(username="investidor_relatorio_cripto", password="SenhaForte123!")
+        resposta = self.client.get(reverse("core:cripto_operacoes_exportar_excel"))
+
+        import io
+        import openpyxl
+        wb = openpyxl.load_workbook(io.BytesIO(resposta.content))
+        valores = [c.value for row in wb["Em carteira"].iter_rows() for c in row if c.value]
+        self.assertNotIn(5.0, valores)
+
+
+class CotacoesCriptoNoPainelTests(TestCase):
+    """Cartão "Cotações de cripto" no Painel de Controle, abaixo de "Posições em carteira" (ver core.views.dashboard/_cotacoes_cripto_para_exibir)."""
+
+    def setUp(self):
+        self.usuario = User.objects.create_user(username="investidor_painel_cripto", password="SenhaForte123!")
+        self.client.login(username="investidor_painel_cripto", password="SenhaForte123!")
+
+    def test_painel_mostra_moedas_sugeridas(self):
+        resposta = self.client.get(reverse("core:dashboard"))
+        self.assertEqual(resposta.status_code, 200)
+        self.assertContains(resposta, "Cotações de cripto")
+        for coin in MOEDAS_CRIPTO_SUGERIDAS:
+            self.assertContains(resposta, coin)
+
+    def test_cartao_de_cripto_fica_depois_de_posicoes_em_carteira(self):
+        resposta = self.client.get(reverse("core:dashboard"))
+        conteudo = resposta.content.decode()
+        self.assertLess(conteudo.index("Posições em carteira"), conteudo.index("Cotações de cripto"))
+
+    def test_painel_mostra_moeda_que_o_usuario_ja_operou_mesmo_fora_da_lista_sugerida(self):
+        nova_moeda = CriptoAtivo.objects.create(coin="SHIB", preco_atual=Decimal("0.00012345"))
+        OperacaoCripto.objects.create(
+            usuario=self.usuario, cripto_ativo=nova_moeda, tipo=OperacaoCripto.COMPRA,
+            quantidade=Decimal("1000000"), preco_unitario=Decimal("0.0001"), data_operacao=date.today(),
+        )
+        resposta = self.client.get(reverse("core:dashboard"))
+        self.assertContains(resposta, "SHIB")
+
+    def test_link_para_tela_completa_de_cripto(self):
+        resposta = self.client.get(reverse("core:dashboard"))
+        self.assertContains(resposta, reverse("core:criptomoedas"))

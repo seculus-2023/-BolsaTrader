@@ -25,10 +25,14 @@ from .forms import (
     FonteNoticiaForm,
     SaldoInicialContaCorrenteForm,
     TransferenciaContaCorrenteForm,
+    OperacaoCriptoForm,
+    VendaLoteCriptoForm,
+    ConfirmarCompraCriptoForm,
+    EditarOperacaoCriptoForm,
 )
 from .models import (
     Operacao, Alerta, Ativo, Cotacao, MensagemWhatsapp, FonteNoticia, AcaoB3, RegistroAtualizacaoCarteira,
-    LancamentoContaCorrente,
+    LancamentoContaCorrente, CriptoAtivo, OperacaoCripto,
 )
 from .services import (
     calcular_posicoes,
@@ -82,6 +86,8 @@ from .services import (
     saldo_conta_corrente,
     sincronizar_lancamento_compra,
     sincronizar_lancamento_venda,
+    sincronizar_lancamento_compra_cripto,
+    sincronizar_lancamento_venda_cripto,
     registrar_transferencia_conta_corrente,
     extrato_conta_corrente,
     gerar_excel_extrato_conta_corrente,
@@ -94,6 +100,12 @@ from .services import (
     gerar_excel_scanner_e_analise_ia,
     gerar_pdf_scanner_e_analise_ia,
     gerar_sugestoes_ia,
+    MOEDAS_CRIPTO_SUGERIDAS,
+    calcular_posicoes_cripto,
+    atualizar_cotacoes_cripto_ativos,
+    atualizar_cotacao_cripto_diaria,
+    gerar_excel_operacoes_cripto,
+    gerar_pdf_operacoes_cripto,
 )
 
 TICKER_VALIDO = re.compile(r"^[A-Z0-9]{1,15}$")
@@ -133,6 +145,7 @@ def dashboard(request):
         "comparativo_benchmark": calcular_comparativo_benchmark(request.user, posicoes=posicoes),
         "alertas_recentes": request.user.alertas.all()[:8],
         "ibovespa": ultimo_valor_ibovespa(),
+        "cotacoes_cripto": _cotacoes_cripto_para_exibir(request.user),
     }
     # "Variações de hoje" (mesmo gráfico de Histórico de Atualizações) ao
     # lado de "Posições em carteira" - só precisa de grafico_dia/
@@ -1545,3 +1558,277 @@ def whatsapp_webhook(request):
                 MensagemWhatsapp.objects.create(remetente=remetente, texto=texto)
 
     return HttpResponse(status=200)
+
+
+# --------------------------------------------------------------------------
+# Criptomoedas - tela própria, à parte das ações da B3 (ver core.models.
+# CriptoAtivo/OperacaoCripto/CotacaoCripto e o comentário no topo de
+# core.services sobre criptomoedas). Sem robô consultor, Scanner Técnico,
+# comparação com Ibovespa/CDI ou integração com Conta Corrente - de
+# propósito, pra não misturar cripto com esses recursos que são só de ações.
+# --------------------------------------------------------------------------
+def _cotacoes_cripto_para_exibir(usuario, posicoes_cripto=None) -> list:
+    """
+    Lista de cotações a mostrar (moedas sugeridas + qualquer uma que o
+    usuário já tenha operado) - reaproveitada pela tela Criptomoedas e pelo
+    cartão "Cotações de cripto" do Painel de Controle (ver criptomoedas/
+    dashboard). Não gasta chamada de API - só lê o que já está salvo,
+    atualizado sob demanda pelo botão "Atualizar cotações agora".
+    """
+    if posicoes_cripto is None:
+        posicoes_cripto = calcular_posicoes_cripto(usuario)
+    coins_da_carteira = [p.cripto_ativo.coin for p in posicoes_cripto]
+    coins_para_exibir = list(dict.fromkeys(MOEDAS_CRIPTO_SUGERIDAS + coins_da_carteira))
+
+    existentes = {c.coin: c for c in CriptoAtivo.objects.filter(coin__in=coins_para_exibir)}
+    return [existentes.get(coin) or CriptoAtivo(coin=coin) for coin in coins_para_exibir]
+
+
+@login_required
+def criptomoedas(request):
+    """
+    Tela de Criptomoedas: cotações das moedas sugeridas (mais qualquer uma
+    que o usuário já tenha operado) e as posições consolidadas dele - tela
+    própria, independente de Ativo/Operacao (ações da B3).
+    """
+    posicoes_cripto = calcular_posicoes_cripto(request.user)
+    cotacoes = _cotacoes_cripto_para_exibir(request.user, posicoes_cripto)
+
+    posicoes_compradas = [p for p in posicoes_cripto if not p.apenas_reservado]
+    posicoes_reservadas = [p for p in posicoes_cripto if p.apenas_reservado]
+
+    valor_investido_total = sum((p.valor_investido for p in posicoes_compradas), Decimal("0"))
+    valor_atual_total = sum((p.valor_atual for p in posicoes_compradas if p.valor_atual is not None), Decimal("0"))
+    lucro_perda_total = valor_atual_total - valor_investido_total
+    lucro_perda_pct_total = (
+        (lucro_perda_total / valor_investido_total) * 100 if valor_investido_total else None
+    )
+
+    contexto = {
+        "cotacoes": cotacoes,
+        "posicoes_compradas": posicoes_compradas,
+        "posicoes_reservadas": posicoes_reservadas,
+        "valor_investido_total": valor_investido_total,
+        "valor_atual_total": valor_atual_total,
+        "lucro_perda_total": lucro_perda_total,
+        "lucro_perda_pct_total": lucro_perda_pct_total,
+        "total_moedas": len(posicoes_compradas),
+    }
+    return render(request, "core/criptomoedas.html", contexto)
+
+
+@login_required
+def cripto_atualizar_cotacoes(request):
+    """
+    Atualiza a cotação de todas as criptomoedas relevantes (sugeridas + as
+    que o usuário já operou) - sem portão de horário de pregão (mercado_b3_
+    aberto só faz sentido pra B3): cripto negocia 24 horas por dia, todo
+    santo dia.
+    """
+    posicoes_cripto = calcular_posicoes_cripto(request.user)
+    coins = list(dict.fromkeys(
+        MOEDAS_CRIPTO_SUGERIDAS + [p.cripto_ativo.coin for p in posicoes_cripto]
+    ))
+    cripto_ativos = [CriptoAtivo.objects.get_or_create(coin=coin)[0] for coin in coins]
+
+    atualizados, falhas = atualizar_cotacoes_cripto_ativos(cripto_ativos)
+    if atualizados:
+        messages.success(request, f"{atualizados} cotação(ões) de criptomoeda atualizada(s) com sucesso.")
+    if falhas:
+        messages.warning(
+            request, f"Não foi possível atualizar {falhas} criptomoeda(s) agora. Tente novamente em instantes.",
+        )
+    return redirect("core:criptomoedas")
+
+
+def _operacoes_cripto_do_usuario(usuario) -> dict:
+    """Operações de criptomoeda do usuário já divididas em três grids - reaproveitado pela listagem e pelos relatórios Excel/PDF (ver cripto_operacao_lista/cripto_operacoes_exportar_excel/pdf)."""
+    operacoes = list(
+        OperacaoCripto.objects.filter(usuario=usuario).select_related("cripto_ativo")
+    )
+    operacoes_compradas = [op for op in operacoes if op.tipo == OperacaoCripto.COMPRA and op.saldo > 0]
+    operacoes_vendidas = sorted(
+        (op for op in operacoes if op.tipo == OperacaoCripto.COMPRA and op.saldo <= 0),
+        key=lambda op: op.data_venda or op.data_operacao,
+        reverse=True,
+    )
+    operacoes_reservadas = [op for op in operacoes if op.tipo == OperacaoCripto.RESERVAR]
+    return {
+        "operacoes_compradas": operacoes_compradas,
+        "operacoes_vendidas": operacoes_vendidas,
+        "operacoes_reservadas": operacoes_reservadas,
+    }
+
+
+@login_required
+def cripto_operacao_lista(request):
+    """Lista as operações de criptomoeda do usuário, divididas em três grids: Em carteira, Reservadas e Vendidas - espelha operacao_lista (ações), sem os filtros de período."""
+    return render(
+        request, "core/cripto_operacao_lista.html", _operacoes_cripto_do_usuario(request.user),
+    )
+
+
+@login_required
+def cripto_operacoes_exportar_excel(request):
+    """Exporta as operações de criptomoeda do usuário logado como planilha .xlsx - espelha operacoes_exportar_excel (ações)."""
+    dados = _operacoes_cripto_do_usuario(request.user)
+    conteudo = gerar_excel_operacoes_cripto(
+        dados["operacoes_compradas"], dados["operacoes_vendidas"], dados["operacoes_reservadas"],
+    )
+    resposta = HttpResponse(
+        conteudo,
+        content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+    nome_arquivo = f"operacoes_cripto_{timezone.localdate().isoformat()}.xlsx"
+    resposta["Content-Disposition"] = f'attachment; filename="{nome_arquivo}"'
+    return resposta
+
+
+@login_required
+def cripto_operacoes_exportar_pdf(request):
+    """Exporta as operações de criptomoeda do usuário logado como PDF - espelha operacoes_exportar_pdf (ações)."""
+    dados = _operacoes_cripto_do_usuario(request.user)
+    nome_usuario = request.user.first_name or request.user.username
+    conteudo = gerar_pdf_operacoes_cripto(
+        dados["operacoes_compradas"], dados["operacoes_vendidas"], dados["operacoes_reservadas"], nome_usuario,
+    )
+    resposta = HttpResponse(conteudo, content_type="application/pdf")
+    nome_arquivo = f"operacoes_cripto_{timezone.localdate().isoformat()}.pdf"
+    resposta["Content-Disposition"] = f'attachment; filename="{nome_arquivo}"'
+    return resposta
+
+
+@login_required
+def cripto_operacao_nova(request):
+    """Registra uma nova compra ou reserva de criptomoeda - espelha operacao_nova (ações). Aceita "?coin=" opcional na URL pra vir com o código já preenchido."""
+    if request.method == "POST":
+        form = OperacaoCriptoForm(request.POST)
+        if form.is_valid():
+            operacao = form.save(commit=False)
+            operacao.usuario = request.user
+            operacao.save()
+            sincronizar_lancamento_compra_cripto(operacao)
+
+            try:
+                atualizar_cotacao_cripto_diaria(operacao.cripto_ativo)
+            except BrapiError:
+                pass  # a cotação será buscada depois, no próximo "Atualizar cotações agora"
+
+            tipo_label = operacao.get_tipo_display()
+            messages.success(
+                request,
+                f"{tipo_label} de {operacao.quantidade}x {operacao.cripto_ativo.coin} registrada com sucesso.",
+            )
+            return redirect("core:cripto_operacao_lista")
+    else:
+        initial = {"data_operacao": timezone.localdate()}
+        coin = request.GET.get("coin", "").strip().upper()
+        if coin:
+            initial["coin"] = coin
+        tipo = request.GET.get("tipo", "").strip().upper()
+        if tipo in dict(OperacaoCripto.TIPO_CHOICES):
+            initial["tipo"] = tipo
+        form = OperacaoCriptoForm(initial=initial)
+
+    return render(request, "core/cripto_operacao_form.html", {"form": form})
+
+
+@login_required
+def cripto_operacao_vender(request, operacao_id):
+    """Registra a venda (total ou parcial) de um lote de criptomoeda, ou corrige uma venda já registrada - espelha operacao_vender (ações)."""
+    operacao = get_object_or_404(
+        OperacaoCripto, id=operacao_id, usuario=request.user, tipo=OperacaoCripto.COMPRA
+    )
+    ja_estava_vendido = operacao.quantidade_vendida > 0
+
+    if request.method == "POST":
+        form = VendaLoteCriptoForm(request.POST, instance=operacao)
+        if form.is_valid():
+            operacao = form.save()
+            sincronizar_lancamento_venda_cripto(operacao)
+            acao = "atualizada" if ja_estava_vendido else "registrada"
+            mensagem = f"Venda de {operacao.quantidade_vendida}x {operacao.cripto_ativo.coin} {acao} com sucesso."
+            if operacao.lucro_perda_realizado is not None:
+                resultado = "lucro" if operacao.lucro_perda_realizado >= 0 else "perda"
+                mensagem += f" {resultado.capitalize()} realizado: R$ {operacao.lucro_perda_realizado}."
+            messages.success(request, mensagem)
+            return redirect("core:cripto_operacao_lista")
+    else:
+        form = VendaLoteCriptoForm(instance=operacao)
+
+    return render(request, "core/cripto_operacao_vender.html", {"form": form, "operacao": operacao})
+
+
+@login_required
+def cripto_operacao_comprar(request, operacao_id):
+    """Efetiva uma reserva de criptomoeda como uma compra real - espelha operacao_comprar (ações)."""
+    operacao = get_object_or_404(
+        OperacaoCripto, id=operacao_id, usuario=request.user, tipo=OperacaoCripto.RESERVAR
+    )
+
+    if request.method == "POST":
+        form = ConfirmarCompraCriptoForm(request.POST, instance=operacao)
+        if form.is_valid():
+            operacao = form.save()
+            sincronizar_lancamento_compra_cripto(operacao)
+            messages.success(
+                request,
+                f"Reserva efetivada: compra de {operacao.quantidade}x {operacao.cripto_ativo.coin} registrada com sucesso.",
+            )
+            return redirect("core:cripto_operacao_lista")
+    else:
+        form = ConfirmarCompraCriptoForm(instance=operacao)
+
+    return render(request, "core/cripto_operacao_comprar.html", {"form": form, "operacao": operacao})
+
+
+@login_required
+def cripto_operacao_editar(request, operacao_id):
+    """Corrige os dados de uma compra de criptomoeda já registrada - espelha operacao_editar (ações)."""
+    operacao = get_object_or_404(
+        OperacaoCripto, id=operacao_id, usuario=request.user, tipo=OperacaoCripto.COMPRA
+    )
+
+    if request.method == "POST":
+        form = EditarOperacaoCriptoForm(request.POST, instance=operacao)
+        if form.is_valid():
+            operacao = form.save()
+            sincronizar_lancamento_compra_cripto(operacao)
+            sincronizar_lancamento_venda_cripto(operacao)
+            messages.success(request, f"Compra de {operacao.cripto_ativo.coin} atualizada com sucesso.")
+            return redirect("core:cripto_operacao_lista")
+    else:
+        form = EditarOperacaoCriptoForm(instance=operacao)
+
+    return render(request, "core/cripto_operacao_editar.html", {"form": form, "operacao": operacao})
+
+
+@login_required
+def cripto_operacao_editar_reserva(request, operacao_id):
+    """Corrige os dados de uma reserva de criptomoeda já registrada - espelha operacao_editar_reserva (ações)."""
+    operacao = get_object_or_404(
+        OperacaoCripto, id=operacao_id, usuario=request.user, tipo=OperacaoCripto.RESERVAR
+    )
+
+    if request.method == "POST":
+        form = EditarOperacaoCriptoForm(request.POST, instance=operacao)
+        if form.is_valid():
+            operacao = form.save()
+            messages.success(request, f"Reserva de {operacao.cripto_ativo.coin} atualizada com sucesso.")
+            return redirect("core:cripto_operacao_lista")
+    else:
+        form = EditarOperacaoCriptoForm(instance=operacao)
+
+    return render(request, "core/cripto_operacao_editar_reserva.html", {"form": form, "operacao": operacao})
+
+
+@login_required
+@require_POST
+def cripto_operacao_excluir(request, operacao_id):
+    """Exclui definitivamente uma operação de criptomoeda (compra ou reserva) do usuário logado - espelha operacao_excluir (ações)."""
+    operacao = get_object_or_404(OperacaoCripto, id=operacao_id, usuario=request.user)
+    coin = operacao.cripto_ativo.coin
+    tipo_label = operacao.get_tipo_display()
+    operacao.delete()
+    messages.success(request, f"{tipo_label} de {coin} excluída com sucesso.")
+    return redirect(request.POST.get("next") or "core:cripto_operacao_lista")

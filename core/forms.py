@@ -4,7 +4,7 @@ from django import forms
 from django.conf import settings
 from django.utils import timezone
 
-from .models import Operacao, Ativo, FonteNoticia, ContaCorrente, LancamentoContaCorrente
+from .models import Operacao, Ativo, FonteNoticia, ContaCorrente, LancamentoContaCorrente, CriptoAtivo, OperacaoCripto
 from .services import ativos_distintos_comprados
 
 
@@ -308,6 +308,188 @@ class EditarReservaForm(MetasValidacaoMixin, forms.ModelForm):
         if commit:
             operacao.save()
         return operacao
+
+
+class OperacaoCriptoForm(MetasValidacaoMixin, forms.ModelForm):
+    """
+    Registra uma nova compra ou reserva de criptomoeda - espelha OperacaoForm
+    (ações), sem o limite de MAX_ATIVOS_EM_CARTEIRA (esse limite é só para
+    ações da B3; não existe cota equivalente para cripto).
+    """
+
+    coin = forms.CharField(
+        label="Código da criptomoeda (ex: BTC, ETH, SOL)",
+        max_length=12,
+        widget=forms.TextInput(attrs={"placeholder": "BTC"}),
+    )
+
+    class Meta:
+        model = OperacaoCripto
+        fields = ["tipo", "quantidade", "preco_unitario", "data_operacao", "meta_lucro_pct", "meta_perda_pct", "observacao"]
+        widgets = {
+            "data_operacao": forms.DateInput(attrs={"type": "date"}, format="%Y-%m-%d"),
+            "observacao": forms.Textarea(attrs={"rows": 2}),
+            "quantidade": forms.NumberInput(attrs={"step": "0.00000001"}),
+            "preco_unitario": forms.NumberInput(attrs={"step": "0.00000001"}),
+        }
+        labels = {
+            "quantidade": "Quantidade (aceita casas decimais, ex: 0.0035)",
+            "preco_unitario": "Preço unitário (R$)",
+            "meta_lucro_pct": "Meta de lucro (%) - opcional",
+            "meta_perda_pct": "Meta de perda (%) - opcional, use valor negativo",
+        }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        if not self.initial.get("data_operacao"):
+            self.initial["data_operacao"] = timezone.localdate()
+
+        for name, field in self.fields.items():
+            css = field.widget.attrs.get("class", "")
+            field.widget.attrs["class"] = (css + " form-control-futurista").strip()
+
+    def clean_coin(self):
+        return self.cleaned_data["coin"].strip().upper()
+
+    def save(self, commit=True):
+        operacao = super().save(commit=False)
+        coin = self.cleaned_data["coin"]
+        cripto_ativo, _ = CriptoAtivo.objects.get_or_create(coin=coin)
+        operacao.cripto_ativo = cripto_ativo
+        if commit:
+            operacao.save()
+        return operacao
+
+
+class ConfirmarCompraCriptoForm(MetasValidacaoMixin, forms.ModelForm):
+    """Efetiva uma reserva de criptomoeda como uma compra real - espelha ConfirmarCompraForm (ações)."""
+
+    class Meta:
+        model = OperacaoCripto
+        fields = ["quantidade", "preco_unitario", "data_operacao", "meta_lucro_pct", "meta_perda_pct"]
+        widgets = {
+            "data_operacao": forms.DateInput(attrs={"type": "date"}, format="%Y-%m-%d"),
+            "quantidade": forms.NumberInput(attrs={"step": "0.00000001"}),
+            "preco_unitario": forms.NumberInput(attrs={"step": "0.00000001"}),
+        }
+        labels = {
+            "quantidade": "Quantidade comprada",
+            "preco_unitario": "Preço pago (R$)",
+            "data_operacao": "Data da compra",
+            "meta_lucro_pct": "Meta de lucro (%) - opcional",
+            "meta_perda_pct": "Meta de perda (%) - opcional, use valor negativo",
+        }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.instance.tipo = OperacaoCripto.COMPRA
+
+        if not self.initial.get("data_operacao"):
+            self.initial["data_operacao"] = timezone.localdate()
+
+        for name, field in self.fields.items():
+            css = field.widget.attrs.get("class", "")
+            field.widget.attrs["class"] = (css + " form-control-futurista").strip()
+
+
+class EditarOperacaoCriptoForm(MetasValidacaoMixin, forms.ModelForm):
+    """Corrige os dados de uma compra ou reserva de criptomoeda já registrada - espelha EditarCompraForm/EditarReservaForm (ações)."""
+
+    coin = forms.CharField(
+        label="Código da criptomoeda (ex: BTC, ETH, SOL)",
+        max_length=12,
+        widget=forms.TextInput(attrs={"placeholder": "BTC"}),
+    )
+
+    class Meta:
+        model = OperacaoCripto
+        fields = ["quantidade", "preco_unitario", "data_operacao", "meta_lucro_pct", "meta_perda_pct", "observacao"]
+        widgets = {
+            "data_operacao": forms.DateInput(attrs={"type": "date"}, format="%Y-%m-%d"),
+            "observacao": forms.Textarea(attrs={"rows": 2}),
+            "quantidade": forms.NumberInput(attrs={"step": "0.00000001"}),
+            "preco_unitario": forms.NumberInput(attrs={"step": "0.00000001"}),
+        }
+        labels = {
+            "preco_unitario": "Preço unitário (R$)",
+            "meta_lucro_pct": "Meta de lucro (%) - opcional",
+            "meta_perda_pct": "Meta de perda (%) - opcional, use valor negativo",
+        }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        if not self.initial.get("coin"):
+            self.initial["coin"] = self.instance.cripto_ativo.coin
+
+        for name, field in self.fields.items():
+            css = field.widget.attrs.get("class", "")
+            field.widget.attrs["class"] = (css + " form-control-futurista").strip()
+
+    def clean_coin(self):
+        return self.cleaned_data["coin"].strip().upper()
+
+    def clean_quantidade(self):
+        quantidade = self.cleaned_data["quantidade"]
+        if self.instance.tipo == OperacaoCripto.COMPRA and quantidade < self.instance.quantidade_vendida:
+            raise forms.ValidationError(
+                f"Este lote já tem {self.instance.quantidade_vendida} unidade(s) vendida(s) - "
+                f"a quantidade não pode ficar menor que isso."
+            )
+        return quantidade
+
+    def save(self, commit=True):
+        operacao = super().save(commit=False)
+        coin = self.cleaned_data["coin"]
+        if coin != operacao.cripto_ativo.coin:
+            operacao.cripto_ativo, _ = CriptoAtivo.objects.get_or_create(coin=coin)
+        if commit:
+            operacao.save()
+        return operacao
+
+
+class VendaLoteCriptoForm(forms.ModelForm):
+    """Registra a venda (total ou parcial) de um lote de criptomoeda já comprado - espelha VendaLoteForm (ações)."""
+
+    class Meta:
+        model = OperacaoCripto
+        fields = ["quantidade_vendida", "preco_venda", "data_venda"]
+        widgets = {
+            "data_venda": forms.DateInput(attrs={"type": "date"}, format="%Y-%m-%d"),
+            "quantidade_vendida": forms.NumberInput(attrs={"step": "0.00000001"}),
+            "preco_venda": forms.NumberInput(attrs={"step": "0.00000001"}),
+        }
+        labels = {
+            "quantidade_vendida": "Quantidade vendida",
+            "preco_venda": "Preço de venda (R$)",
+            "data_venda": "Data da venda",
+        }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        if not self.initial.get("data_venda"):
+            self.initial["data_venda"] = timezone.localdate()
+
+        for name, field in self.fields.items():
+            css = field.widget.attrs.get("class", "")
+            field.widget.attrs["class"] = (css + " form-control-futurista").strip()
+
+    def clean_quantidade_vendida(self):
+        quantidade_vendida = self.cleaned_data["quantidade_vendida"]
+        if quantidade_vendida > self.instance.quantidade:
+            raise forms.ValidationError(
+                f"Este lote tem {self.instance.quantidade} unidade(s) compradas - "
+                f"não é possível vender {quantidade_vendida}."
+            )
+        return quantidade_vendida
+
+    def clean(self):
+        cleaned_data = super().clean()
+        if cleaned_data.get("quantidade_vendida") and not cleaned_data.get("preco_venda"):
+            self.add_error("preco_venda", "Informe o preço de venda para calcular o lucro/perda.")
+        return cleaned_data
 
 
 class VendaLoteForm(forms.ModelForm):

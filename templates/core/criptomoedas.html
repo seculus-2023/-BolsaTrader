@@ -1,0 +1,159 @@
+{% extends "base.html" %}
+{% block titulo %}Criptomoedas - BolsaTrader{% endblock %}
+{% block conteudo %}
+<h1>Criptomoedas</h1>
+<p style="color: var(--text-dim);">
+    Cotações e carteira de criptomoedas, completamente separadas das ações da B3 - não entram em Posições em
+    Carteira, no robô consultor, no Scanner Técnico nem na comparação com Ibovespa/CDI. Cripto negocia 24 horas
+    por dia, todos os dias, então não há "horário de pregão" aqui.
+</p>
+<a href="{% url 'core:cripto_atualizar_cotacoes' %}" class="btn-futurista">🔄 Atualizar cotações agora</a>
+<a href="{% url 'core:cripto_operacao_nova' %}" class="btn-futurista btn-secundario">+ Nova compra/reserva</a>
+<a href="{% url 'core:cripto_operacao_lista' %}" class="btn-futurista btn-secundario">🗂️ Minhas Operações de Cripto</a>
+
+<div class="grid-stats" style="margin-top: 1.5rem;">
+    <div class="stat-tile">
+        <div class="label">Moedas em carteira</div>
+        <div class="value">{{ total_moedas }}</div>
+    </div>
+    <div class="stat-tile">
+        <div class="label">Valor investido</div>
+        <div class="value">R$ {{ valor_investido_total|floatformat:2 }}</div>
+    </div>
+    <div class="stat-tile">
+        <div class="label">Valor atual</div>
+        <div class="value">R$ {{ valor_atual_total|floatformat:2 }}</div>
+    </div>
+    <div class="stat-tile">
+        <div class="label">Lucro / Perda</div>
+        <div class="value {% if lucro_perda_total > 0 %}valor-positivo{% elif lucro_perda_total < 0 %}valor-negativo{% else %}valor-neutro{% endif %}">
+            R$ {{ lucro_perda_total|floatformat:2 }}
+            {% if lucro_perda_pct_total is not None %}({{ lucro_perda_pct_total|floatformat:2 }}%){% endif %}
+        </div>
+    </div>
+</div>
+
+<h2 style="margin-top: 2rem;">Cotações</h2>
+<div class="card-glass" style="margin-top: 1rem;">
+    <div class="tabela-scroll">
+    <table class="tabela-futurista">
+        <thead>
+            <tr>
+                <th>Moeda</th>
+                <th>Nome</th>
+                <th class="coluna-destaque">Preço atual</th>
+                <th>Variação do dia</th>
+                <th>Máxima do dia</th>
+                <th>Mínima do dia</th>
+                <th>Atualizado em</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for c in cotacoes %}
+            <tr>
+                <td><strong>{{ c.coin }}</strong></td>
+                <td>{{ c.nome|default:"—" }}</td>
+                <td class="coluna-destaque">{% if c.preco_atual is not None %}R$ {{ c.preco_atual }}{% else %}sem dados{% endif %}</td>
+                <td class="{% if c.variacao_dia_pct > 0 %}valor-positivo{% elif c.variacao_dia_pct < 0 %}valor-negativo{% else %}valor-neutro{% endif %}">
+                    {% if c.variacao_dia_pct is not None %}{{ c.variacao_dia_pct }}%{% else %}&mdash;{% endif %}
+                </td>
+                <td>{% if c.maxima_dia is not None %}R$ {{ c.maxima_dia }}{% else %}&mdash;{% endif %}</td>
+                <td>{% if c.minima_dia is not None %}R$ {{ c.minima_dia }}{% else %}&mdash;{% endif %}</td>
+                <td>{% if c.atualizado_em %}{{ c.atualizado_em|date:"d/m/Y H:i" }}{% else %}nunca{% endif %}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    </div>
+    {% if not cotacoes %}
+    <p style="color: var(--text-dim); margin-top: .8rem;">Nenhuma moeda para exibir.</p>
+    {% endif %}
+</div>
+
+<h2 style="margin-top: 2rem;">Minha carteira de cripto</h2>
+<div class="card-glass" style="margin-top: 1rem;">
+    {% if posicoes_compradas %}
+    <div class="tabela-scroll">
+    <table class="tabela-futurista">
+        <thead>
+            <tr>
+                <th>Ação</th>
+                <th>Dias em carteira</th>
+                <th>Moeda</th>
+                <th class="coluna-destaque">Cotação atual</th>
+                <th>Lucro/Perda (%)</th>
+                <th>Lucro/Perda por dia em carteira</th>
+                <th>Lucro/Perda (R$)</th>
+                <th>Qtd.</th>
+                <th>Preço médio</th>
+                <th>Valor investido</th>
+                <th>Valor atual</th>
+                <th>Meta lucro / perda</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for p in posicoes_compradas %}
+            <tr{% if p.meta_lucro_pct and p.lucro_perda_pct and p.lucro_perda_pct >= p.meta_lucro_pct %} class="linha-meta-atingida"{% endif %}>
+                <td>
+                    <a href="{% url 'core:cripto_operacao_lista' %}" class="btn-futurista btn-secundario btn-icone" title="Ver lotes" aria-label="Ver lotes">🗂️</a>
+                </td>
+                <td>{% if p.dias_desde_compra == 0 %}hoje{% elif p.dias_desde_compra == 1 %}1 dia{% else %}{{ p.dias_desde_compra }} dias{% endif %}</td>
+                <td><strong>{{ p.cripto_ativo.coin }}</strong></td>
+                <td class="coluna-destaque">{% if p.preco_atual is not None %}R$ {{ p.preco_atual }}{% else %}sem cotação{% endif %}</td>
+                <td class="{% if p.lucro_perda_pct > 0 %}valor-positivo{% elif p.lucro_perda_pct < 0 %}valor-negativo{% else %}valor-neutro{% endif %}">
+                    {% if p.lucro_perda_pct is not None %}{{ p.lucro_perda_pct }}%{% else %}&mdash;{% endif %}
+                </td>
+                <td class="{% if p.lucro_perda_por_dia_pct > 0 %}valor-positivo{% elif p.lucro_perda_por_dia_pct < 0 %}valor-negativo{% else %}valor-neutro{% endif %}">
+                    {% if p.lucro_perda_por_dia_pct is not None %}{{ p.lucro_perda_por_dia_pct }}%/dia{% else %}&mdash;{% endif %}
+                </td>
+                <td class="{% if p.lucro_perda_valor > 0 %}valor-positivo{% elif p.lucro_perda_valor < 0 %}valor-negativo{% else %}valor-neutro{% endif %}">
+                    {% if p.lucro_perda_valor is not None %}R$ {{ p.lucro_perda_valor }}{% else %}&mdash;{% endif %}
+                </td>
+                <td>{{ p.quantidade }}</td>
+                <td>R$ {{ p.preco_medio }}</td>
+                <td>R$ {{ p.valor_investido }}</td>
+                <td>{% if p.valor_atual is not None %}R$ {{ p.valor_atual }}{% else %}&mdash;{% endif %}</td>
+                <td>
+                    {% if p.meta_lucro_pct %}+{{ p.meta_lucro_pct }}%{% else %}&mdash;{% endif %}
+                    /
+                    {% if p.meta_perda_pct %}{{ p.meta_perda_pct }}%{% else %}&mdash;{% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    </div>
+    {% else %}
+    <p style="color: var(--text-dim);">Você ainda não tem nenhuma criptomoeda comprada.</p>
+    {% endif %}
+</div>
+
+{% if posicoes_reservadas %}
+<h2 style="margin-top: 2rem;">Reservas de cripto</h2>
+<div class="card-glass" style="margin-top: 1rem;">
+    <div class="tabela-scroll">
+    <table class="tabela-futurista">
+        <thead>
+            <tr>
+                <th>Moeda</th>
+                <th>Quantidade reservada</th>
+                <th class="coluna-destaque">Cotação atual</th>
+                <th>Preço pretendido</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for p in posicoes_reservadas %}
+            <tr>
+                <td><strong>{{ p.cripto_ativo.coin }}</strong></td>
+                <td>{{ p.quantidade_reservada }}</td>
+                <td class="coluna-destaque">{% if p.preco_atual is not None %}R$ {{ p.preco_atual }}{% else %}sem cotação{% endif %}</td>
+                <td>R$ {{ p.preco_medio }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    </div>
+    <a href="{% url 'core:cripto_operacao_lista' %}" class="link-secundario">Ver e gerenciar reservas em Minhas Operações de Cripto →</a>
+</div>
+{% endif %}
+{% endblock %}

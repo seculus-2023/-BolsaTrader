@@ -586,10 +586,14 @@ class LancamentoContaCorrente(models.Model):
 
     ORIGEM_COMPRA = "COMPRA"
     ORIGEM_VENDA = "VENDA"
+    ORIGEM_COMPRA_CRIPTO = "COMPRA_CRIPTO"
+    ORIGEM_VENDA_CRIPTO = "VENDA_CRIPTO"
     ORIGEM_TRANSFERENCIA = "TRANSFERENCIA"
     ORIGEM_CHOICES = [
         (ORIGEM_COMPRA, "Compra de ações"),
         (ORIGEM_VENDA, "Venda de ações"),
+        (ORIGEM_COMPRA_CRIPTO, "Compra de criptomoeda"),
+        (ORIGEM_VENDA_CRIPTO, "Venda de criptomoeda"),
         (ORIGEM_TRANSFERENCIA, "Transferência"),
     ]
 
@@ -601,7 +605,12 @@ class LancamentoContaCorrente(models.Model):
     data = models.DateField("Data", default=timezone.localdate)
     operacao = models.ForeignKey(
         Operacao, on_delete=models.CASCADE, null=True, blank=True, related_name="lancamentos_conta_corrente",
-        help_text="Preenchido só nos lançamentos automáticos de compra/venda - nulo nas transferências manuais.",
+        help_text="Preenchido só nos lançamentos automáticos de compra/venda de ações - nulo nos de cripto e nas transferências manuais.",
+    )
+    operacao_cripto = models.ForeignKey(
+        "OperacaoCripto", on_delete=models.CASCADE, null=True, blank=True,
+        related_name="lancamentos_conta_corrente",
+        help_text="Preenchido só nos lançamentos automáticos de compra/venda de criptomoeda - nulo nos de ações e nas transferências manuais.",
     )
     criado_em = models.DateTimeField(auto_now_add=True)
 
@@ -614,11 +623,239 @@ class LancamentoContaCorrente(models.Model):
                 fields=["operacao", "origem"], condition=models.Q(operacao__isnull=False),
                 name="um_lancamento_por_operacao_e_origem",
             ),
+            models.UniqueConstraint(
+                fields=["operacao_cripto", "origem"], condition=models.Q(operacao_cripto__isnull=False),
+                name="um_lancamento_por_operacao_cripto_e_origem",
+            ),
         ]
 
     def __str__(self):
         sinal = "+" if self.tipo == self.CREDITO else "-"
         return f"{sinal}R$ {self.valor} - {self.descricao}"
+
+
+class CriptoAtivo(models.Model):
+    """
+    Uma criptomoeda acompanhada, identificada pelo código (coin) usado pela
+    API brapi.dev (ex: BTC, ETH, SOL). Espelha Ativo (mesma ideia de guardar
+    o "retrato" mais atual da cotação, com o histórico diário em
+    CotacaoCripto), mas é um modelo à parte de propósito: cripto não deve se
+    misturar com ações da B3 em nenhuma tela, cálculo ou relatório (Posições
+    em Carteira, Scanner Técnico, robô consultor, comparação com Ibovespa/CDI
+    etc. continuam só sobre ações - cripto tem sua própria tela e suas
+    próprias Operações/Posições, ver OperacaoCripto).
+    """
+
+    coin = models.CharField("Código (ex: BTC, ETH)", max_length=12, unique=True)
+    nome = models.CharField("Nome", max_length=150, blank=True)
+    moeda = models.CharField("Moeda", max_length=8, default="BRL")
+    logo_url = models.URLField("URL do logo", max_length=500, blank=True)
+
+    preco_atual = models.DecimalField("Preço atual", max_digits=18, decimal_places=8, null=True, blank=True)
+    variacao_dia_pct = models.DecimalField(
+        "Variação no dia (%)", max_digits=8, decimal_places=2, null=True, blank=True
+    )
+    variacao_dia_valor = models.DecimalField(
+        "Variação no dia (valor)", max_digits=18, decimal_places=8, null=True, blank=True
+    )
+    maxima_dia = models.DecimalField("Máxima do dia", max_digits=18, decimal_places=8, null=True, blank=True)
+    minima_dia = models.DecimalField("Mínima do dia", max_digits=18, decimal_places=8, null=True, blank=True)
+    volume = models.DecimalField("Volume negociado (24h)", max_digits=24, decimal_places=2, null=True, blank=True)
+    valor_mercado = models.DecimalField(
+        "Valor de mercado", max_digits=24, decimal_places=2, null=True, blank=True
+    )
+
+    hora_cotacao = models.DateTimeField("Horário da cotação", null=True, blank=True)
+    atualizado_em = models.DateTimeField("Última atualização", auto_now=True)
+    criado_em = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = "Criptomoeda"
+        verbose_name_plural = "Criptomoedas"
+        ordering = ["coin"]
+
+    def __str__(self):
+        return self.coin.upper()
+
+    def ultima_cotacao(self):
+        return self.cotacoes.order_by("-data").first()
+
+
+class OperacaoCripto(models.Model):
+    """
+    Uma compra ou uma reserva de criptomoeda, feita por um usuário - espelha
+    Operacao (mesma lógica de lote/venda parcial no próprio registro, ver a
+    docstring de Operacao), mas em modelo separado e ligado a CriptoAtivo em
+    vez de Ativo, de propósito (ver CriptoAtivo). A diferença estrutural mais
+    importante é que quantidade e preço são fracionários (dá pra comprar
+    0,0035 BTC), enquanto em Operacao (ações) a quantidade é sempre inteira.
+    """
+
+    COMPRA = "COMPRA"
+    RESERVAR = "RESERVAR"
+    TIPO_CHOICES = [
+        (COMPRA, "Compra"),
+        (RESERVAR, "Reservar"),
+    ]
+
+    usuario = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="operacoes_cripto"
+    )
+    cripto_ativo = models.ForeignKey(CriptoAtivo, on_delete=models.PROTECT, related_name="operacoes")
+    tipo = models.CharField(max_length=8, choices=TIPO_CHOICES)
+    quantidade = models.DecimalField("Quantidade", max_digits=20, decimal_places=8)
+    preco_unitario = models.DecimalField("Preço unitário", max_digits=18, decimal_places=8)
+    data_operacao = models.DateField("Data da operação", default=timezone.now)
+
+    meta_lucro_pct = models.DecimalField(
+        "Meta de lucro (%)", max_digits=6, decimal_places=2, null=True, blank=True
+    )
+    meta_perda_pct = models.DecimalField(
+        "Meta de perda (%) - use valor negativo", max_digits=6, decimal_places=2, null=True, blank=True
+    )
+
+    quantidade_vendida = models.DecimalField("Quantidade vendida", max_digits=20, decimal_places=8, default=Decimal("0"))
+    preco_venda = models.DecimalField("Preço de venda", max_digits=18, decimal_places=8, null=True, blank=True)
+    data_venda = models.DateField("Data da venda", null=True, blank=True)
+
+    observacao = models.TextField("Observações", blank=True)
+    criado_em = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = "Operação de criptomoeda"
+        verbose_name_plural = "Operações de criptomoeda"
+        ordering = ["-data_operacao", "-criado_em"]
+
+    def __str__(self):
+        return f"{self.get_tipo_display()} {self.quantidade}x {self.cripto_ativo.coin} @ R$ {self.preco_unitario}"
+
+    def clean(self):
+        super().clean()
+        if self.tipo == self.RESERVAR and self.quantidade is not None and self.quantidade_vendida:
+            raise ValidationError({
+                "quantidade_vendida": 'Uma reserva não pode ter quantidade vendida.',
+            })
+        if (
+            self.tipo == self.COMPRA
+            and self.quantidade is not None
+            and self.quantidade_vendida is not None
+            and self.quantidade_vendida > self.quantidade
+        ):
+            raise ValidationError({
+                "quantidade_vendida": "A quantidade vendida não pode ser maior que a quantidade comprada neste lote.",
+            })
+
+    @property
+    def valor_total(self):
+        return self.quantidade * self.preco_unitario
+
+    @property
+    def valor_total_vendido(self):
+        if not self.quantidade_vendida or self.preco_venda is None:
+            return None
+        return self.preco_venda * self.quantidade_vendida
+
+    @property
+    def dias_desde_operacao(self):
+        return (timezone.localdate() - self.data_operacao).days
+
+    @property
+    def dias_em_carteira_ate_venda(self):
+        if self.data_venda is None:
+            return None
+        return (self.data_venda - self.data_operacao).days
+
+    @property
+    def saldo(self):
+        return self.quantidade - self.quantidade_vendida
+
+    @property
+    def lucro_perda_realizado(self):
+        if not self.quantidade_vendida or self.preco_venda is None:
+            return None
+        return ((self.preco_venda - self.preco_unitario) * self.quantidade_vendida).quantize(Decimal("0.00000001"))
+
+    @property
+    def lucro_perda_pct_realizado(self):
+        lucro = self.lucro_perda_realizado
+        if lucro is None:
+            return None
+        custo = self.preco_unitario * self.quantidade_vendida
+        if not custo:
+            return None
+        return (lucro / custo * 100).quantize(Decimal("0.01"))
+
+    @property
+    def preco_atual(self):
+        """Última cotação conhecida da criptomoeda (preço de fechamento mais recente)."""
+        cotacao = self.cripto_ativo.ultima_cotacao()
+        return cotacao.preco_fechamento if cotacao else None
+
+    @property
+    def lucro_perda_pct_atual(self):
+        if self.tipo != self.COMPRA or self.saldo <= 0:
+            return None
+        preco_atual = self.preco_atual
+        if preco_atual is None:
+            return None
+        return ((preco_atual - self.preco_unitario) / self.preco_unitario * 100).quantize(Decimal("0.01"))
+
+    @property
+    def meta_lucro_atingida(self):
+        pct_atual = self.lucro_perda_pct_atual
+        if pct_atual is None:
+            return False
+        meta = abs(
+            self.meta_lucro_pct
+            if self.meta_lucro_pct is not None
+            else Decimal(str(settings.META_LUCRO_PADRAO))
+        )
+        return pct_atual >= meta
+
+    @property
+    def variacao_pct_reserva(self):
+        if self.tipo != self.RESERVAR:
+            return None
+        preco_atual = self.preco_atual
+        if preco_atual is None:
+            return None
+        return ((preco_atual - self.preco_unitario) / self.preco_unitario * 100).quantize(Decimal("0.01"))
+
+    @property
+    def meta_compra_atingida(self):
+        variacao = self.variacao_pct_reserva
+        if variacao is None:
+            return False
+        meta_bruta = (
+            self.meta_perda_pct
+            if self.meta_perda_pct is not None
+            else Decimal(str(settings.META_PERDA_PADRAO))
+        )
+        meta = -abs(meta_bruta)
+        return variacao <= meta
+
+
+class CotacaoCripto(models.Model):
+    """Histórico de cotações diárias de uma criptomoeda - espelha Cotacao, mas ligado a CriptoAtivo."""
+
+    cripto_ativo = models.ForeignKey(CriptoAtivo, on_delete=models.CASCADE, related_name="cotacoes")
+    data = models.DateField("Data da cotação")
+    preco_fechamento = models.DecimalField("Preço de fechamento", max_digits=18, decimal_places=8)
+    variacao_dia_pct = models.DecimalField(
+        "Variação no dia (%)", max_digits=8, decimal_places=2, null=True, blank=True
+    )
+    maxima = models.DecimalField("Máxima do dia", max_digits=18, decimal_places=8, null=True, blank=True)
+    minima = models.DecimalField("Mínima do dia", max_digits=18, decimal_places=8, null=True, blank=True)
+    criado_em = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = "Cotação de criptomoeda"
+        verbose_name_plural = "Cotações de criptomoeda"
+        ordering = ["-data"]
+        unique_together = ("cripto_ativo", "data")
+
+    def __str__(self):
+        return f"{self.cripto_ativo.coin} {self.data} R$ {self.preco_fechamento}"
 
 
 class PostIt(models.Model):

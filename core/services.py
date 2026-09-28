@@ -38,6 +38,7 @@ from .models import (
     ConsumoApiBrapi,
     Ativo, Cotacao, Operacao, Alerta, FonteNoticia, Noticia, AcaoB3, CotacaoIndice,
     RegistroAtualizacaoCarteira, ContaCorrente, LancamentoContaCorrente, PostIt,
+    CriptoAtivo, OperacaoCripto, CotacaoCripto,
 )
 
 
@@ -2365,6 +2366,260 @@ def gerar_pdf_operacoes(
 
 
 # --------------------------------------------------------------------------
+# Relatórios de Minhas Operações de Cripto - espelham gerar_excel_operacoes/
+# gerar_pdf_operacoes (ações), com as colunas da própria tela de cripto (sem
+# corretora, sem lucro/perda por dia - campos que não existem em
+# OperacaoCripto) e sem rótulo de período, já que a lista de cripto não tem
+# filtro de data (ver core.views.cripto_operacao_lista).
+# --------------------------------------------------------------------------
+COLUNAS_EM_CARTEIRA_CRIPTO = [
+    "Data", "Dias", "Moeda", "Quantidade", "Preço compra (R$)", "Total compra (R$)",
+    "Qtd. vendida", "Saldo", "Meta lucro (%)", "Meta perda (%)",
+]
+COLUNAS_RESERVADAS_CRIPTO = [
+    "Data", "Dias", "Moeda", "Quantidade", "Preço pretendido (R$)", "Total pretendido (R$)",
+    "Variação desde a reserva (%)", "Meta lucro (%)", "Meta perda (%)",
+]
+COLUNAS_VENDIDAS_CRIPTO = [
+    "Data compra", "Data venda", "Dias em carteira", "Moeda", "Quantidade",
+    "Preço compra (R$)", "Total compra (R$)", "Preço venda (R$)", "Total venda (R$)",
+    "Lucro/Perda realizado (R$)", "Lucro/Perda realizado (%)", "Meta lucro (%)", "Meta perda (%)",
+]
+
+INDICES_SOMA_EM_CARTEIRA_CRIPTO = {3, 5, 6, 7}
+INDICES_SOMA_RESERVADAS_CRIPTO = {3, 5}
+INDICES_SOMA_VENDIDAS_CRIPTO = {4, 6, 8, 9}
+
+
+def _linha_em_carteira_cripto(op: OperacaoCripto) -> list:
+    return [
+        op.data_operacao,
+        op.dias_desde_operacao,
+        op.cripto_ativo.coin,
+        float(op.quantidade),
+        float(op.preco_unitario),
+        float(op.valor_total),
+        float(op.quantidade_vendida),
+        float(op.saldo),
+        float(op.meta_lucro_pct) if op.meta_lucro_pct is not None else None,
+        float(op.meta_perda_pct) if op.meta_perda_pct is not None else None,
+    ]
+
+
+def _linha_reservada_cripto(op: OperacaoCripto) -> list:
+    return [
+        op.data_operacao,
+        op.dias_desde_operacao,
+        op.cripto_ativo.coin,
+        float(op.quantidade),
+        float(op.preco_unitario),
+        float(op.valor_total),
+        float(op.variacao_pct_reserva) if op.variacao_pct_reserva is not None else None,
+        float(op.meta_lucro_pct) if op.meta_lucro_pct is not None else None,
+        float(op.meta_perda_pct) if op.meta_perda_pct is not None else None,
+    ]
+
+
+def _linha_vendida_cripto(op: OperacaoCripto) -> list:
+    return [
+        op.data_operacao,
+        op.data_venda,
+        op.dias_em_carteira_ate_venda,
+        op.cripto_ativo.coin,
+        float(op.quantidade),
+        float(op.preco_unitario),
+        float(op.valor_total),
+        float(op.preco_venda) if op.preco_venda is not None else None,
+        float(op.valor_total_vendido) if op.valor_total_vendido is not None else None,
+        float(op.lucro_perda_realizado) if op.lucro_perda_realizado is not None else None,
+        float(op.lucro_perda_pct_realizado) if op.lucro_perda_pct_realizado is not None else None,
+        float(op.meta_lucro_pct) if op.meta_lucro_pct is not None else None,
+        float(op.meta_perda_pct) if op.meta_perda_pct is not None else None,
+    ]
+
+
+def gerar_excel_operacoes_cripto(
+    operacoes_compradas: list[OperacaoCripto],
+    operacoes_vendidas: list[OperacaoCripto],
+    operacoes_reservadas: list[OperacaoCripto],
+) -> bytes:
+    """Gera uma planilha .xlsx com as operações de criptomoeda do usuário - espelha gerar_excel_operacoes (ações), sem rótulo de período (a lista de cripto não tem filtro de data)."""
+    import io
+
+    from openpyxl import Workbook
+    from openpyxl.styles import Alignment, Font, PatternFill
+    from openpyxl.utils import get_column_letter
+
+    wb = Workbook()
+
+    def montar_aba(ws, titulo: str, colunas: list[str], linhas: list[list], indices_soma: set[int]):
+        ws.append([titulo])
+        ws.append([f"Gerado em {timezone.localtime().strftime('%d/%m/%Y %H:%M')}"])
+        ws.append([])
+        ws.append(colunas)
+        for celula in ws[4]:
+            celula.font = Font(bold=True, color="FFFFFF")
+            celula.fill = PatternFill("solid", fgColor="0D1526")
+            celula.alignment = Alignment(horizontal="center")
+
+        for linha in linhas:
+            ws.append(linha)
+
+        if linhas:
+            totais = _linha_totais(linhas, indices_soma, len(colunas))
+            totais[0] = "TOTAL"
+            ws.append(totais)
+            for celula in ws[ws.max_row]:
+                celula.font = Font(bold=True)
+                celula.fill = PatternFill("solid", fgColor="E4E9F2")
+
+        for indice in range(1, len(colunas) + 1):
+            ws.column_dimensions[get_column_letter(indice)].width = 17
+        ws.freeze_panes = "A5"
+
+    ws_carteira = wb.active
+    ws_carteira.title = "Em carteira"
+    montar_aba(
+        ws_carteira, "Em carteira", COLUNAS_EM_CARTEIRA_CRIPTO,
+        [_linha_em_carteira_cripto(op) for op in operacoes_compradas], INDICES_SOMA_EM_CARTEIRA_CRIPTO,
+    )
+
+    ws_vendidas = wb.create_sheet("Vendidas")
+    montar_aba(
+        ws_vendidas, "Vendidas", COLUNAS_VENDIDAS_CRIPTO,
+        [_linha_vendida_cripto(op) for op in operacoes_vendidas], INDICES_SOMA_VENDIDAS_CRIPTO,
+    )
+
+    ws_reservadas = wb.create_sheet("Reservadas")
+    montar_aba(
+        ws_reservadas, "Reservadas", COLUNAS_RESERVADAS_CRIPTO,
+        [_linha_reservada_cripto(op) for op in operacoes_reservadas], INDICES_SOMA_RESERVADAS_CRIPTO,
+    )
+
+    buffer = io.BytesIO()
+    wb.save(buffer)
+    return buffer.getvalue()
+
+
+def gerar_pdf_operacoes_cripto(
+    operacoes_compradas: list[OperacaoCripto],
+    operacoes_vendidas: list[OperacaoCripto],
+    operacoes_reservadas: list[OperacaoCripto],
+    nome_usuario: str,
+) -> bytes:
+    """Gera um PDF (paisagem) com as operações de criptomoeda do usuário - espelha gerar_pdf_operacoes (ações), sem rótulo de período."""
+    import io
+    from xml.sax.saxutils import escape
+
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import A4, landscape
+    from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+    from reportlab.lib.units import cm
+    from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+
+    nome_usuario = escape(nome_usuario)
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(
+        buffer, pagesize=landscape(A4),
+        topMargin=1.5 * cm, bottomMargin=1.5 * cm, leftMargin=1.2 * cm, rightMargin=1.2 * cm,
+    )
+    estilos = getSampleStyleSheet()
+
+    elementos = [
+        Paragraph("BolsaTrader - Minhas Operações de Cripto", estilos["Title"]),
+        Paragraph(
+            f"{nome_usuario} - gerado em {timezone.localtime().strftime('%d/%m/%Y %H:%M')}",
+            estilos["Normal"],
+        ),
+        Spacer(1, 0.5 * cm),
+    ]
+
+    def fmt(valor, sufixo="", quando_none="—"):
+        return f"{valor:.8f}{sufixo}" if valor is not None else quando_none
+
+    def fmt_moeda(valor, quando_none="—"):
+        return f"{valor:.2f}" if valor is not None else quando_none
+
+    def fmt_data(valor):
+        return valor.strftime("%d/%m/%Y") if valor is not None else "—"
+
+    def fmt_dias(valor):
+        if valor is None:
+            return "—"
+        return "hoje" if valor == 0 else f"{valor} dias"
+
+    identidade = lambda v: v if v is not None else "—"
+
+    estilo_cabecalho = ParagraphStyle(
+        "CabecalhoTabelaCripto", fontSize=6.5, leading=8, textColor=colors.white, alignment=1,
+    )
+    estilo_celula = ParagraphStyle("CelulaTabelaCripto", fontSize=6.5, leading=8, alignment=1)
+    estilo_celula_total = ParagraphStyle(
+        "CelulaTotalCripto", fontSize=6.5, leading=8, alignment=1, fontName="Helvetica-Bold",
+    )
+
+    def adicionar_secao(titulo: str, colunas: list[str], linhas: list[list], formatadores, indices_soma: set[int]):
+        elementos.append(Paragraph(titulo, estilos["Heading2"]))
+        elementos.append(Spacer(1, 0.2 * cm))
+        if not linhas:
+            elementos.append(Paragraph("Nenhuma operação de criptomoeda nesta situação.", estilos["Normal"]))
+            elementos.append(Spacer(1, 0.4 * cm))
+            return
+
+        dados = [[Paragraph(str(c), estilo_cabecalho) for c in colunas]]
+        for linha in linhas:
+            dados.append([Paragraph(str(f(v)), estilo_celula) for f, v in zip(formatadores, linha)])
+
+        totais = _linha_totais(linhas, indices_soma, len(colunas))
+        linha_totais = [Paragraph("TOTAL", estilo_celula_total)]
+        for f, v in list(zip(formatadores, totais))[1:]:
+            texto = f(v) if v is not None else "—"
+            linha_totais.append(Paragraph(str(texto), estilo_celula_total))
+        dados.append(linha_totais)
+
+        largura_coluna = doc.width / len(colunas)
+        tabela = Table(dados, colWidths=[largura_coluna] * len(colunas), repeatRows=1)
+        tabela.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#0D1526")),
+            ("BACKGROUND", (0, -1), (-1, -1), colors.HexColor("#d7deec")),
+            ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#cccccc")),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -2), [colors.white, colors.HexColor("#eef2f7")]),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("TOPPADDING", (0, 0), (-1, -1), 3),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+            ("LEFTPADDING", (0, 0), (-1, -1), 3),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 3),
+        ]))
+        elementos.append(tabela)
+        elementos.append(Spacer(1, 0.6 * cm))
+
+    adicionar_secao(
+        "Em carteira", COLUNAS_EM_CARTEIRA_CRIPTO,
+        [_linha_em_carteira_cripto(op) for op in operacoes_compradas],
+        [fmt_data, fmt_dias, identidade, fmt, fmt_moeda, fmt_moeda, fmt, fmt,
+         lambda v: fmt_moeda(v, "padrão"), lambda v: fmt_moeda(v, "padrão")],
+        INDICES_SOMA_EM_CARTEIRA_CRIPTO,
+    )
+    adicionar_secao(
+        "Vendidas", COLUNAS_VENDIDAS_CRIPTO,
+        [_linha_vendida_cripto(op) for op in operacoes_vendidas],
+        [fmt_data, fmt_data, fmt_dias, identidade, fmt, fmt_moeda, fmt_moeda, fmt_moeda, fmt_moeda,
+         fmt_moeda, lambda v: fmt_moeda(v, "%"), lambda v: fmt_moeda(v, "padrão"), lambda v: fmt_moeda(v, "padrão")],
+        INDICES_SOMA_VENDIDAS_CRIPTO,
+    )
+    adicionar_secao(
+        "Reservadas", COLUNAS_RESERVADAS_CRIPTO,
+        [_linha_reservada_cripto(op) for op in operacoes_reservadas],
+        [fmt_data, fmt_dias, identidade, fmt, fmt_moeda, fmt_moeda,
+         lambda v: fmt_moeda(v, "%"), lambda v: fmt_moeda(v, "padrão"), lambda v: fmt_moeda(v, "padrão")],
+        INDICES_SOMA_RESERVADAS_CRIPTO,
+    )
+
+    doc.build(elementos)
+    return buffer.getvalue()
+
+
+# --------------------------------------------------------------------------
 # Gráfico de acompanhamento (linha simples com o histórico de fechamento)
 # --------------------------------------------------------------------------
 def construir_grafico_cotacoes(
@@ -4289,6 +4544,48 @@ def sincronizar_lancamento_venda(operacao: Operacao) -> None:
     )
 
 
+def sincronizar_lancamento_compra_cripto(operacao: OperacaoCripto) -> None:
+    """Como sincronizar_lancamento_compra, mas para OperacaoCripto - mesma conta corrente do usuário, lançamento próprio (operacao_cripto), não misturado com os de ações."""
+    if operacao.tipo != OperacaoCripto.COMPRA:
+        return
+
+    conta = obter_ou_criar_conta_corrente(operacao.usuario)
+    LancamentoContaCorrente.objects.update_or_create(
+        operacao_cripto=operacao,
+        origem=LancamentoContaCorrente.ORIGEM_COMPRA_CRIPTO,
+        defaults={
+            "conta": conta,
+            "tipo": LancamentoContaCorrente.DEBITO,
+            "valor": operacao.valor_total.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP),
+            "descricao": f"Compra de {operacao.quantidade}x {operacao.cripto_ativo.coin}",
+            "data": operacao.data_operacao,
+        },
+    )
+
+
+def sincronizar_lancamento_venda_cripto(operacao: OperacaoCripto) -> None:
+    """Como sincronizar_lancamento_venda, mas para OperacaoCripto (sem percentual de corretora - esse campo não existe em OperacaoCripto)."""
+    if not operacao.quantidade_vendida or operacao.preco_venda is None:
+        LancamentoContaCorrente.objects.filter(
+            operacao_cripto=operacao, origem=LancamentoContaCorrente.ORIGEM_VENDA_CRIPTO
+        ).delete()
+        return
+
+    conta = obter_ou_criar_conta_corrente(operacao.usuario)
+    valor = operacao.valor_total_vendido.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    LancamentoContaCorrente.objects.update_or_create(
+        operacao_cripto=operacao,
+        origem=LancamentoContaCorrente.ORIGEM_VENDA_CRIPTO,
+        defaults={
+            "conta": conta,
+            "tipo": LancamentoContaCorrente.CREDITO,
+            "valor": valor,
+            "descricao": f"Venda de {operacao.quantidade_vendida}x {operacao.cripto_ativo.coin}",
+            "data": operacao.data_venda or timezone.localdate(),
+        },
+    )
+
+
 def registrar_transferencia_conta_corrente(
     usuario, tipo: str, valor: Decimal, descricao: str, data: date | None = None
 ) -> LancamentoContaCorrente:
@@ -4315,7 +4612,7 @@ def extrato_conta_corrente(
     tempo. Devolvido do lançamento mais recente para o mais antigo, como as
     outras grids do sistema.
     """
-    todos = conta.lancamentos.select_related("operacao__ativo").order_by("data", "criado_em")
+    todos = conta.lancamentos.select_related("operacao__ativo", "operacao_cripto__cripto_ativo").order_by("data", "criado_em")
     saldo = conta.saldo_inicial
     linhas = []
     for lancamento in todos:
@@ -4483,3 +4780,259 @@ def salvar_post_it(usuario, texto: str | None = None, minimizado: bool | None = 
     if campos:
         post_it.save(update_fields=campos)
     return post_it
+
+
+# --------------------------------------------------------------------------
+# Criptomoedas - tela própria, à parte das ações da B3 (ver CriptoAtivo,
+# OperacaoCripto, CotacaoCripto em core.models). Usa a mesma API brapi.dev
+# (endpoint /v2/crypto) e o mesmo orçamento compartilhado de requisições (ver
+# _get_brapi) - não é uma conta nem uma chave separada. Cripto negocia 24
+# horas por dia, todo santo dia - por isso as funções abaixo não têm (nem
+# usam) nenhum portão de "horário de pregão" como mercado_b3_aberto(), que só
+# faz sentido pra B3. Sem robô consultor, Scanner Técnico ou comparação com
+# Ibovespa/CDI aqui de propósito - esses recursos continuam só sobre ações.
+# --------------------------------------------------------------------------
+MOEDAS_CRIPTO_SUGERIDAS = ["BTC", "ETH", "BNB", "SOL", "XRP", "ADA", "DOGE"]
+
+
+def _para_decimal_cripto(valor) -> Decimal | None:
+    """Como _para_decimal, mas preservando 8 casas decimais - preço de cripto costuma ter muito mais casas do que preço de ação."""
+    if valor is None:
+        return None
+    try:
+        return Decimal(str(valor)).quantize(Decimal("0.00000001"), rounding=ROUND_HALF_UP)
+    except (ArithmeticError, ValueError, TypeError):
+        return None
+
+
+def buscar_cotacoes_cripto(coins: list[str], moeda: str = "BRL") -> dict[str, dict]:
+    """
+    Consulta a cotação atual de uma ou mais criptomoedas na API brapi.dev
+    (endpoint /v2/crypto) numa única chamada, não importa quantas moedas
+    forem pedidas - devolve um dict {"BTC": {...}, "ETH": {...}} pronto pra
+    consulta por código (mesmo espírito de buscar_cotacoes_em_lote, ações).
+    """
+    if not coins:
+        return {}
+
+    url = f"{settings.BRAPI_BASE_URL}/v2/crypto"
+    params = {"coin": ",".join(c.upper() for c in coins), "currency": moeda}
+    if settings.BRAPI_TOKEN:
+        params["token"] = settings.BRAPI_TOKEN
+
+    try:
+        resposta = _get_brapi(url, params=params, timeout=10)
+        resposta.raise_for_status()
+        dados = resposta.json()
+    except requests.RequestException as exc:
+        raise BrapiError(_mensagem_falha_api(exc, "cotações de criptomoedas")) from exc
+
+    return {item["coin"].upper(): item for item in (dados.get("coins") or []) if item.get("coin")}
+
+
+def atualizar_cotacao_cripto_diaria(cripto_ativo: CriptoAtivo, dados_api: dict | None = None) -> CotacaoCripto:
+    """Busca (ou recebe) a cotação atual de uma criptomoeda e grava/atualiza o registro do dia - espelha atualizar_cotacao_diaria (ações)."""
+    if dados_api is None:
+        lote = buscar_cotacoes_cripto([cripto_ativo.coin])
+        dados_api = lote.get(cripto_ativo.coin.upper())
+        if dados_api is None:
+            raise BrapiError(f"Criptomoeda {cripto_ativo.coin} não encontrada na API de cotações.")
+
+    preco = dados_api.get("regularMarketPrice")
+    if preco is None:
+        raise BrapiError(f"API não retornou preço para {cripto_ativo.coin}.")
+
+    cripto_ativo.nome = dados_api.get("coinName") or cripto_ativo.nome
+    cripto_ativo.moeda = dados_api.get("currency") or cripto_ativo.moeda
+    cripto_ativo.logo_url = dados_api.get("coinImageUrl") or cripto_ativo.logo_url
+    cripto_ativo.preco_atual = _para_decimal_cripto(preco)
+    cripto_ativo.variacao_dia_pct = _para_decimal(dados_api.get("regularMarketChangePercent"))
+    cripto_ativo.variacao_dia_valor = _para_decimal_cripto(dados_api.get("regularMarketChange"))
+    cripto_ativo.maxima_dia = _para_decimal_cripto(dados_api.get("regularMarketDayHigh"))
+    cripto_ativo.minima_dia = _para_decimal_cripto(dados_api.get("regularMarketDayLow"))
+    cripto_ativo.volume = _para_decimal(dados_api.get("regularMarketVolume"))
+    cripto_ativo.valor_mercado = _para_decimal(dados_api.get("marketCap"))
+
+    hora_cotacao = dados_api.get("regularMarketTime")
+    if hora_cotacao:
+        cripto_ativo.hora_cotacao = parse_datetime(hora_cotacao)
+
+    cripto_ativo.save()
+
+    variacao = dados_api.get("regularMarketChangePercent")
+    cotacao, _ = CotacaoCripto.objects.update_or_create(
+        cripto_ativo=cripto_ativo,
+        data=timezone.localdate(),
+        defaults={
+            "preco_fechamento": _para_decimal_cripto(preco),
+            "variacao_dia_pct": (
+                Decimal(str(variacao)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+                if variacao is not None else None
+            ),
+            "maxima": _para_decimal_cripto(dados_api.get("regularMarketDayHigh")),
+            "minima": _para_decimal_cripto(dados_api.get("regularMarketDayLow")),
+        },
+    )
+    return cotacao
+
+
+def atualizar_cotacoes_cripto_ativos(cripto_ativos) -> tuple[int, int]:
+    """Atualiza a cotação de uma lista/queryset de criptomoedas com uma única chamada em lote à API - espelha atualizar_cotacoes_ativos (ações). Retorna (atualizados, falhas)."""
+    cripto_ativos = list(cripto_ativos)
+    try:
+        lote = buscar_cotacoes_cripto([c.coin for c in cripto_ativos])
+    except BrapiError:
+        lote = {}  # orçamento de requisições esgotado (ver _get_brapi) - todos contam como falha
+
+    atualizados, falhas = 0, 0
+    for cripto_ativo in cripto_ativos:
+        dados_api = lote.get(cripto_ativo.coin.upper())
+        try:
+            if dados_api is None:
+                raise BrapiError(f"Criptomoeda {cripto_ativo.coin} não encontrada na consulta em lote.")
+            atualizar_cotacao_cripto_diaria(cripto_ativo, dados_api=dados_api)
+            atualizados += 1
+        except BrapiError:
+            falhas += 1
+
+    return atualizados, falhas
+
+
+@dataclass
+class PosicaoCripto:
+    """Espelha Posicao (ações), sem os campos ligados ao robô consultor (que não existe para cripto)."""
+
+    cripto_ativo: CriptoAtivo
+    quantidade: Decimal
+    preco_medio: Decimal
+    valor_investido: Decimal
+    preco_atual: Decimal | None = None
+    variacao_dia_pct: Decimal | None = None
+    valor_atual: Decimal | None = None
+    lucro_perda_valor: Decimal | None = None
+    lucro_perda_pct: Decimal | None = None
+    meta_lucro_pct: Decimal | None = None
+    meta_perda_pct: Decimal | None = None
+    data_abertura: date | None = None
+    quantidade_reservada: Decimal = Decimal("0")
+
+    @property
+    def apenas_reservado(self) -> bool:
+        return self.quantidade == 0 and self.quantidade_reservada > 0
+
+    @property
+    def dias_desde_compra(self) -> int | None:
+        if self.data_abertura is None:
+            return None
+        return (timezone.localdate() - self.data_abertura).days
+
+    @property
+    def lucro_perda_por_dia_valor(self) -> Decimal | None:
+        """Espelha Posicao.lucro_perda_por_dia_valor (ações)."""
+        dias = self.dias_desde_compra
+        if self.lucro_perda_valor is None or not dias:
+            return None
+        return (self.lucro_perda_valor / dias).quantize(Decimal("0.01"))
+
+    @property
+    def lucro_perda_por_dia_pct(self) -> Decimal | None:
+        """Espelha Posicao.lucro_perda_por_dia_pct (ações)."""
+        dias = self.dias_desde_compra
+        if self.lucro_perda_pct is None or not dias:
+            return None
+        return (self.lucro_perda_pct / dias).quantize(Decimal("0.01"))
+
+
+def calcular_posicoes_cripto(usuario) -> list[PosicaoCripto]:
+    """
+    Consolida os lotes de compra de criptomoeda do usuário em posições por
+    moeda (preço médio do saldo não vendido, quantidade líquida em carteira)
+    - mesma lógica de calcular_posicoes (ações), simplificada: sem
+    rastreamento de reserva automática do robô consultor, que não existe
+    para cripto.
+    """
+    operacoes = (
+        OperacaoCripto.objects.filter(usuario=usuario)
+        .select_related("cripto_ativo")
+        .order_by("data_operacao", "criado_em")
+    )
+
+    agregados = defaultdict(lambda: {
+        "quantidade": Decimal("0"),
+        "custo_total": Decimal("0"),
+        "meta_lucro_pct": None,
+        "meta_perda_pct": None,
+        "data_abertura": None,
+        "quantidade_reservada": Decimal("0"),
+        "custo_reservado": Decimal("0"),
+    })
+
+    for op in operacoes:
+        item = agregados[op.cripto_ativo_id]
+        if op.tipo == OperacaoCripto.COMPRA:
+            saldo_lote = op.saldo
+            if saldo_lote > 0:
+                if item["data_abertura"] is None or op.data_operacao < item["data_abertura"]:
+                    item["data_abertura"] = op.data_operacao
+                item["quantidade"] += saldo_lote
+                item["custo_total"] += saldo_lote * op.preco_unitario
+        else:  # RESERVAR: intenção de compra futura, não altera a posição real
+            item["quantidade_reservada"] += op.quantidade
+            item["custo_reservado"] += op.valor_total
+
+        if op.meta_lucro_pct is not None:
+            item["meta_lucro_pct"] = op.meta_lucro_pct
+        if op.meta_perda_pct is not None:
+            item["meta_perda_pct"] = op.meta_perda_pct
+        item["cripto_ativo"] = op.cripto_ativo
+
+    posicoes = []
+    for item in agregados.values():
+        if item["quantidade"] <= 0 and item["quantidade_reservada"] <= 0:
+            continue
+
+        cripto_ativo = item["cripto_ativo"]
+
+        if item["quantidade"] > 0:
+            preco_medio = (item["custo_total"] / item["quantidade"]).quantize(
+                Decimal("0.00000001"), rounding=ROUND_HALF_UP
+            )
+            valor_investido = (preco_medio * item["quantidade"]).quantize(Decimal("0.01"))
+        else:
+            preco_medio = (item["custo_reservado"] / item["quantidade_reservada"]).quantize(
+                Decimal("0.00000001"), rounding=ROUND_HALF_UP
+            )
+            valor_investido = Decimal("0.00")
+
+        posicao = PosicaoCripto(
+            cripto_ativo=cripto_ativo,
+            quantidade=item["quantidade"],
+            preco_medio=preco_medio,
+            valor_investido=valor_investido,
+            meta_lucro_pct=item["meta_lucro_pct"],
+            meta_perda_pct=item["meta_perda_pct"],
+            data_abertura=item["data_abertura"],
+            quantidade_reservada=item["quantidade_reservada"],
+        )
+
+        ultima_cotacao = cripto_ativo.ultima_cotacao()
+        if ultima_cotacao:
+            posicao.preco_atual = ultima_cotacao.preco_fechamento
+            posicao.variacao_dia_pct = ultima_cotacao.variacao_dia_pct
+
+        if ultima_cotacao and not posicao.apenas_reservado:
+            posicao.valor_atual = (posicao.preco_atual * posicao.quantidade).quantize(Decimal("0.01"))
+            posicao.lucro_perda_valor = (posicao.valor_atual - posicao.valor_investido).quantize(Decimal("0.01"))
+            if posicao.valor_investido:
+                posicao.lucro_perda_pct = (
+                    (posicao.lucro_perda_valor / posicao.valor_investido) * 100
+                ).quantize(Decimal("0.01"))
+
+        posicoes.append(posicao)
+
+    posicoes.sort(key=lambda p: (
+        p.dias_desde_compra is None,
+        p.dias_desde_compra if p.dias_desde_compra is not None else 0,
+        p.cripto_ativo.coin,
+    ))
+    return posicoes

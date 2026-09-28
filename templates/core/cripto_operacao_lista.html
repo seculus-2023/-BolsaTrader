@@ -1,0 +1,211 @@
+{% extends "base.html" %}
+{% block titulo %}Minhas Operações de Cripto - BolsaTrader{% endblock %}
+{% block conteudo %}
+<h1>Minhas Operações de Criptomoeda</h1>
+<p style="color: var(--text-dim);">
+    Compras, vendas e reservas de criptomoeda ficam aqui, separadas das operações de ações da B3.
+</p>
+<a href="{% url 'core:cripto_operacao_nova' %}" class="btn-futurista">+ Nova compra/reserva</a>
+{% if operacoes_compradas or operacoes_vendidas or operacoes_reservadas %}
+<a href="{% url 'core:cripto_operacoes_exportar_excel' %}" class="btn-futurista btn-secundario">⬇ Exportar Excel</a>
+<a href="{% url 'core:cripto_operacoes_exportar_pdf' %}" class="btn-futurista btn-secundario">⬇ Exportar PDF</a>
+{% endif %}
+<a href="{% url 'core:criptomoedas' %}" class="btn-futurista btn-secundario">🪙 Criptomoedas</a>
+<a href="{% url 'core:operacao_lista' %}" class="btn-futurista btn-secundario">📈 Minhas Operações (ações)</a>
+
+<div class="abas-navegacao" role="tablist" style="margin-top: 1.5rem;">
+    <button type="button" class="aba-navegacao ativa" role="tab" aria-selected="true" data-alvo="painel-cripto-em-carteira">Em carteira ({{ operacoes_compradas|length }})</button>
+    <button type="button" class="aba-navegacao" role="tab" aria-selected="false" data-alvo="painel-cripto-reservadas">Reservadas ({{ operacoes_reservadas|length }})</button>
+    <button type="button" class="aba-navegacao" role="tab" aria-selected="false" data-alvo="painel-cripto-vendidas">Vendidas ({{ operacoes_vendidas|length }})</button>
+</div>
+
+<div class="painel-abas" id="painel-cripto-em-carteira" role="tabpanel">
+<div class="card-glass" style="margin-top: .8rem;">
+    {% if operacoes_compradas %}
+    <div class="tabela-scroll">
+    <table class="tabela-futurista">
+        <thead>
+            <tr>
+                <th>Ação</th>
+                <th>Data</th>
+                <th>Dias</th>
+                <th>Moeda</th>
+                <th>Qtd. comprada</th>
+                <th class="coluna-destaque">Cotação atual</th>
+                <th>Preço compra</th>
+                <th>Total compra</th>
+                <th>Qtd. vendida</th>
+                <th>Saldo</th>
+                <th>Metas (lucro / perda)</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for op in operacoes_compradas %}
+            <tr{% if op.meta_lucro_atingida %} class="linha-meta-atingida"{% endif %}>
+                <td>
+                    <div style="display: flex; gap: .4rem;">
+                        <a href="{% url 'core:cripto_operacao_vender' op.id %}" class="btn-futurista btn-secundario btn-icone" title="Vender" aria-label="Vender">💰</a>
+                        <a href="{% url 'core:cripto_operacao_editar' op.id %}" class="btn-futurista btn-secundario btn-icone" title="Alterar" aria-label="Alterar">✏️</a>
+                        <form method="post" action="{% url 'core:cripto_operacao_excluir' op.id %}" onsubmit="return confirm('Excluir esta compra de {{ op.cripto_ativo.coin }}? Essa ação não pode ser desfeita.');">
+                            {% csrf_token %}
+                            <button type="submit" class="btn-futurista btn-secundario btn-icone" style="color: var(--neon-red); border-color: rgba(255, 56, 96, .4);" title="Excluir" aria-label="Excluir">🗑️</button>
+                        </form>
+                    </div>
+                </td>
+                <td>{{ op.data_operacao|date:"d/m/Y" }}</td>
+                <td>{% if op.dias_desde_operacao == 0 %}hoje{% elif op.dias_desde_operacao == 1 %}1 dia{% else %}{{ op.dias_desde_operacao }} dias{% endif %}</td>
+                <td>
+                    <strong>{{ op.cripto_ativo.coin }}</strong>
+                    {% if op.meta_lucro_atingida %}<span class="badge-venda">🎯 Meta atingida &mdash; vender</span>{% endif %}
+                </td>
+                <td>{{ op.quantidade }}</td>
+                <td class="coluna-destaque">{% if op.preco_atual is not None %}R$ {{ op.preco_atual }}{% else %}&mdash;{% endif %}</td>
+                <td>R$ {{ op.preco_unitario }}</td>
+                <td>R$ {{ op.valor_total }}</td>
+                <td>{{ op.quantidade_vendida }}</td>
+                <td>{{ op.saldo }}</td>
+                <td>
+                    {% if op.meta_lucro_pct %}+{{ op.meta_lucro_pct }}%{% else %}&mdash;{% endif %}
+                    /
+                    {% if op.meta_perda_pct %}{{ op.meta_perda_pct }}%{% else %}&mdash;{% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    </div>
+    {% else %}
+    <p style="color: var(--text-dim);">Nenhuma compra de criptomoeda em carteira no momento.</p>
+    {% endif %}
+</div>
+</div>
+
+<div class="painel-abas" id="painel-cripto-reservadas" role="tabpanel" hidden>
+<div class="card-glass" style="margin-top: .8rem;">
+    {% if operacoes_reservadas %}
+    <div class="tabela-scroll">
+    <table class="tabela-futurista">
+        <thead>
+            <tr>
+                <th>Ação</th>
+                <th>Data</th>
+                <th>Dias</th>
+                <th>Moeda</th>
+                <th>Quantidade</th>
+                <th class="coluna-destaque">Cotação atual</th>
+                <th>Preço pretendido</th>
+                <th>Total pretendido</th>
+                <th>Variação desde a reserva</th>
+                <th>Metas (lucro / perda)</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for op in operacoes_reservadas %}
+            <tr class="{% if op.meta_compra_atingida %}linha-meta-compra{% endif %}">
+                <td>
+                    <div style="display: flex; gap: .4rem;">
+                        <a href="{% url 'core:cripto_operacao_comprar' op.id %}" class="btn-futurista btn-secundario btn-icone" title="Comprar" aria-label="Comprar">🛒</a>
+                        <a href="{% url 'core:cripto_operacao_editar_reserva' op.id %}" class="btn-futurista btn-secundario btn-icone" title="Alterar" aria-label="Alterar">✏️</a>
+                        <form method="post" action="{% url 'core:cripto_operacao_excluir' op.id %}" onsubmit="return confirm('Excluir esta reserva de {{ op.cripto_ativo.coin }}? Essa ação não pode ser desfeita.');">
+                            {% csrf_token %}
+                            <button type="submit" class="btn-futurista btn-secundario btn-icone" style="color: var(--neon-red); border-color: rgba(255, 56, 96, .4);" title="Excluir" aria-label="Excluir">🗑️</button>
+                        </form>
+                    </div>
+                </td>
+                <td>{{ op.data_operacao|date:"d/m/Y" }}</td>
+                <td>{% if op.dias_desde_operacao == 0 %}hoje{% elif op.dias_desde_operacao == 1 %}1 dia{% else %}{{ op.dias_desde_operacao }} dias{% endif %}</td>
+                <td>
+                    <strong>{{ op.cripto_ativo.coin }}</strong>
+                    {% if op.meta_compra_atingida %}<span class="badge-compra">📉 Baixa atingida &mdash; comprar</span>{% endif %}
+                </td>
+                <td>{{ op.quantidade }}</td>
+                <td class="coluna-destaque">{% if op.preco_atual is not None %}R$ {{ op.preco_atual }}{% else %}&mdash;{% endif %}</td>
+                <td>R$ {{ op.preco_unitario }}</td>
+                <td>R$ {{ op.valor_total }}</td>
+                <td class="{% if op.variacao_pct_reserva > 0 %}valor-positivo{% elif op.variacao_pct_reserva < 0 %}valor-negativo{% else %}valor-neutro{% endif %}">
+                    {% if op.variacao_pct_reserva is not None %}{{ op.variacao_pct_reserva }}%{% else %}&mdash;{% endif %}
+                </td>
+                <td>
+                    {% if op.meta_lucro_pct %}+{{ op.meta_lucro_pct }}%{% else %}&mdash;{% endif %}
+                    /
+                    {% if op.meta_perda_pct %}{{ op.meta_perda_pct }}%{% else %}&mdash;{% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    </div>
+    {% else %}
+    <p style="color: var(--text-dim);">Nenhuma reserva de criptomoeda no momento.</p>
+    {% endif %}
+</div>
+</div>
+
+<div class="painel-abas" id="painel-cripto-vendidas" role="tabpanel" hidden>
+<div class="card-glass" style="margin-top: .8rem;">
+    {% if operacoes_vendidas %}
+    <div class="tabela-scroll">
+    <table class="tabela-futurista">
+        <thead>
+            <tr>
+                <th>Data da compra</th>
+                <th>Data da venda</th>
+                <th>Moeda</th>
+                <th>Qtd. comprada</th>
+                <th>Preço compra</th>
+                <th>Preço venda</th>
+                <th>Lucro/Perda realizado</th>
+                <th>Ação</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for op in operacoes_vendidas %}
+            <tr>
+                <td>{{ op.data_operacao|date:"d/m/Y" }}</td>
+                <td>{% if op.data_venda %}{{ op.data_venda|date:"d/m/Y" }}{% else %}&mdash;{% endif %}</td>
+                <td><strong>{{ op.cripto_ativo.coin }}</strong></td>
+                <td>{{ op.quantidade }}</td>
+                <td>R$ {{ op.preco_unitario }}</td>
+                <td>{% if op.preco_venda %}R$ {{ op.preco_venda }}{% else %}&mdash;{% endif %}</td>
+                <td class="{% if op.lucro_perda_realizado > 0 %}valor-positivo{% elif op.lucro_perda_realizado < 0 %}valor-negativo{% endif %}">
+                    {% if op.lucro_perda_realizado is not None %}R$ {{ op.lucro_perda_realizado }} ({{ op.lucro_perda_pct_realizado }}%){% else %}&mdash;{% endif %}
+                </td>
+                <td>
+                    <div style="display: flex; gap: .4rem;">
+                        <a href="{% url 'core:cripto_operacao_vender' op.id %}" class="btn-futurista btn-secundario btn-icone" title="Editar venda" aria-label="Editar venda">✏️</a>
+                        <form method="post" action="{% url 'core:cripto_operacao_excluir' op.id %}" onsubmit="return confirm('Excluir esta compra de {{ op.cripto_ativo.coin }}? Essa ação não pode ser desfeita.');">
+                            {% csrf_token %}
+                            <button type="submit" class="btn-futurista btn-secundario btn-icone" style="color: var(--neon-red); border-color: rgba(255, 56, 96, .4);" title="Excluir" aria-label="Excluir">🗑️</button>
+                        </form>
+                    </div>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    </div>
+    {% else %}
+    <p style="color: var(--text-dim);">Nenhuma compra de criptomoeda totalmente vendida ainda.</p>
+    {% endif %}
+</div>
+</div>
+
+<script>
+    (function () {
+        var abas = document.querySelectorAll("#painel-cripto-em-carteira, #painel-cripto-reservadas, #painel-cripto-vendidas");
+        var botoes = document.querySelectorAll(".aba-navegacao");
+        botoes.forEach(function (botao) {
+            botao.addEventListener("click", function () {
+                botoes.forEach(function (b) {
+                    b.classList.remove("ativa");
+                    b.setAttribute("aria-selected", "false");
+                });
+                abas.forEach(function (p) { p.hidden = true; });
+                botao.classList.add("ativa");
+                botao.setAttribute("aria-selected", "true");
+                document.getElementById(botao.dataset.alvo).hidden = false;
+            });
+        });
+    })();
+</script>
+{% endblock %}

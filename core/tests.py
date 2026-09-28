@@ -60,6 +60,7 @@ from .services import (
     ultimo_valor_ibovespa,
     ia_configurada, gerar_analise_b3_ia, _prompt_analise_b3_ia, _parsear_resposta_ia_em_grade, IAError,
     gerar_excel_scanner_e_analise_ia, gerar_pdf_scanner_e_analise_ia,
+    gerar_sugestoes_ia, _prompt_sugestoes_ia, _parsear_sugestoes_ia_em_grade,
 )
 
 
@@ -2757,6 +2758,61 @@ class AnaliseB3IaTests(TestCase):
                 gerar_analise_b3_ia([self._sinal_exemplo()], [], [])
 
 
+class SugestoesIaTests(TestCase):
+    """core.services: _prompt_sugestoes_ia, _parsear_sugestoes_ia_em_grade, gerar_sugestoes_ia."""
+
+    def test_gerar_sugestoes_levanta_erro_sem_chave_configurada(self):
+        with override_settings(OPENAI_API_KEY=""):
+            with self.assertRaises(IAError):
+                gerar_sugestoes_ia([], [])
+
+    def test_prompt_inclui_os_ativos_das_variacoes_e_pede_formato_certo(self):
+        maiores_altas = [{"stock": "VALE3", "name": "Vale", "change": 3.5}]
+        maiores_baixas = [{"stock": "MGLU3", "name": "Magazine Luiza", "change": -4.2}]
+        prompt = _prompt_sugestoes_ia(maiores_altas, maiores_baixas)
+        self.assertIn("VALE3", prompt)
+        self.assertIn("MGLU3", prompt)
+        self.assertIn("TICKER|JUSTIFICATIVA", prompt)
+        self.assertIn("de 3 a 5 ativos", prompt)
+
+    def test_parsear_linhas_validas(self):
+        texto = "VALE3|Alta de 3,5% puxada pelo minério de ferro.\nPETR4|Recuo após resultado trimestral fraco."
+        linhas = _parsear_sugestoes_ia_em_grade(texto)
+        self.assertEqual(len(linhas), 2)
+        self.assertEqual(linhas[0]["ticker"], "VALE3")
+        self.assertIn("minério", linhas[0]["justificativa"])
+
+    def test_parsear_ignora_linhas_fora_do_formato(self):
+        texto = "isso não segue o formato\nVALE3|Justificativa válida\nlinha sem separador nenhum"
+        linhas = _parsear_sugestoes_ia_em_grade(texto)
+        self.assertEqual(len(linhas), 1)
+        self.assertEqual(linhas[0]["ticker"], "VALE3")
+
+    def test_parsear_texto_vazio_fica_lista_vazia(self):
+        self.assertEqual(_parsear_sugestoes_ia_em_grade("Um parágrafo qualquer sem o formato pedido."), [])
+
+    @patch("core.services.requests.post")
+    def test_gerar_sugestoes_com_sucesso_retorna_texto_e_linhas(self, mock_post):
+        mock_post.return_value.raise_for_status = lambda: None
+        mock_post.return_value.json = lambda: {
+            "choices": [{"message": {"content": "VALE3|Alta forte hoje.\nMGLU3|Queda acentuada, atenção."}}]
+        }
+        with override_settings(OPENAI_API_KEY="sk-teste"):
+            resultado = gerar_sugestoes_ia(
+                [{"stock": "VALE3", "name": "Vale", "change": 3.5}],
+                [{"stock": "MGLU3", "name": "Magazine Luiza", "change": -4.2}],
+            )
+        self.assertIn("VALE3", resultado["texto"])
+        self.assertEqual(len(resultado["linhas"]), 2)
+
+    @patch("core.services.requests.post")
+    def test_gerar_sugestoes_falha_de_rede_gera_iaerror(self, mock_post):
+        mock_post.side_effect = requests.RequestException("timeout")
+        with override_settings(OPENAI_API_KEY="sk-teste"):
+            with self.assertRaises(IAError):
+                gerar_sugestoes_ia([], [])
+
+
 class AnaliseMercadoIaViewTests(TestCase):
     """Tela Análise de Mercado - botão "Análise da B3 hoje (IA)" (core.views.analise_mercado_ia)."""
 
@@ -2813,6 +2869,56 @@ class AnaliseMercadoIaViewTests(TestCase):
         self.assertContains(resposta, "Não foi possível consultar a IA agora")
 
 
+class SugestoesDiaIaViewTests(TestCase):
+    """Tela Análise de Mercado - botão "Sugestões de hoje (IA)" (core.views.sugestoes_dia_ia)."""
+
+    def setUp(self):
+        self.usuario = User.objects.create_user(username="investidor_sugestoes_ia", password="SenhaForte123!")
+        self.client.login(username="investidor_sugestoes_ia", password="SenhaForte123!")
+
+    def test_botao_nao_aparece_sem_ia_configurada(self):
+        with override_settings(OPENAI_API_KEY=""):
+            resposta = self.client.get(reverse("core:analise_mercado"))
+        self.assertNotContains(resposta, reverse("core:sugestoes_dia_ia"))
+
+    def test_botao_aparece_com_ia_configurada(self):
+        with override_settings(OPENAI_API_KEY="sk-teste"):
+            resposta = self.client.get(reverse("core:analise_mercado"))
+        self.assertContains(resposta, reverse("core:sugestoes_dia_ia"))
+
+    def test_exige_login(self):
+        self.client.logout()
+        resposta = self.client.get(reverse("core:sugestoes_dia_ia"))
+        self.assertEqual(resposta.status_code, 302)
+
+    def test_sem_ia_configurada_mostra_aviso_sem_quebrar(self):
+        with override_settings(OPENAI_API_KEY=""):
+            resposta = self.client.get(reverse("core:sugestoes_dia_ia"))
+        self.assertEqual(resposta.status_code, 200)
+        self.assertContains(resposta, "ainda não estão configuradas")
+
+    @patch("core.services.requests.post")
+    def test_com_ia_configurada_mostra_grade_com_resultado(self, mock_post):
+        mock_post.return_value.raise_for_status = lambda: None
+        mock_post.return_value.json = lambda: {
+            "choices": [{"message": {"content": "VALE3|Alta forte no dia, puxada pelo minério.\nMGLU3|Queda acentuada, atenção redobrada."}}]
+        }
+        with override_settings(OPENAI_API_KEY="sk-teste"):
+            resposta = self.client.get(reverse("core:sugestoes_dia_ia"))
+
+        self.assertContains(resposta, "💡 Sugestões de hoje (IA)")
+        self.assertContains(resposta, "VALE3")
+        self.assertContains(resposta, "Queda acentuada, atenção redobrada.")
+
+    @patch("core.services.requests.post")
+    def test_falha_na_consulta_mostra_aviso_sem_quebrar_a_tela(self, mock_post):
+        mock_post.side_effect = requests.RequestException("timeout")
+        with override_settings(OPENAI_API_KEY="sk-teste"):
+            resposta = self.client.get(reverse("core:sugestoes_dia_ia"))
+        self.assertEqual(resposta.status_code, 200)
+        self.assertContains(resposta, "Não foi possível consultar a IA agora")
+
+
 class RelatorioScannerEIaServicosTests(TestCase):
     """core.services.gerar_excel_scanner_e_analise_ia / gerar_pdf_scanner_e_analise_ia."""
 
@@ -2848,12 +2954,18 @@ class RelatorioScannerEIaServicosTests(TestCase):
                 {"ticker": "SCIA3", "eh_mercado_geral": False, "situacao": "ALTA", "situacao_classe": "alta", "comentario": "Rompeu resistência."},
             ],
         }
-        conteudo = gerar_excel_scanner_e_analise_ia([resultado], analise_ia, None)
+        sugestoes_ia = {
+            "texto": "SCIA3|Alta forte, rompeu resistência.",
+            "linhas": [{"ticker": "SCIA3", "justificativa": "Alta forte, rompeu resistência."}],
+        }
+        conteudo = gerar_excel_scanner_e_analise_ia([resultado], analise_ia, None, sugestoes_ia, None)
 
         import io
         import openpyxl
         wb = openpyxl.load_workbook(io.BytesIO(conteudo))
-        self.assertEqual(wb.sheetnames, ["Scanner Técnico", "Análise da B3 (IA)"])
+        self.assertEqual(
+            wb.sheetnames, ["Scanner Técnico", "Análise da B3 (IA)", "Sugestões de hoje (IA)"],
+        )
 
         ws1 = wb["Scanner Técnico"]
         cabecalho = [c.value for c in ws1[5]]
@@ -2868,6 +2980,38 @@ class RelatorioScannerEIaServicosTests(TestCase):
         self.assertIn("B3 (mercado geral)", valores_ws2)
         self.assertIn("SCIA3", valores_ws2)
         self.assertIn("Rompeu resistência.", valores_ws2)
+
+        ws3 = wb["Sugestões de hoje (IA)"]
+        valores_ws3 = [c.value for row in ws3.iter_rows() for c in row if c.value]
+        self.assertIn("SCIA3", valores_ws3)
+        self.assertIn("Alta forte, rompeu resistência.", valores_ws3)
+
+    def test_excel_sem_sugestoes_configuradas_mostra_aviso(self):
+        conteudo = gerar_excel_scanner_e_analise_ia([], None, None, None, None)
+        import io
+        import openpyxl
+        wb = openpyxl.load_workbook(io.BytesIO(conteudo))
+        valores = [c.value for row in wb["Sugestões de hoje (IA)"].iter_rows() for c in row if c.value]
+        self.assertTrue(any("não estão configuradas" in v for v in valores))
+
+    def test_excel_com_erro_nas_sugestoes_mostra_a_mensagem_de_erro(self):
+        conteudo = gerar_excel_scanner_e_analise_ia([], None, None, None, "Falha simulada nas sugestões.")
+        import io
+        import openpyxl
+        wb = openpyxl.load_workbook(io.BytesIO(conteudo))
+        valores = [c.value for row in wb["Sugestões de hoje (IA)"].iter_rows() for c in row if c.value]
+        self.assertIn("Falha simulada nas sugestões.", valores)
+
+    def test_pdf_com_sugestoes_gera_bytes_validos(self):
+        resultado = self._resultado_scanner_exemplo()
+        sugestoes_ia = {
+            "texto": "SCIA3|Alta forte.",
+            "linhas": [{"ticker": "SCIA3", "justificativa": "Alta forte."}],
+        }
+        conteudo = gerar_pdf_scanner_e_analise_ia(
+            [resultado], None, None, "Investidor Teste", sugestoes_ia, None,
+        )
+        self.assertTrue(conteudo.startswith(b"%PDF"))
 
     def test_excel_mostra_selo_reservado(self):
         resultado = self._resultado_scanner_exemplo(apenas_reservado=True)
@@ -2965,6 +3109,31 @@ class RelatorioScannerEIaViewTests(TestCase):
         self.assertIn("RELS3", valores_scanner)
         valores_ia = [c.value for row in wb["Análise da B3 (IA)"].iter_rows() for c in row if c.value]
         self.assertIn("Bom sinal.", valores_ia)
+
+    @patch("core.services.requests.post")
+    def test_exportar_excel_inclui_sugestoes_de_hoje_numa_terceira_aba(self, mock_post):
+        resposta_analise = Mock()
+        resposta_analise.raise_for_status = lambda: None
+        resposta_analise.json = lambda: {
+            "choices": [{"message": {"content": "MERCADO|ALTA|Pregão positivo.\nRELS3|ALTA|Bom sinal."}}]
+        }
+        resposta_sugestoes = Mock()
+        resposta_sugestoes.raise_for_status = lambda: None
+        resposta_sugestoes.json = lambda: {
+            "choices": [{"message": {"content": "RELS3|Boa oportunidade de entrada hoje."}}]
+        }
+        mock_post.side_effect = [resposta_analise, resposta_sugestoes]
+
+        with override_settings(OPENAI_API_KEY="sk-teste"):
+            resposta = self.client.get(reverse("core:scanner_ia_exportar_excel"))
+
+        import io
+        import openpyxl
+        wb = openpyxl.load_workbook(io.BytesIO(resposta.content))
+        self.assertEqual(mock_post.call_count, 2)  # uma consulta pra cada seção, não repete a mesma chamada
+        valores_sugestoes = [c.value for row in wb["Sugestões de hoje (IA)"].iter_rows() for c in row if c.value]
+        self.assertIn("RELS3", valores_sugestoes)
+        self.assertIn("Boa oportunidade de entrada hoje.", valores_sugestoes)
 
     def test_nao_mostra_ativo_de_outro_usuario(self):
         outro_usuario = User.objects.create_user(username="investidor_relatorio_outro", password="SenhaForte123!")
@@ -4120,6 +4289,28 @@ class ScannerTecnicoViewTests(TestCase):
         url_esperada = reverse("core:operacao_nova") + "?ticker=COMP3&tipo=COMPRA"
         self.assertContains(resposta, url_esperada)
         self.assertContains(resposta, "🛒 Comprar COMP3")
+
+    def test_mostra_nome_do_ativo_abaixo_do_ticker(self):
+        ativo = Ativo.objects.create(ticker="NOME3", nome="Empresa Curta", nome_longo="Empresa Curta Sociedade Anônima")
+        Operacao.objects.create(
+            usuario=self.usuario, ativo=ativo, tipo=Operacao.COMPRA,
+            quantidade=10, preco_unitario=Decimal("30.00"), data_operacao=date.today(),
+        )
+
+        resposta = self.client.get(reverse("core:scanner_tecnico"))
+
+        self.assertContains(resposta, "Empresa Curta Sociedade Anônima")
+
+    def test_sem_nome_longo_usa_o_nome_curto(self):
+        ativo = Ativo.objects.create(ticker="NOME4", nome="Só Nome Curto")
+        Operacao.objects.create(
+            usuario=self.usuario, ativo=ativo, tipo=Operacao.COMPRA,
+            quantidade=10, preco_unitario=Decimal("30.00"), data_operacao=date.today(),
+        )
+
+        resposta = self.client.get(reverse("core:scanner_tecnico"))
+
+        self.assertContains(resposta, "Só Nome Curto")
 
     def test_mostra_reserva_com_selo_mas_nao_ativo_de_outro_usuario(self):
         reservado = Ativo.objects.create(ticker="RESV3")

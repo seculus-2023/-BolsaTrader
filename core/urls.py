@@ -28,6 +28,7 @@ urlpatterns = [
     path("alertas/<int:alerta_id>/lido/", views.alerta_marcar_lido, name="alerta_marcar_lido"),
     path("analise-mercado/", views.analise_mercado, name="analise_mercado"),
     path("analise-mercado/ia/", views.analise_mercado_ia, name="analise_mercado_ia"),
+    path("analise-mercado/sugestoes-ia/", views.sugestoes_dia_ia, name="sugestoes_dia_ia"),
     path(
         "analise-mercado/scanner-ia/exportar/excel/",
         views.scanner_ia_exportar_excel,

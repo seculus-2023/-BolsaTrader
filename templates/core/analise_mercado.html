@@ -13,6 +13,7 @@
 <a href="{% url 'core:backtest_robo' %}" class="btn-futurista btn-secundario">🎯 Backtesting do robô</a>
 {% if ia_configurada %}
 <a href="{% url 'core:analise_mercado_ia' %}" class="btn-futurista btn-analise-ia" data-overlay-texto="Consultando a IA sobre a B3 hoje...">🤖 Análise da B3 hoje (IA)</a>
+<a href="{% url 'core:sugestoes_dia_ia' %}" class="btn-futurista btn-analise-ia" data-overlay-texto="Consultando sugestões de hoje...">💡 Sugestões de hoje (IA)</a>
 {% endif %}
 {% if ultima_atualizacao_cotacoes %}
 <p class="badge-atualizacao">⏱ Última atualização das cotações: {{ ultima_atualizacao_cotacoes|date:"d/m/Y H:i" }}</p>
@@ -59,6 +60,39 @@
     {% endif %}
     <p style="color: var(--text-dim); font-size: .8rem; margin: .8rem 0 0;">
         Gerado por IA a partir dos dados desta tela - não constitui recomendação de investimento.
+    </p>
+</div>
+{% endif %}
+
+{% if erro_sugestoes_ia %}
+<div class="card-glass" style="margin-top: 1rem;">
+    <p style="color: var(--text-dim); margin: 0;">{{ erro_sugestoes_ia }}</p>
+</div>
+{% endif %}
+
+{% if sugestoes_ia %}
+<h2 style="margin-top: 1.8rem;">💡 Sugestões de hoje (IA)</h2>
+<div class="card-glass" style="margin-top: 1rem;">
+    {% if sugestoes_ia.linhas %}
+    <div class="tabela-scroll">
+    <table class="tabela-futurista">
+        <thead><tr><th>Ativo</th><th>Justificativa da IA</th></tr></thead>
+        <tbody>
+            {% for linha in sugestoes_ia.linhas %}
+            <tr>
+                <td>{{ linha.ticker }}</td>
+                <td>{{ linha.justificativa }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    </div>
+    {% else %}
+    <p style="color: var(--text-dim); white-space: pre-line;">{{ sugestoes_ia.texto }}</p>
+    {% endif %}
+    <p style="color: var(--text-dim); font-size: .8rem; margin: .8rem 0 0;">
+        Sugestões geradas por IA a partir das maiores altas/baixas do dia (abaixo) - não constitui recomendação
+        de investimento.
     </p>
 </div>
 {% endif %}

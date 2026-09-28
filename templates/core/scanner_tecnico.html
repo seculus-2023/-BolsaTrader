@@ -25,6 +25,9 @@
             <h3 style="margin: 0;">
                 {{ r.ativo.ticker }}
                 {% if r.apenas_reservado %}<span class="badge-tendencia badge-neutro" style="font-size: .62rem;">🔖 Reservado</span>{% endif %}
+                {% with nome=r.ativo.nome_longo|default:r.ativo.nome %}
+                {% if nome %}<br><small style="color: var(--text-dim); font-weight: 400; font-size: .78rem;">{{ nome }}</small>{% endif %}
+                {% endwith %}
             </h3>
             <span class="badge-tendencia badge-{{ r.veredito_classe }}">{{ r.veredito_label }}</span>
         </div>

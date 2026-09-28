@@ -93,6 +93,7 @@ from .services import (
     IAError,
     gerar_excel_scanner_e_analise_ia,
     gerar_pdf_scanner_e_analise_ia,
+    gerar_sugestoes_ia,
 )
 
 TICKER_VALIDO = re.compile(r"^[A-Z0-9]{1,15}$")
@@ -738,30 +739,64 @@ def analise_mercado_ia(request):
     return render(request, "core/analise_mercado.html", contexto)
 
 
-def _analise_ia_para_relatorio(usuario) -> tuple[dict | None, str | None]:
+@login_required
+def sugestoes_dia_ia(request):
     """
-    Mesma consulta à IA do botão "Análise da B3 hoje (IA)" (ver
-    analise_mercado_ia), reaproveitada pelos relatórios Excel/PDF do Scanner
-    Técnico + Análise da B3 (ver scanner_ia_exportar_excel/pdf) - devolve
-    (analise_ia, erro) em vez de gravar num contexto de template.
+    Botão "Sugestões de hoje (IA)": pede pra IA escolher, sob demanda, de 3 a
+    5 ativos entre as maiores altas/baixas do dia já calculadas por esta tela
+    que merecem atenção - a IA só interpreta essa lista, não inventa ativo
+    nem preço fora dela (ver core.services.gerar_sugestoes_ia). Recarrega a
+    mesma tela com o resultado (ou um aviso, se a IA não estiver configurada
+    ou a consulta falhar).
+    """
+    contexto = _contexto_analise_mercado(request.user)
+
+    try:
+        contexto["sugestoes_ia"] = gerar_sugestoes_ia(contexto["maiores_altas"], contexto["maiores_baixas"])
+    except IAError as exc:
+        contexto["erro_sugestoes_ia"] = str(exc)
+
+    return render(request, "core/analise_mercado.html", contexto)
+
+
+def _analise_e_sugestoes_ia_para_relatorio(usuario) -> dict:
+    """
+    Mesma consulta à IA dos botões "Análise da B3 hoje (IA)" e "Sugestões de
+    hoje (IA)" (ver analise_mercado_ia/sugestoes_dia_ia), reaproveitada pelos
+    relatórios Excel/PDF do Scanner Técnico (ver
+    scanner_ia_exportar_excel/pdf) - calcula o contexto (maiores altas/
+    baixas, sinais) uma única vez para as duas consultas, em vez de buscar
+    tudo de novo pra cada uma. Devolve um dict pronto pra **kwargs nos
+    geradores de relatório, em vez de gravar num contexto de template.
     """
     contexto = _contexto_analise_mercado(usuario)
+
+    resultado = {"analise_ia": None, "erro_ia": None, "sugestoes_ia": None, "erro_sugestoes_ia": None}
     try:
-        return gerar_analise_b3_ia(contexto["sinais"], contexto["maiores_altas"], contexto["maiores_baixas"]), None
+        resultado["analise_ia"] = gerar_analise_b3_ia(
+            contexto["sinais"], contexto["maiores_altas"], contexto["maiores_baixas"],
+        )
     except IAError as exc:
-        return None, str(exc)
+        resultado["erro_ia"] = str(exc)
+
+    try:
+        resultado["sugestoes_ia"] = gerar_sugestoes_ia(contexto["maiores_altas"], contexto["maiores_baixas"])
+    except IAError as exc:
+        resultado["erro_sugestoes_ia"] = str(exc)
+
+    return resultado
 
 
 @login_required
 def scanner_ia_exportar_excel(request):
     """
-    Relatório combinado (planilha .xlsx com duas abas) do Scanner Técnico
-    completo e da Análise da B3 hoje por IA - ver
-    core.services.gerar_excel_scanner_e_analise_ia.
+    Relatório combinado (planilha .xlsx com três abas) do Scanner Técnico
+    completo, da Análise da B3 hoje por IA e das Sugestões de hoje por IA -
+    ver core.services.gerar_excel_scanner_e_analise_ia.
     """
     resultados = escanear_carteira(request.user)
-    analise_ia, erro_ia = _analise_ia_para_relatorio(request.user)
-    conteudo = gerar_excel_scanner_e_analise_ia(resultados, analise_ia, erro_ia)
+    dados_ia = _analise_e_sugestoes_ia_para_relatorio(request.user)
+    conteudo = gerar_excel_scanner_e_analise_ia(resultados, **dados_ia)
     resposta = HttpResponse(
         conteudo,
         content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -773,11 +808,11 @@ def scanner_ia_exportar_excel(request):
 
 @login_required
 def scanner_ia_exportar_pdf(request):
-    """PDF combinado do Scanner Técnico completo e da Análise da B3 hoje por IA - ver core.services.gerar_pdf_scanner_e_analise_ia."""
+    """PDF combinado do Scanner Técnico completo, da Análise da B3 hoje por IA e das Sugestões de hoje por IA - ver core.services.gerar_pdf_scanner_e_analise_ia."""
     nome_usuario = request.user.first_name or request.user.username
     resultados = escanear_carteira(request.user)
-    analise_ia, erro_ia = _analise_ia_para_relatorio(request.user)
-    conteudo = gerar_pdf_scanner_e_analise_ia(resultados, analise_ia, erro_ia, nome_usuario)
+    dados_ia = _analise_e_sugestoes_ia_para_relatorio(request.user)
+    conteudo = gerar_pdf_scanner_e_analise_ia(resultados, nome_usuario=nome_usuario, **dados_ia)
     resposta = HttpResponse(conteudo, content_type="application/pdf")
     nome_arquivo = f"scanner_tecnico_e_analise_ia_{timezone.localdate().isoformat()}.pdf"
     resposta["Content-Disposition"] = f'attachment; filename="{nome_arquivo}"'

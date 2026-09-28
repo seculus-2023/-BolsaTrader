@@ -3218,13 +3218,15 @@ def _linha_scanner(item: dict) -> list:
 
 def gerar_excel_scanner_e_analise_ia(
     resultados_scanner: list[dict], analise_ia: dict | None, erro_ia: str | None,
+    sugestoes_ia: dict | None = None, erro_sugestoes_ia: str | None = None,
 ) -> bytes:
     """
-    Gera uma planilha .xlsx com duas abas: o Scanner Técnico completo (cada
+    Gera uma planilha .xlsx com três abas: o Scanner Técnico completo (cada
     indicador, suporte/resistência, ATR e o plano de trade sugerido) de todo
-    ativo em carteira, e a Análise da B3 hoje por IA (ver
-    gerar_analise_b3_ia), quando configurada - `analise_ia`/`erro_ia` vêm de
-    uma chamada já feita por quem chama esta função (não recalcula sozinha,
+    ativo em carteira, a Análise da B3 hoje por IA (ver gerar_analise_b3_ia) e
+    as Sugestões de hoje por IA (ver gerar_sugestoes_ia), quando configuradas
+    - `analise_ia`/`erro_ia`/`sugestoes_ia`/`erro_sugestoes_ia` vêm de
+    chamadas já feitas por quem chama esta função (não recalcula sozinha,
     pra não repetir a mesma consulta à IA de graça).
     """
     import io
@@ -3283,6 +3285,31 @@ def gerar_excel_scanner_e_analise_ia(
     else:
         ws2.append([analise_ia["texto"]])
 
+    ws3 = wb.create_sheet("Sugestões de hoje (IA)")
+    ws3.append(["Sugestões de hoje (IA)"])
+    ws3.append([f"Gerado em {timezone.localtime().strftime('%d/%m/%Y %H:%M')}"])
+    ws3.append([
+        "Sugestões geradas por IA a partir das maiores altas/baixas do dia - "
+        "não constitui recomendação de investimento.",
+    ])
+    ws3.append([])
+    if erro_sugestoes_ia:
+        ws3.append([erro_sugestoes_ia])
+    elif not sugestoes_ia:
+        ws3.append(["As Sugestões de hoje por IA não estão configuradas neste sistema."])
+    elif sugestoes_ia["linhas"]:
+        ws3.append(["Ativo", "Justificativa"])
+        for celula in ws3[5]:
+            celula.font = Font(bold=True, color="FFFFFF")
+            celula.fill = PatternFill("solid", fgColor="0D1526")
+            celula.alignment = Alignment(horizontal="center")
+        for linha in sugestoes_ia["linhas"]:
+            ws3.append([linha["ticker"], linha["justificativa"]])
+        ws3.column_dimensions["A"].width = 16
+        ws3.column_dimensions["B"].width = 90
+    else:
+        ws3.append([sugestoes_ia["texto"]])
+
     buffer = io.BytesIO()
     wb.save(buffer)
     return buffer.getvalue()
@@ -3290,13 +3317,14 @@ def gerar_excel_scanner_e_analise_ia(
 
 def gerar_pdf_scanner_e_analise_ia(
     resultados_scanner: list[dict], analise_ia: dict | None, erro_ia: str | None, nome_usuario: str,
+    sugestoes_ia: dict | None = None, erro_sugestoes_ia: str | None = None,
 ) -> bytes:
     """
-    Gera um PDF com duas seções: o Scanner Técnico (veredito, suporte/
-    resistência, ATR e plano de trade sugerido) de todo ativo em carteira, e
-    a Análise da B3 hoje por IA, quando configurada - mesma observação de
-    gerar_excel_scanner_e_analise_ia sobre `analise_ia`/`erro_ia` já virem
-    prontos de quem chama.
+    Gera um PDF com três seções: o Scanner Técnico (veredito, suporte/
+    resistência, ATR e plano de trade sugerido) de todo ativo em carteira, a
+    Análise da B3 hoje por IA e as Sugestões de hoje por IA, quando
+    configuradas - mesma observação de gerar_excel_scanner_e_analise_ia sobre
+    os parâmetros de IA já virem prontos de quem chama.
     """
     import io
     from xml.sax.saxutils import escape
@@ -3397,6 +3425,34 @@ def gerar_pdf_scanner_e_analise_ia(
         elementos.append(tabela_ia)
     else:
         elementos.append(Paragraph(escape(analise_ia["texto"]), estilos["Normal"]))
+
+    elementos.append(Spacer(1, 0.7 * cm))
+    elementos.append(Paragraph("Sugestões de hoje (IA)", estilos["Heading2"]))
+
+    if erro_sugestoes_ia:
+        elementos.append(Paragraph(escape(erro_sugestoes_ia), estilos["Normal"]))
+    elif not sugestoes_ia:
+        elementos.append(Paragraph(
+            "As Sugestões de hoje por IA não estão configuradas neste sistema.", estilos["Normal"],
+        ))
+    elif sugestoes_ia["linhas"]:
+        dados_sugestoes = [["Ativo", "Justificativa"]]
+        for linha in sugestoes_ia["linhas"]:
+            dados_sugestoes.append([linha["ticker"], Paragraph(escape(linha["justificativa"]), estilo_celula)])
+        tabela_sugestoes = Table(dados_sugestoes, colWidths=[3.5 * cm, 20.5 * cm], repeatRows=1)
+        tabela_sugestoes.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#0D1526")),
+            ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+            ("FONTSIZE", (0, 0), (0, -1), 8),
+            ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#cccccc")),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#eef2f7")]),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("TOPPADDING", (0, 0), (-1, -1), 5),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+        ]))
+        elementos.append(tabela_sugestoes)
+    else:
+        elementos.append(Paragraph(escape(sugestoes_ia["texto"]), estilos["Normal"]))
 
     doc.build(elementos)
     return buffer.getvalue()
@@ -3665,6 +3721,81 @@ def gerar_analise_b3_ia(sinais: list[dict], maiores_altas: list[dict], maiores_b
         raise IAError("Não foi possível consultar a IA agora. Tente novamente em instantes.") from exc
 
     return {"texto": texto.strip(), "linhas": _parsear_resposta_ia_em_grade(texto)}
+
+
+def _prompt_sugestoes_ia(maiores_altas: list[dict], maiores_baixas: list[dict]) -> str:
+    """
+    Monta o prompt do botão "Sugestões de hoje (IA)": pede pra IA escolher, só
+    dentre as maiores altas/baixas do dia já calculadas pelo sistema (nunca
+    inventando um ativo ou preço fora dessa lista), de 3 a 5 que merecem
+    atenção - resposta em linhas "TICKER|JUSTIFICATIVA" (ver
+    _parsear_sugestoes_ia_em_grade).
+    """
+    linhas_altas = "\n".join(f"- {a['stock']} ({a['name']}): +{a['change']}%" for a in maiores_altas[:10]) or "sem dados"
+    linhas_baixas = "\n".join(f"- {a['stock']} ({a['name']}): {a['change']}%" for a in maiores_baixas[:10]) or "sem dados"
+
+    return (
+        "Você é um analista comentando o pregão de hoje da B3 (bolsa brasileira) para um investidor pessoa "
+        "física. Use SOMENTE os ativos e variações abaixo, já calculados pelo sistema - não invente nenhum "
+        "ativo, preço ou variação que não esteja nesta lista.\n\n"
+        f"Maiores altas do dia:\n{linhas_altas}\n\n"
+        f"Maiores baixas do dia:\n{linhas_baixas}\n\n"
+        "Escolha de 3 a 5 ativos DESTA LISTA que merecem atenção para os próximos dias e responda APENAS com "
+        "linhas no formato exato abaixo (sem cabeçalho, sem markdown, sem texto antes ou depois):\n"
+        "TICKER|JUSTIFICATIVA\n\n"
+        "- Uma linha por ativo escolhido, só ativos que aparecem na lista acima.\n"
+        "- JUSTIFICATIVA em português, direto ao ponto, no máximo 160 caracteres, baseada só na variação do "
+        "dia apresentada.\n"
+        "- Isto não é recomendação de investimento, só uma leitura das maiores movimentações do dia."
+    )
+
+
+def _parsear_sugestoes_ia_em_grade(texto: str) -> list[dict]:
+    """
+    Converte a resposta do prompt de sugestões (linhas "TICKER|JUSTIFICATIVA")
+    numa lista de dicts prontos pra tabela - mesmo espírito tolerante de
+    _parsear_resposta_ia_em_grade: linha fora do formato esperado é ignorada
+    em vez de quebrar a tela.
+    """
+    linhas = []
+    for bruta in texto.strip().splitlines():
+        partes = [p.strip() for p in bruta.split("|", 1)]
+        if len(partes) != 2:
+            continue
+        ticker, justificativa = partes
+        if not ticker or not justificativa:
+            continue
+        linhas.append({"ticker": ticker.upper(), "justificativa": justificativa})
+    return linhas
+
+
+def gerar_sugestoes_ia(maiores_altas: list[dict], maiores_baixas: list[dict]) -> dict:
+    """
+    Consulta a IA configurada (ver ia_configurada) pra sugerir, sob demanda,
+    de 3 a 5 ativos entre as maiores altas/baixas do dia que merecem atenção
+    - botão "🤖 Sugestões de hoje (IA)" na tela Análise de Mercado. Mesma
+    ideia de gerar_analise_b3_ia (a IA só interpreta dados que o sistema já
+    calculou), levanta IAError nas mesmas condições.
+    """
+    if not ia_configurada():
+        raise IAError("As Sugestões de hoje por IA ainda não estão configuradas neste sistema (falta a chave de API).")
+
+    prompt = _prompt_sugestoes_ia(maiores_altas, maiores_baixas)
+    url = f"{settings.OPENAI_BASE_URL.rstrip('/')}/chat/completions"
+    headers = {"Authorization": f"Bearer {settings.OPENAI_API_KEY}", "Content-Type": "application/json"}
+    payload = {
+        "model": settings.OPENAI_MODEL,
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0.4,
+    }
+    try:
+        resposta = requests.post(url, json=payload, headers=headers, timeout=IA_TIMEOUT_SEGUNDOS)
+        resposta.raise_for_status()
+        texto = resposta.json()["choices"][0]["message"]["content"]
+    except (requests.RequestException, KeyError, IndexError, TypeError, ValueError) as exc:
+        raise IAError("Não foi possível consultar a IA agora. Tente novamente em instantes.") from exc
+
+    return {"texto": texto.strip(), "linhas": _parsear_sugestoes_ia_em_grade(texto)}
 
 
 # --------------------------------------------------------------------------

@@ -8,7 +8,7 @@
     Carteira, no robô consultor, no Scanner Técnico nem na comparação com Ibovespa/CDI. Cripto negocia 24 horas
     por dia, todos os dias, então não há "horário de pregão" aqui.
 </p>
-<a href="{% url 'core:cripto_atualizar_cotacoes' %}" class="btn-futurista">🔄 Atualizar cotações agora</a>
+<a href="{% url 'core:cripto_atualizar_cotacoes' %}" class="btn-futurista btn-atualizar-cotacoes" data-overlay-texto="Atualizando cripto...">🔄 Atualizar Cripto agora</a>
 <a href="{% url 'core:cripto_operacao_nova' %}" class="btn-futurista btn-secundario">+ Nova compra/reserva</a>
 <a href="{% url 'core:cripto_operacao_lista' %}" class="btn-futurista btn-secundario">🗂️ Minhas Operações de Cripto</a>
 
@@ -66,7 +66,7 @@
     </div>
     {% else %}
     <p style="color: var(--text-dim);">
-        Ainda não há pelo menos 2 registros de hoje para montar o gráfico. Clique em "Atualizar cotações agora" para gerar um novo registro.
+        Ainda não há pelo menos 2 registros de hoje para montar o gráfico. Clique em "Atualizar Cripto agora" para gerar um novo registro.
     </p>
     {% endif %}
 </div>

@@ -3879,12 +3879,12 @@ def _notificar_whatsapp_usuario(usuario, mensagem: str) -> None:
 # "Análise da B3 hoje" por IA (tela Análise de Mercado)
 #
 # A IA só interpreta e comenta dados que o sistema já calculou sozinho
-# (maiores altas/baixas do dia e os indicadores técnicos de cada ativo
-# acompanhado, ver analisar_indicadores_tecnicos) - não inventa preço,
-# indicador nem notícia nenhuma. Qualquer provedor compatível com o formato
-# de chat completions da OpenAI funciona (ver OPENAI_BASE_URL no .env) - não
-# precisa ser a OpenAI paga, provedores como Groq ou OpenRouter têm camada
-# gratuita com esse mesmo formato de API.
+# (maiores altas/baixas do dia e os indicadores do Scanner Técnico de cada
+# ativo acompanhado - comprado ou reservado, ver escanear_carteira) - não
+# inventa preço, indicador, pontuação nem notícia nenhuma. Qualquer provedor
+# compatível com o formato de chat completions da OpenAI funciona (ver
+# OPENAI_BASE_URL no .env) - não precisa ser a OpenAI paga, provedores como
+# Groq ou OpenRouter têm camada gratuita com esse mesmo formato de API.
 # --------------------------------------------------------------------------
 IA_TIMEOUT_SEGUNDOS = 45
 IA_SITUACAO_CLASSES = {"ALTA": "alta", "BAIXA": "baixa", "NEUTRO": "neutro"}
@@ -3899,26 +3899,56 @@ def ia_configurada() -> bool:
     return bool(settings.OPENAI_API_KEY)
 
 
-def _prompt_analise_b3_ia(sinais: list[dict], maiores_altas: list[dict], maiores_baixas: list[dict]) -> str:
-    """Monta o prompt com o contexto do pregão de hoje já calculado localmente, pedindo a resposta em linhas "TICKER|SITUACAO|COMENTARIO" (ver _parsear_resposta_ia_em_grade) em vez de texto corrido."""
+def _score_scanner(item: dict) -> int:
+    """
+    Pontuação 0-100 derivada dos votos do Scanner Técnico (ver
+    escanear_ativo_precos): 50 é neutro; cada indicador de alta soma e cada
+    indicador de baixa subtrai o mesmo peso (50 / total de indicadores),
+    arredondado e limitado a [0, 100]. Puramente determinístico - calculado
+    localmente, nunca pela IA (ver _prompt_analise_b3_ia/gerar_analise_b3_ia),
+    pra não depender da IA "inventar" uma nota.
+    """
+    total = len(item["indicadores"])
+    if not total:
+        return 50
+    bruto = 50 + (item["votos_alta"] - item["votos_baixa"]) * (50 / total)
+    return round(min(100, max(0, bruto)))
+
+
+def _prompt_analise_b3_ia(scanner_itens: list[dict], maiores_altas: list[dict], maiores_baixas: list[dict]) -> str:
+    """
+    Monta o prompt com o contexto do pregão de hoje já calculado localmente,
+    pedindo a resposta em linhas "TICKER|SITUACAO|COMENTARIO" (ver
+    _parsear_resposta_ia_em_grade) em vez de texto corrido. `scanner_itens`
+    é a saída de escanear_carteira - mesmos indicadores (IFR, médias móveis,
+    MACD, volume, tendência) e pontuação (ver _score_scanner) mostrados na
+    tela Scanner Técnico, cobrindo tanto os ativos comprados quanto os só
+    reservados.
+    """
     linhas_altas = "\n".join(f"- {a['stock']} ({a['name']}): +{a['change']}%" for a in maiores_altas[:10]) or "sem dados"
     linhas_baixas = "\n".join(f"- {a['stock']} ({a['name']}): {a['change']}%" for a in maiores_baixas[:10]) or "sem dados"
 
-    linhas_ativos = "\n".join(
-        f"- {item['ativo'].ticker}: tendência {item['tendencia_label']}, RSI {item['rsi_label']}"
-        + (f" ({item['rsi']})" if item["rsi"] is not None else "")
-        + f", MACD {item['macd_label']}, sinal geral {item['sinal_geral_label']}"
-        f" ({item['votos_compra']} compra / {item['votos_venda']} venda)"
-        for item in sinais
-    ) or "o usuário ainda não acompanha nenhum ativo"
+    def _linha_ativo(item):
+        indicadores = {i["nome"]: i["label"] for i in item["indicadores"]}
+        rsi_valor = f" ({item['rsi']})" if item.get("rsi") is not None else ""
+        return (
+            f"- {item['ativo'].ticker}: IFR {indicadores.get('IFR (RSI)', 'sem dados')}{rsi_valor}, "
+            f"médias móveis {indicadores.get('Médias móveis', 'sem dados')}, "
+            f"tendência {indicadores.get('Tendência de curto prazo', 'sem dados')}, "
+            f"volume {indicadores.get('Volume', 'sem dados')}, "
+            f"veredito do scanner {item['veredito_label']}, pontuação técnica {_score_scanner(item)}/100"
+        )
+
+    linhas_ativos = "\n".join(_linha_ativo(item) for item in scanner_itens) or "o usuário ainda não acompanha nenhum ativo"
 
     return (
         "Você é um analista comentando o pregão de hoje da B3 (bolsa brasileira) para um investidor pessoa "
-        "física. Use SOMENTE os dados abaixo, já calculados pelo sistema - não invente preços, indicadores "
-        "nem notícias que não estão aqui.\n\n"
+        "física. Use SOMENTE os dados abaixo, já calculados pelo sistema - não invente preços, indicadores, "
+        "pontuações nem notícias que não estão aqui.\n\n"
         f"Maiores altas do dia:\n{linhas_altas}\n\n"
         f"Maiores baixas do dia:\n{linhas_baixas}\n\n"
-        f"Indicadores técnicos dos ativos acompanhados pelo usuário:\n{linhas_ativos}\n\n"
+        f"Indicadores técnicos e pontuação do Scanner Técnico dos ativos acompanhados pelo usuário "
+        f"(comprados ou reservados):\n{linhas_ativos}\n\n"
         "Responda APENAS com linhas no formato exato abaixo (sem cabeçalho, sem markdown, sem texto antes ou "
         "depois):\nTICKER|SITUACAO|COMENTARIO\n\n"
         "- Uma linha \"MERCADO|SITUACAO|comentário\" resumindo o pregão geral da B3 hoje.\n"
@@ -3956,19 +3986,53 @@ def _parsear_resposta_ia_em_grade(texto: str) -> list[dict]:
     return linhas
 
 
-def gerar_analise_b3_ia(sinais: list[dict], maiores_altas: list[dict], maiores_baixas: list[dict]) -> dict:
+def _enriquecer_linhas_com_scanner(linhas: list[dict], scanner_itens: list[dict]) -> list[dict]:
+    """
+    Anexa a cada linha já parseada da resposta da IA (ver
+    _parsear_resposta_ia_em_grade) os indicadores e a pontuação do Scanner
+    Técnico do mesmo ticker (ver escanear_carteira/_score_scanner) - dados
+    100% calculados localmente, nunca pela IA. A linha "MERCADO" (pregão
+    geral) e qualquer ticker que a IA tenha citado fora da lista enviada
+    ficam com esses campos em branco (score None).
+    """
+    por_ticker = {item["ativo"].ticker: item for item in scanner_itens}
+    for linha in linhas:
+        item = por_ticker.get(linha["ticker"])
+        if item is None:
+            linha["score"] = None
+            continue
+        indicadores = {i["nome"]: i for i in item["indicadores"]}
+        linha["rsi"] = item.get("rsi")
+        linha["ifr_label"] = indicadores.get("IFR (RSI)", {}).get("label")
+        linha["ifr_classe"] = indicadores.get("IFR (RSI)", {}).get("classe")
+        linha["medias_label"] = indicadores.get("Médias móveis", {}).get("label")
+        linha["medias_classe"] = indicadores.get("Médias móveis", {}).get("classe")
+        linha["tendencia_label"] = indicadores.get("Tendência de curto prazo", {}).get("label")
+        linha["tendencia_classe"] = indicadores.get("Tendência de curto prazo", {}).get("classe")
+        linha["volume_label"] = indicadores.get("Volume", {}).get("label")
+        linha["volume_classe"] = indicadores.get("Volume", {}).get("classe")
+        linha["veredito_label"] = item["veredito_label"]
+        linha["veredito_classe"] = item["veredito_classe"]
+        linha["score"] = _score_scanner(item)
+    return linhas
+
+
+def gerar_analise_b3_ia(scanner_itens: list[dict], maiores_altas: list[dict], maiores_baixas: list[dict]) -> dict:
     """
     Consulta a IA configurada (ver ia_configurada) pra comentar o pregão de
-    hoje e os ativos acompanhados, devolvendo tanto o texto bruto quanto a
-    versão já organizada em linhas (ver _parsear_resposta_ia_em_grade) pra
-    montar a tabela na tela Análise de Mercado. Levanta IAError se a IA não
-    estiver configurada ou a chamada falhar (rede, chave inválida, resposta
-    fora do esperado etc.).
+    hoje e os ativos acompanhados, devolvendo o texto bruto, as linhas já
+    organizadas (ver _parsear_resposta_ia_em_grade) enriquecidas com IFR/
+    médias/tendência/volume/pontuação do Scanner Técnico (ver
+    _enriquecer_linhas_com_scanner) pra montar a tabela na tela Análise de
+    Mercado, e um ranking dos ativos por pontuação técnica (maior primeiro,
+    calculado localmente - não é a IA que ordena). Levanta IAError se a IA
+    não estiver configurada ou a chamada falhar (rede, chave inválida,
+    resposta fora do esperado etc.).
     """
     if not ia_configurada():
         raise IAError("A Análise da B3 hoje por IA ainda não está configurada neste sistema (falta a chave de API).")
 
-    prompt = _prompt_analise_b3_ia(sinais, maiores_altas, maiores_baixas)
+    prompt = _prompt_analise_b3_ia(scanner_itens, maiores_altas, maiores_baixas)
     url = f"{settings.OPENAI_BASE_URL.rstrip('/')}/chat/completions"
     headers = {"Authorization": f"Bearer {settings.OPENAI_API_KEY}", "Content-Type": "application/json"}
     payload = {
@@ -3983,7 +4047,13 @@ def gerar_analise_b3_ia(sinais: list[dict], maiores_altas: list[dict], maiores_b
     except (requests.RequestException, KeyError, IndexError, TypeError, ValueError) as exc:
         raise IAError("Não foi possível consultar a IA agora. Tente novamente em instantes.") from exc
 
-    return {"texto": texto.strip(), "linhas": _parsear_resposta_ia_em_grade(texto)}
+    linhas = _enriquecer_linhas_com_scanner(_parsear_resposta_ia_em_grade(texto), scanner_itens)
+    ranking = sorted(
+        (linha for linha in linhas if not linha["eh_mercado_geral"] and linha["score"] is not None),
+        key=lambda linha: linha["score"], reverse=True,
+    )
+
+    return {"texto": texto.strip(), "linhas": linhas, "ranking": ranking}
 
 
 def _prompt_sugestoes_ia(maiores_altas: list[dict], maiores_baixas: list[dict]) -> str:

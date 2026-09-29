@@ -738,17 +738,18 @@ def analise_mercado_ia(request):
     """
     Botão "Análise da B3 hoje (IA)": consulta a IA configurada (ver
     core.services.gerar_analise_b3_ia) pra comentar o pregão de hoje e os
-    ativos que o usuário acompanha, usando os mesmos dados já calculados
-    localmente por esta tela (maiores altas/baixas e indicadores técnicos)
-    como contexto - a IA só interpreta esses dados, não recalcula nem inventa
-    nada. Recarrega a mesma tela com o resultado (ou um aviso, se a IA não
-    estiver configurada ou a consulta falhar).
+    ativos que o usuário acompanha (comprados ou reservados), usando as
+    maiores altas/baixas do dia e os indicadores/pontuação do Scanner
+    Técnico (ver escanear_carteira) já calculados localmente como contexto -
+    a IA só interpreta esses dados, não recalcula nem inventa nada. Recarrega
+    a mesma tela com o resultado (ou um aviso, se a IA não estiver
+    configurada ou a consulta falhar).
     """
     contexto = _contexto_analise_mercado(request.user)
 
     try:
         contexto["analise_ia"] = gerar_analise_b3_ia(
-            contexto["sinais"], contexto["maiores_altas"], contexto["maiores_baixas"],
+            escanear_carteira(request.user), contexto["maiores_altas"], contexto["maiores_baixas"],
         )
     except IAError as exc:
         contexto["erro_ia"] = str(exc)
@@ -791,7 +792,7 @@ def _analise_e_sugestoes_ia_para_relatorio(usuario) -> dict:
     resultado = {"analise_ia": None, "erro_ia": None, "sugestoes_ia": None, "erro_sugestoes_ia": None}
     try:
         resultado["analise_ia"] = gerar_analise_b3_ia(
-            contexto["sinais"], contexto["maiores_altas"], contexto["maiores_baixas"],
+            escanear_carteira(usuario), contexto["maiores_altas"], contexto["maiores_baixas"],
         )
     except IAError as exc:
         resultado["erro_ia"] = str(exc)

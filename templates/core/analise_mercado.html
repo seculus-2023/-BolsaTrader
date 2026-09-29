@@ -43,11 +43,33 @@
     {% if analise_ia.linhas %}
     <div class="tabela-scroll">
     <table class="tabela-futurista">
-        <thead><tr><th>Ativo</th><th>Situação</th><th>Comentário da IA</th></tr></thead>
+        <thead>
+            <tr>
+                <th>Ativo</th>
+                <th>IFR</th>
+                <th>Médias</th>
+                <th>Tendência</th>
+                <th>Volume</th>
+                <th class="coluna-destaque">Pontuação</th>
+                <th>Situação (IA)</th>
+                <th>Comentário da IA</th>
+            </tr>
+        </thead>
         <tbody>
             {% for linha in analise_ia.linhas %}
             <tr>
                 <td>{% if linha.eh_mercado_geral %}B3 (mercado geral){% else %}{{ linha.ticker }}{% endif %}</td>
+                <td>
+                    {% if linha.ifr_classe %}
+                    <span class="badge-tendencia badge-{{ linha.ifr_classe }}">
+                        {{ linha.ifr_label }}{% if linha.rsi is not None %} ({{ linha.rsi }}){% endif %}
+                    </span>
+                    {% else %}&mdash;{% endif %}
+                </td>
+                <td>{% if linha.medias_classe %}<span class="badge-tendencia badge-{{ linha.medias_classe }}">{{ linha.medias_label }}</span>{% else %}&mdash;{% endif %}</td>
+                <td>{% if linha.tendencia_classe %}<span class="badge-tendencia badge-{{ linha.tendencia_classe }}">{{ linha.tendencia_label }}</span>{% else %}&mdash;{% endif %}</td>
+                <td>{% if linha.volume_classe %}<span class="badge-tendencia badge-{{ linha.volume_classe }}">{{ linha.volume_label }}</span>{% else %}&mdash;{% endif %}</td>
+                <td class="coluna-destaque">{% if linha.score is not None %}{{ linha.score }}/100{% else %}&mdash;{% endif %}</td>
                 <td><span class="badge-tendencia badge-{{ linha.situacao_classe }}">{{ linha.situacao }}</span></td>
                 <td>{{ linha.comentario }}</td>
             </tr>
@@ -59,8 +81,29 @@
     <p style="color: var(--text-dim); white-space: pre-line;">{{ analise_ia.texto }}</p>
     {% endif %}
     <p style="color: var(--text-dim); font-size: .8rem; margin: .8rem 0 0;">
-        Gerado por IA a partir dos dados desta tela - não constitui recomendação de investimento.
+        Situação e comentário são da IA; IFR, médias, tendência, volume e pontuação vêm do Scanner Técnico,
+        calculados localmente pelo sistema (a IA não inventa esses números) - não constitui recomendação de
+        investimento.
     </p>
+</div>
+{% endif %}
+
+{% if analise_ia.ranking %}
+<div class="card-glass" style="margin-top: 1rem;">
+    <h3 style="margin-top: 0;">Ranking técnico dos ativos acompanhados</h3>
+    <p style="color: var(--text-dim); font-size: .85rem; margin-top: -.3rem;">
+        Ordenado pela pontuação do Scanner Técnico (0 a 100, calculada localmente a partir de IFR, médias
+        móveis, MACD, volume, suporte/resistência e tendência) &mdash; não é uma previsão, só reflete quantos
+        indicadores apontam para cada lado agora.
+    </p>
+    <ol style="margin: .6rem 0 0; padding-left: 1.3rem;">
+        {% for linha in analise_ia.ranking %}
+        <li style="margin-bottom: .3rem;">
+            <strong>{{ linha.ticker }}</strong> &mdash; {{ linha.score }}/100
+            <span class="badge-tendencia badge-{{ linha.veredito_classe }}" style="margin-left:.4rem;">{{ linha.veredito_label }}</span>
+        </li>
+        {% endfor %}
+    </ol>
 </div>
 {% endif %}
 

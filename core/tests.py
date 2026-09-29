@@ -63,6 +63,7 @@ from .services import (
     obter_post_it, salvar_post_it,
     ultimo_valor_ibovespa,
     ia_configurada, gerar_analise_b3_ia, _prompt_analise_b3_ia, _parsear_resposta_ia_em_grade, IAError,
+    _score_scanner,
     gerar_excel_scanner_e_analise_ia, gerar_pdf_scanner_e_analise_ia,
     gerar_sugestoes_ia, _prompt_sugestoes_ia, _parsear_sugestoes_ia_em_grade,
     MOEDAS_CRIPTO_SUGERIDAS, buscar_cotacoes_cripto, atualizar_cotacao_cripto_diaria,
@@ -2688,11 +2689,20 @@ class AnaliseB3IaTests(TestCase):
     """core.services: ia_configurada, _parsear_resposta_ia_em_grade, gerar_analise_b3_ia."""
 
     def _sinal_exemplo(self):
+        """Formato de item de escanear_carteira (Scanner Técnico) - é o que _prompt_analise_b3_ia/
+        gerar_analise_b3_ia recebem desde que passaram a mostrar IFR/médias/tendência/volume/pontuação."""
         ativo = Ativo.objects.create(ticker="PETR4")
         return {
-            "ativo": ativo, "tendencia_label": "Alta", "rsi": 45.0, "rsi_label": "Neutro",
-            "macd_label": "Cruzamento de alta", "sinal_geral_label": "Sinal de compra",
-            "votos_compra": 2, "votos_venda": 0,
+            "ativo": ativo, "rsi": 45.0, "votos_alta": 2, "votos_baixa": 0,
+            "veredito_label": "Predomínio de sinais de alta", "veredito_classe": "alta",
+            "indicadores": [
+                {"nome": "IFR (RSI)", "label": "Neutro", "classe": "neutro"},
+                {"nome": "Médias móveis", "label": "Preço e médias em alinhamento de alta", "classe": "alta"},
+                {"nome": "MACD", "label": "Cruzamento de alta", "classe": "alta"},
+                {"nome": "Volume", "label": "Volume dentro do normal", "classe": "neutro"},
+                {"nome": "Suporte e resistência", "label": "Neutro entre suporte e resistência", "classe": "neutro"},
+                {"nome": "Tendência de curto prazo", "label": "Possível alta", "classe": "alta"},
+            ],
         }
 
     def test_nao_configurada_sem_chave(self):
@@ -2763,6 +2773,54 @@ class AnaliseB3IaTests(TestCase):
         with override_settings(OPENAI_API_KEY="sk-teste"):
             with self.assertRaises(IAError):
                 gerar_analise_b3_ia([self._sinal_exemplo()], [], [])
+
+    def test_score_scanner_todos_indicadores_de_alta_e_100(self):
+        item = {"votos_alta": 6, "votos_baixa": 0, "indicadores": [{}] * 6}
+        self.assertEqual(_score_scanner(item), 100)
+
+    def test_score_scanner_todos_indicadores_de_baixa_e_0(self):
+        item = {"votos_alta": 0, "votos_baixa": 6, "indicadores": [{}] * 6}
+        self.assertEqual(_score_scanner(item), 0)
+
+    def test_score_scanner_empate_e_neutro_50(self):
+        item = {"votos_alta": 3, "votos_baixa": 3, "indicadores": [{}] * 6}
+        self.assertEqual(_score_scanner(item), 50)
+
+    @patch("core.services.requests.post")
+    def test_gerar_analise_enriquece_linha_com_dados_do_scanner(self, mock_post):
+        mock_post.return_value.raise_for_status = lambda: None
+        mock_post.return_value.json = lambda: {
+            "choices": [{"message": {"content": "MERCADO|ALTA|Pregão positivo hoje.\nPETR4|ALTA|Rompeu resistência."}}]
+        }
+        with override_settings(OPENAI_API_KEY="sk-teste"):
+            resultado = gerar_analise_b3_ia([self._sinal_exemplo()], [], [])
+
+        linha_mercado, linha_petr4 = resultado["linhas"]
+        self.assertIsNone(linha_mercado["score"])
+        self.assertEqual(linha_petr4["score"], 67)  # 50 + (2 votos alta - 0 baixa) * (50/6 indicadores)
+        self.assertEqual(linha_petr4["medias_label"], "Preço e médias em alinhamento de alta")
+        self.assertEqual(linha_petr4["veredito_label"], "Predomínio de sinais de alta")
+
+    @patch("core.services.requests.post")
+    def test_gerar_analise_ranking_ordena_por_pontuacao_e_exclui_mercado(self, mock_post):
+        ativo_fraco = Ativo.objects.create(ticker="BBAS3")
+        item_fraco = {
+            "ativo": ativo_fraco, "rsi": 30.0, "votos_alta": 0, "votos_baixa": 2,
+            "veredito_label": "Predomínio de sinais de baixa", "veredito_classe": "baixa",
+            "indicadores": [{"nome": "IFR (RSI)", "label": "Sobrevendido", "classe": "alta"}] * 6,
+        }
+        mock_post.return_value.raise_for_status = lambda: None
+        mock_post.return_value.json = lambda: {
+            "choices": [{"message": {"content": (
+                "MERCADO|NEUTRO|Pregão sem direção clara.\n"
+                "PETR4|ALTA|Rompeu resistência.\n"
+                "BBAS3|BAIXA|Tendência de baixa."
+            )}}]
+        }
+        with override_settings(OPENAI_API_KEY="sk-teste"):
+            resultado = gerar_analise_b3_ia([self._sinal_exemplo(), item_fraco], [], [])
+
+        self.assertEqual([linha["ticker"] for linha in resultado["ranking"]], ["PETR4", "BBAS3"])
 
 
 class SugestoesIaTests(TestCase):

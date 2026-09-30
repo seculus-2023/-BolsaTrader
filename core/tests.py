@@ -22,7 +22,8 @@ from django.contrib.auth.models import User
 from django.core.exceptions import ValidationError
 from django.core.management import call_command
 from django.core.management.base import CommandError
-from django.test import TestCase, override_settings
+from django.test import TestCase, override_settings, Client
+from django.contrib.sessions.models import Session
 from django.urls import reverse
 from django.utils import timezone
 
@@ -69,6 +70,7 @@ from .services import (
     MOEDAS_CRIPTO_SUGERIDAS, buscar_cotacoes_cripto, atualizar_cotacao_cripto_diaria,
     atualizar_cotacoes_cripto_ativos, calcular_posicoes_cripto,
     registrar_atualizacao_carteira_cripto,
+    usuarios_logados_agora,
 )
 
 
@@ -5586,3 +5588,76 @@ class HistoricoAtualizacoesCriptoTests(TestCase):
         self.assertContains(resposta, "Variações de hoje (cripto)")
         self.assertContains(resposta, 'data-pontos-id="pontos-atualizacoes-dia"', 1)
         self.assertContains(resposta, 'data-pontos-id="pontos-atualizacoes-dia-cripto"', 1)
+
+
+class UsuariosLogadosAgoraTests(TestCase):
+    """core.services.usuarios_logados_agora - lê sessões válidas direto de django_session."""
+
+    def test_usuario_logado_aparece_na_lista(self):
+        usuario = User.objects.create_user(username="investidor_logado", password="SenhaForte123!")
+        self.client.login(username="investidor_logado", password="SenhaForte123!")
+
+        linhas = usuarios_logados_agora()
+
+        self.assertEqual([linha["usuario"] for linha in linhas], [usuario])
+
+    def test_sem_sessao_valida_fica_vazio(self):
+        User.objects.create_user(username="investidor_nunca_logou", password="SenhaForte123!")
+        self.assertEqual(usuarios_logados_agora(), [])
+
+    def test_sessao_expirada_nao_conta(self):
+        User.objects.create_user(username="investidor_expirado", password="SenhaForte123!")
+        self.client.login(username="investidor_expirado", password="SenhaForte123!")
+        Session.objects.all().update(expire_date=timezone.now() - timedelta(days=1))
+
+        self.assertEqual(usuarios_logados_agora(), [])
+
+    def test_duas_sessoes_do_mesmo_usuario_aparecem_uma_vez(self):
+        usuario = User.objects.create_user(username="investidor_duas_sessoes", password="SenhaForte123!")
+        self.client.login(username="investidor_duas_sessoes", password="SenhaForte123!")
+        outro_client = Client()
+        outro_client.login(username="investidor_duas_sessoes", password="SenhaForte123!")
+
+        linhas = usuarios_logados_agora()
+
+        self.assertEqual(len(linhas), 1)
+        self.assertEqual(linhas[0]["usuario"], usuario)
+
+    def test_logout_remove_da_lista(self):
+        User.objects.create_user(username="investidor_deslogado", password="SenhaForte123!")
+        self.client.login(username="investidor_deslogado", password="SenhaForte123!")
+        self.client.logout()
+
+        self.assertEqual(usuarios_logados_agora(), [])
+
+
+class ContasLogadasNoPainelTests(TestCase):
+    """Cartão "Contas logadas agora" no Painel de Controle (core.views.dashboard) - só para staff/superusuário."""
+
+    def test_usuario_comum_nao_ve_o_cartao(self):
+        User.objects.create_user(username="investidor_comum_painel", password="SenhaForte123!")
+        self.client.login(username="investidor_comum_painel", password="SenhaForte123!")
+
+        resposta = self.client.get(reverse("core:dashboard"))
+
+        self.assertNotContains(resposta, "Contas logadas agora")
+
+    def test_staff_ve_o_cartao_com_a_propria_conta(self):
+        User.objects.create_user(username="admin_staff_painel", password="SenhaForte123!", is_staff=True)
+        self.client.login(username="admin_staff_painel", password="SenhaForte123!")
+
+        resposta = self.client.get(reverse("core:dashboard"))
+
+        self.assertContains(resposta, "Contas logadas agora")
+        self.assertContains(resposta, "admin_staff_painel")
+
+    def test_staff_ve_outras_contas_logadas(self):
+        User.objects.create_user(username="admin_staff_painel2", password="SenhaForte123!", is_staff=True)
+        User.objects.create_user(username="investidor_outro_logado", password="SenhaForte123!")
+        outro_client = Client()
+        outro_client.login(username="investidor_outro_logado", password="SenhaForte123!")
+        self.client.login(username="admin_staff_painel2", password="SenhaForte123!")
+
+        resposta = self.client.get(reverse("core:dashboard"))
+
+        self.assertContains(resposta, "investidor_outro_logado")

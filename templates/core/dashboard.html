@@ -256,6 +256,45 @@ coluna principal.
 </div>
 </div>
 
+{% if usuarios_logados is not None %}
+<div class="card-glass" style="margin-top: 1.4rem;">
+    <h2>Contas logadas agora</h2>
+    <p style="color: var(--text-dim); font-size: .85rem; margin-top: -.5rem;">
+        Visível só para administrador/staff. Reflete contas com sessão ainda válida (não expulsa por logout nem
+        vencida) - não é necessariamente quem está com a tela aberta neste exato momento.
+    </p>
+    {% if usuarios_logados %}
+    <div class="tabela-scroll">
+    <table class="tabela-futurista">
+        <thead>
+            <tr>
+                <th>Usuário</th>
+                <th>E-mail</th>
+                <th>Último login</th>
+                <th>Sessão válida até</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for linha in usuarios_logados %}
+            <tr{% if linha.usuario == request.user %} class="linha-meta-atingida"{% endif %}>
+                <td>
+                    <strong>{{ linha.usuario.username }}</strong>
+                    {% if linha.usuario == request.user %}<small style="color: var(--text-dim);"> (você)</small>{% endif %}
+                </td>
+                <td>{{ linha.usuario.email|default:"—" }}</td>
+                <td>{% if linha.usuario.last_login %}{{ linha.usuario.last_login|date:"d/m/Y H:i" }}{% else %}&mdash;{% endif %}</td>
+                <td>{{ linha.expira_em|date:"d/m/Y H:i" }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    </div>
+    {% else %}
+    <p style="color: var(--text-dim);">Nenhuma conta com sessão válida no momento.</p>
+    {% endif %}
+</div>
+{% endif %}
+
 <div class="card-glass card-desenvolvedor">
     <div class="desenvolvedor-icone">👨‍💻</div>
     <p class="desenvolvedor-nome">Antonio Roberto Pereira Junior</p>

@@ -5147,3 +5147,51 @@ def registrar_atualizacao_carteira_cripto(
         lucro_perda=lucro_perda,
         lucro_perda_pct=lucro_perda_pct,
     )
+
+
+# --------------------------------------------------------------------------
+# Contas logadas agora (Painel de Controle, só para administrador/staff) -
+# lê as sessões válidas direto de django.contrib.sessions, sem precisar de
+# nenhum modelo ou rastreamento próprio. É uma aproximação de "logado agora":
+# reflete quem tem uma sessão ainda não expirada (não expulsa por logout nem
+# vencida), não necessariamente quem está com a tela aberta neste segundo.
+# --------------------------------------------------------------------------
+def usuarios_logados_agora() -> list[dict]:
+    """
+    Uma linha por usuário com pelo menos uma sessão válida (não expirada) no
+    momento, com o último login e até quando a sessão mais recente dele
+    ainda vale. Decodifica as sessões da tabela django_session - usuários
+    com sessão corrompida ou de um cookie secret antigo são ignorados
+    silenciosamente (não é motivo pra quebrar o Painel de quem é staff).
+    """
+    from django.contrib.sessions.models import Session
+
+    agora = timezone.now()
+    expira_em_por_usuario_id: dict[int, timezone.datetime] = {}
+    for sessao in Session.objects.filter(expire_date__gte=agora):
+        try:
+            dados = sessao.get_decoded()
+        except Exception:
+            continue
+        usuario_id = dados.get("_auth_user_id")
+        if usuario_id is None:
+            continue
+        usuario_id = int(usuario_id)
+        atual = expira_em_por_usuario_id.get(usuario_id)
+        if atual is None or sessao.expire_date > atual:
+            expira_em_por_usuario_id[usuario_id] = sessao.expire_date
+
+    if not expira_em_por_usuario_id:
+        return []
+
+    User = get_user_model()
+    usuarios = User.objects.filter(id__in=expira_em_por_usuario_id.keys())
+    linhas = [
+        {
+            "usuario": usuario,
+            "expira_em": expira_em_por_usuario_id[usuario.id],
+        }
+        for usuario in usuarios
+    ]
+    linhas.sort(key=lambda linha: linha["usuario"].username.lower())
+    return linhas

@@ -107,6 +107,7 @@ from .services import (
     gerar_excel_operacoes_cripto,
     gerar_pdf_operacoes_cripto,
     registrar_atualizacao_carteira_cripto,
+    usuarios_logados_agora,
 )
 
 TICKER_VALIDO = re.compile(r"^[A-Z0-9]{1,15}$")
@@ -155,6 +156,11 @@ def dashboard(request):
     # mesma ideia, mas pro gráfico "Variações de hoje (cripto)" ao lado do
     # cartão "Cotações de cripto" - ver _contexto_historico_atualizacoes_cripto.
     contexto.update(_contexto_historico_atualizacoes_cripto(request.user, limite=20))
+    # "Contas logadas agora" só pra quem é staff/superusuário - o sistema não
+    # mostra dado de outro usuário pra conta comum em nenhum outro lugar (ver
+    # core.services.usuarios_logados_agora).
+    if request.user.is_staff:
+        contexto["usuarios_logados"] = usuarios_logados_agora()
     return render(request, "core/dashboard.html", contexto)
 
 

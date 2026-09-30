@@ -114,6 +114,7 @@ coluna principal.
     <div class="card-glass" {% if comparativo_benchmark %}style="margin-top: 1.2rem;"{% endif %}>
         <h2>Posições em carteira</h2>
         {% include "core/_tabela_posicoes_compradas.html" with ocultar_acoes=True %}
+        <a href="{% url 'core:posicoes' %}" class="link-secundario">Ver carteira de Ativos completa →</a>
     </div>
 
     <div class="card-glass" style="margin-top: 1.2rem;">

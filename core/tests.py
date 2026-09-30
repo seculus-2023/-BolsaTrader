@@ -4821,6 +4821,28 @@ class BotoesAtualizarNoPainelTests(TestCase):
         self.assertContains(resposta, reverse("core:cripto_atualizar_cotacoes"))
 
 
+class LinkPosicoesCompletaNoPainelTests(TestCase):
+    """Cartão "Posições em carteira" do Painel de Controle tem link pra tela Posições em Carteira completa."""
+
+    def setUp(self):
+        self.usuario = User.objects.create_user(username="investidor_link_posicoes", password="SenhaForte123!")
+        self.client.login(username="investidor_link_posicoes", password="SenhaForte123!")
+
+    def test_mostra_o_link_mesmo_sem_nenhuma_posicao(self):
+        resposta = self.client.get(reverse("core:dashboard"))
+        self.assertContains(resposta, "Ver carteira de Ativos completa →")
+        self.assertContains(resposta, reverse("core:posicoes"))
+
+    def test_mostra_o_link_com_posicao_comprada(self):
+        ativo = Ativo.objects.create(ticker="VALE3")
+        Operacao.objects.create(
+            usuario=self.usuario, ativo=ativo, tipo=Operacao.COMPRA,
+            quantidade=10, preco_unitario=Decimal("60.00"), data_operacao=date.today(),
+        )
+        resposta = self.client.get(reverse("core:dashboard"))
+        self.assertContains(resposta, "Ver carteira de Ativos completa →")
+
+
 # ==========================================================================
 # Criptomoedas - tela própria, à parte das ações da B3 (ver CriptoAtivo/
 # OperacaoCripto/CotacaoCripto em core.models e o comentário no topo da

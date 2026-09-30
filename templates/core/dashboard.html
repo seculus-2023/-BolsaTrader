@@ -25,6 +25,25 @@
             {% if lucro_perda_pct_total is not None %}({{ lucro_perda_pct_total|floatformat:2 }}%){% endif %}
         </div>
     </div>
+    <div class="stat-tile">
+        <div class="label">Moedas em carteira (cripto)</div>
+        <div class="value">{{ totais_cripto.total_moedas }}</div>
+    </div>
+    <div class="stat-tile">
+        <div class="label">Valor investido (cripto)</div>
+        <div class="value">R$ {{ totais_cripto.valor_investido_total|floatformat:2 }}</div>
+    </div>
+    <div class="stat-tile">
+        <div class="label">Valor atual (cripto)</div>
+        <div class="value">R$ {{ totais_cripto.valor_atual_total|floatformat:2 }}</div>
+    </div>
+    <div class="stat-tile">
+        <div class="label">Lucro / Perda (cripto)</div>
+        <div class="value {% if totais_cripto.lucro_perda_total > 0 %}valor-positivo{% elif totais_cripto.lucro_perda_total < 0 %}valor-negativo{% else %}valor-neutro{% endif %}">
+            R$ {{ totais_cripto.lucro_perda_total|floatformat:2 }}
+            {% if totais_cripto.lucro_perda_pct_total is not None %}({{ totais_cripto.lucro_perda_pct_total|floatformat:2 }}%){% endif %}
+        </div>
+    </div>
     <div class="stat-tile" style="text-align: center;">
         <div class="label">Ibovespa</div>
         {% if ibovespa %}

@@ -5116,6 +5116,29 @@ def calcular_posicoes_cripto(usuario) -> list[PosicaoCripto]:
     return posicoes
 
 
+def totais_posicoes_cripto(posicoes_cripto: list[PosicaoCripto]) -> dict:
+    """
+    Totais consolidados das posições de cripto efetivamente COMPRADAS (reservas
+    não entram, mesmo critério de calcular_posicoes/dashboard para ações) -
+    reaproveitado pela tela Criptomoedas e pelo cartão de resumo do Painel de
+    Controle (ver core.views.criptomoedas/dashboard).
+    """
+    compradas = [p for p in posicoes_cripto if not p.apenas_reservado]
+    valor_investido_total = sum((p.valor_investido for p in compradas), Decimal("0"))
+    valor_atual_total = sum((p.valor_atual for p in compradas if p.valor_atual is not None), Decimal("0"))
+    lucro_perda_total = valor_atual_total - valor_investido_total
+    lucro_perda_pct_total = (
+        (lucro_perda_total / valor_investido_total) * 100 if valor_investido_total else None
+    )
+    return {
+        "total_moedas": len(compradas),
+        "valor_investido_total": valor_investido_total,
+        "valor_atual_total": valor_atual_total,
+        "lucro_perda_total": lucro_perda_total,
+        "lucro_perda_pct_total": lucro_perda_pct_total,
+    }
+
+
 def registrar_atualizacao_carteira_cripto(
     usuario, posicoes_cripto: list[PosicaoCripto] | None = None,
 ) -> RegistroAtualizacaoCarteiraCripto:

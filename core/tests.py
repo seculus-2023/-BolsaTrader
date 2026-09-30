@@ -5489,6 +5489,26 @@ class CotacoesCriptoNoPainelTests(TestCase):
         resposta = self.client.get(reverse("core:dashboard"))
         self.assertContains(resposta, reverse("core:criptomoedas"))
 
+    def test_cartoes_de_resumo_mostram_totais_de_cripto_zerados_sem_posicao(self):
+        resposta = self.client.get(reverse("core:dashboard"))
+        self.assertContains(resposta, "Moedas em carteira (cripto)")
+        self.assertContains(resposta, "Valor investido (cripto)")
+        self.assertContains(resposta, "Valor atual (cripto)")
+        self.assertContains(resposta, "Lucro / Perda (cripto)")
+
+    def test_cartoes_de_resumo_mostram_totais_de_cripto_com_posicao_comprada(self):
+        btc = CriptoAtivo.objects.create(coin="BTC")
+        OperacaoCripto.objects.create(
+            usuario=self.usuario, cripto_ativo=btc, tipo=OperacaoCripto.COMPRA,
+            quantidade=Decimal("0.01"), preco_unitario=Decimal("400000.00"), data_operacao=date.today(),
+        )
+        CotacaoCripto.objects.create(cripto_ativo=btc, data=date.today(), preco_fechamento=Decimal("420000.00"))
+
+        resposta = self.client.get(reverse("core:dashboard"))
+
+        self.assertContains(resposta, "R$ 4200,00")  # valor atual (cripto)
+        self.assertContains(resposta, "R$ 4000,00")  # valor investido (cripto)
+
 
 class HistoricoAtualizacoesCriptoTests(TestCase):
     """core.services: registrar_atualizacao_carteira_cripto, construir_grafico_atualizacoes_dia

@@ -101,7 +101,7 @@ from .services import (
     gerar_pdf_scanner_e_analise_ia,
     gerar_sugestoes_ia,
     MOEDAS_CRIPTO_SUGERIDAS,
-    calcular_posicoes_cripto,
+    calcular_posicoes_cripto, totais_posicoes_cripto,
     atualizar_cotacoes_cripto_ativos,
     atualizar_cotacao_cripto_diaria,
     gerar_excel_operacoes_cripto,
@@ -131,6 +131,8 @@ def dashboard(request):
         (lucro_perda_total / valor_investido_total) * 100 if valor_investido_total else None
     )
 
+    posicoes_cripto = calcular_posicoes_cripto(request.user)
+
     contexto = {
         # só as compradas de verdade - reservas (intenção de compra) não
         # aparecem mais nessa tabela do Painel. "posicoes_compradas" usa a
@@ -147,7 +149,11 @@ def dashboard(request):
         "comparativo_benchmark": calcular_comparativo_benchmark(request.user, posicoes=posicoes),
         "alertas_recentes": request.user.alertas.all()[:8],
         "ibovespa": ultimo_valor_ibovespa(),
-        "cotacoes_cripto": _cotacoes_cripto_para_exibir(request.user),
+        "cotacoes_cripto": _cotacoes_cripto_para_exibir(request.user, posicoes_cripto),
+        # cartões de resumo da cripto ao lado dos de ações (ver
+        # totais_posicoes_cripto) - chave própria pra não colidir com os
+        # totais de ações acima, que usam os mesmos nomes de campo.
+        "totais_cripto": totais_posicoes_cripto(posicoes_cripto),
     }
     # "Variações de hoje" (mesmo gráfico de Histórico de Atualizações) ao
     # lado de "Posições em carteira" - só precisa de grafico_dia/
@@ -1634,22 +1640,11 @@ def criptomoedas(request):
     posicoes_compradas = [p for p in posicoes_cripto if not p.apenas_reservado]
     posicoes_reservadas = [p for p in posicoes_cripto if p.apenas_reservado]
 
-    valor_investido_total = sum((p.valor_investido for p in posicoes_compradas), Decimal("0"))
-    valor_atual_total = sum((p.valor_atual for p in posicoes_compradas if p.valor_atual is not None), Decimal("0"))
-    lucro_perda_total = valor_atual_total - valor_investido_total
-    lucro_perda_pct_total = (
-        (lucro_perda_total / valor_investido_total) * 100 if valor_investido_total else None
-    )
-
     contexto = {
         "cotacoes": cotacoes,
         "posicoes_compradas": posicoes_compradas,
         "posicoes_reservadas": posicoes_reservadas,
-        "valor_investido_total": valor_investido_total,
-        "valor_atual_total": valor_atual_total,
-        "lucro_perda_total": lucro_perda_total,
-        "lucro_perda_pct_total": lucro_perda_pct_total,
-        "total_moedas": len(posicoes_compradas),
+        **totais_posicoes_cripto(posicoes_cripto),
     }
     contexto.update(_contexto_historico_atualizacoes_cripto(request.user, limite=20))
     return render(request, "core/criptomoedas.html", contexto)

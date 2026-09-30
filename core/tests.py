@@ -4806,6 +4806,21 @@ class IbovespaNoPainelTests(TestCase):
         self.assertNotContains(resposta, "130000")
 
 
+class BotoesAtualizarNoPainelTests(TestCase):
+    """Painel de Controle mostra os botões "Atualizar cotações agora" (ações) e "Atualizar Cripto agora"."""
+
+    def setUp(self):
+        self.usuario = User.objects.create_user(username="investidor_botoes_painel", password="SenhaForte123!")
+        self.client.login(username="investidor_botoes_painel", password="SenhaForte123!")
+
+    def test_mostra_os_dois_botoes_com_os_links_corretos(self):
+        resposta = self.client.get(reverse("core:dashboard"))
+        self.assertContains(resposta, "Atualizar cotações agora")
+        self.assertContains(resposta, reverse("core:atualizar_cotacoes"))
+        self.assertContains(resposta, "Atualizar Cripto agora")
+        self.assertContains(resposta, reverse("core:cripto_atualizar_cotacoes"))
+
+
 # ==========================================================================
 # Criptomoedas - tela própria, à parte das ações da B3 (ver CriptoAtivo/
 # OperacaoCripto/CotacaoCripto em core.models e o comentário no topo da

@@ -5,6 +5,9 @@
 <h1>Painel de Controle</h1>
 <span id="marcador-ultima-atualizacao" data-ultima="{% if ultima_atualizacao_cotacoes %}{{ ultima_atualizacao_cotacoes|date:'c' }}{% endif %}" hidden></span>
 
+<a href="{% url 'core:atualizar_cotacoes' %}" class="btn-futurista btn-atualizar-cotacoes" data-overlay-texto="Atualizando cotações...">Atualizar cotações agora</a>
+<a href="{% url 'core:cripto_atualizar_cotacoes' %}" class="btn-futurista btn-atualizar-cotacoes btn-secundario" data-overlay-texto="Atualizando cripto...">🔄 Atualizar Cripto agora</a>
+
 <div class="grid-stats">
     <div class="stat-tile">
         <div class="label">Ativos em carteira</div>

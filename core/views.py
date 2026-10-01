@@ -562,6 +562,14 @@ def posicoes(request):
     posicoes_reservadas = [p for p in lista_posicoes if p.apenas_reservado and not p.reserva_do_robo]
     posicoes_reservadas_robo = [p for p in lista_posicoes if p.apenas_reservado and p.reserva_do_robo]
 
+    # Grids de reservas ordenadas pela coluna "Variação desde a reserva", da
+    # maior para a menor - reservas ainda sem cotação (variação None) vão pro fim.
+    def _ordem_variacao_reserva(p):
+        return (p.variacao_pct_reserva is None, -(p.variacao_pct_reserva or 0))
+
+    posicoes_reservadas.sort(key=_ordem_variacao_reserva)
+    posicoes_reservadas_robo.sort(key=_ordem_variacao_reserva)
+
     contexto = {
         "posicoes": lista_posicoes,
         "posicoes_compradas": posicoes_compradas,

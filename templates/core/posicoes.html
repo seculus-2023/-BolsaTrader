@@ -228,6 +228,7 @@
                 <td>
                     <div style="display: flex; gap: .4rem;">
                         {% for operacao_id in p.reserva_operacao_ids %}
+                        <a href="{% url 'core:operacao_comprar' operacao_id %}" class="btn-futurista btn-secundario btn-icone" title="Comprar" aria-label="Comprar">🛒</a>
                         <form method="post" action="{% url 'core:operacao_excluir' operacao_id %}" onsubmit="return confirm('Excluir esta reserva de {{ p.ativo.ticker }}? Essa ação não pode ser desfeita.');">
                             {% csrf_token %}
                             <input type="hidden" name="next" value="{% url 'core:posicoes' %}">
@@ -287,6 +288,7 @@
                 <td>
                     <div style="display: flex; gap: .4rem;">
                         {% for operacao_id in p.reserva_operacao_ids %}
+                        <a href="{% url 'core:operacao_comprar' operacao_id %}" class="btn-futurista btn-secundario btn-icone" title="Comprar" aria-label="Comprar">🛒</a>
                         <form method="post" action="{% url 'core:operacao_excluir' operacao_id %}" onsubmit="return confirm('Excluir esta reserva de {{ p.ativo.ticker }}? Essa ação não pode ser desfeita.');">
                             {% csrf_token %}
                             <input type="hidden" name="next" value="{% url 'core:posicoes' %}">

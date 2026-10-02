@@ -1687,6 +1687,22 @@ class VerificarAtualizacaoCotacoesTests(TestCase):
         self.assertContains(resposta, 'id="marcador-ultima-atualizacao"')
         self.assertContains(resposta, reverse("core:verificar_atualizacao_cotacoes"))
 
+    def test_grids_de_reservadas_tem_botao_de_compra(self):
+        reservas = [
+            Operacao.objects.create(
+                usuario=self.usuario, ativo=Ativo.objects.create(ticker=ticker), tipo=Operacao.RESERVAR,
+                quantidade=1, preco_unitario=Decimal("10.00"), data_operacao=date.today(), observacao=observacao,
+            )
+            for ticker, observacao in (("WEGE3", ""), ("VALE3", "Reserva automática do robô consultor"))
+        ]
+
+        resposta = self.client.get(reverse("core:posicoes"))
+
+        self.assertEqual(len(resposta.context["posicoes_reservadas"]), 1)
+        self.assertEqual(len(resposta.context["posicoes_reservadas_robo"]), 1)
+        for reserva in reservas:
+            self.assertContains(resposta, reverse("core:operacao_comprar", args=[reserva.id]))
+
 
 class DetalhesCotacoesTests(TestCase):
     """

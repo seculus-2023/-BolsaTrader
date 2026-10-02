@@ -4123,7 +4123,12 @@ def notificar_alertas_telegram(usuario, alertas: list[Alerta]) -> bool:
     Avisa pelo Telegram os alertas recém-criados de um usuário, todos numa
     única mensagem. Como os alertas não se repetem no mesmo dia para o mesmo
     ativo/tipo, cada um é avisado uma vez só.
+
+    Só vai para o Telegram a meta de lucro atingida de um ativo comprado
+    (Alerta.LUCRO) - meta de perda, tendência e sinais do robô continuam
+    sendo gerados, mas ficam só na tela de alertas do sistema.
     """
+    alertas = [alerta for alerta in alertas if alerta.tipo == Alerta.LUCRO]
     if not alertas or credenciais_telegram(usuario) is None:
         return False
 
@@ -4287,7 +4292,6 @@ def gerar_sinais_robo_para_usuario(usuario) -> list[Alerta]:
         if sinal == "COMPRA":
             _reservar_automaticamente(usuario, ativo)
 
-    notificar_alertas_telegram(usuario, novos_alertas)
     return novos_alertas
 
 

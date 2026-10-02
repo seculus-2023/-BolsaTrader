@@ -960,6 +960,37 @@ class NotificacaoTelegramTests(TestCase):
         self.assertIn("BBDC4: meta de lucro atingida", kwargs["data"]["text"])
 
     @patch("core.services.requests.post")
+    def test_so_a_meta_de_lucro_vai_para_o_telegram(self, mock_post):
+        mock_post.return_value = Mock(status_code=200, json=Mock(return_value={"ok": True}))
+        self._cadastrar_telegram(self.usuario)
+        alertas = [
+            Alerta.objects.create(usuario=self.usuario, ativo=self.ativo, tipo=tipo, mensagem=f"BBDC4: {tipo}")
+            for tipo in (Alerta.PERDA, Alerta.TENDENCIA, Alerta.SINAL_COMPRA, Alerta.SINAL_VENDA)
+        ]
+
+        self.assertFalse(core_services.notificar_alertas_telegram(self.usuario, alertas))
+        mock_post.assert_not_called()
+
+        alertas.append(
+            Alerta.objects.create(usuario=self.usuario, ativo=self.ativo, tipo=Alerta.LUCRO, mensagem="BBDC4: lucro")
+        )
+        self.assertTrue(core_services.notificar_alertas_telegram(self.usuario, alertas))
+        mock_post.assert_called_once()
+        texto = mock_post.call_args.kwargs["data"]["text"]
+        self.assertIn("BBDC4: lucro", texto)
+        self.assertNotIn(Alerta.PERDA, texto)
+        self.assertNotIn(Alerta.TENDENCIA, texto)
+
+    @patch("core.services.requests.post")
+    def test_meta_de_perda_atingida_nao_envia(self, mock_post):
+        Cotacao.objects.filter(ativo=self.ativo).update(preco_fechamento=Decimal("15.00"))  # -25%
+        self._cadastrar_telegram(self.usuario)
+        alertas = gerar_alertas_para_usuario(self.usuario)
+
+        self.assertIn(Alerta.PERDA, [a.tipo for a in alertas])
+        mock_post.assert_not_called()
+
+    @patch("core.services.requests.post")
     def test_cada_usuario_usa_o_proprio_bot(self, mock_post):
         mock_post.return_value = Mock(status_code=200, json=Mock(return_value={"ok": True}))
         outro = User.objects.create_user(username="outro_tg", password="SenhaForte123!")

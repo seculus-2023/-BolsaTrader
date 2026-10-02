@@ -577,6 +577,36 @@ class CalculoPosicoesTests(TestCase):
         posicoes = calcular_posicoes(self.usuario)
         self.assertEqual(posicoes[0].situacao, "PERDA")
 
+    def test_preco_alvo_usa_meta_de_lucro_cadastrada_na_compra(self):
+        Operacao.objects.create(
+            usuario=self.usuario, ativo=self.ativo, tipo=Operacao.COMPRA,
+            quantidade=50, preco_unitario=Decimal("60.00"), data_operacao=date.today(),
+            meta_lucro_pct=Decimal("10.00"),
+        )
+
+        posicoes = calcular_posicoes(self.usuario)
+        self.assertEqual(posicoes[0].preco_alvo, Decimal("66.00"))
+
+    @override_settings(META_LUCRO_PADRAO=5)
+    def test_preco_alvo_sem_meta_cadastrada_usa_meta_padrao_do_sistema(self):
+        Operacao.objects.create(
+            usuario=self.usuario, ativo=self.ativo, tipo=Operacao.COMPRA,
+            quantidade=50, preco_unitario=Decimal("60.00"), data_operacao=date.today(),
+        )
+
+        posicoes = calcular_posicoes(self.usuario)
+        self.assertEqual(posicoes[0].preco_alvo, Decimal("63.00"))
+
+    def test_preco_alvo_nao_existe_para_posicao_so_de_reserva(self):
+        Operacao.objects.create(
+            usuario=self.usuario, ativo=self.ativo, tipo=Operacao.RESERVAR,
+            quantidade=1, preco_unitario=Decimal("60.00"), data_operacao=date.today(),
+            meta_lucro_pct=Decimal("10.00"),
+        )
+
+        posicoes = calcular_posicoes(self.usuario)
+        self.assertIsNone(posicoes[0].preco_alvo)
+
     def test_venda_reduz_posicao(self):
         Operacao.objects.create(
             usuario=self.usuario, ativo=self.ativo, tipo=Operacao.COMPRA,
@@ -815,6 +845,16 @@ class ExportacaoPosicoesTests(TestCase):
         self.assertEqual(linhas[0][0], "Ativo")
         self.assertEqual(linhas[1][0], "WEGE3")
         self.assertEqual(linhas[1][1], 20)
+
+    def test_exportar_excel_inclui_coluna_alvo(self):
+        from openpyxl import load_workbook
+        import io
+
+        Operacao.objects.filter(usuario=self.usuario).update(meta_lucro_pct=Decimal("10.00"))
+        resposta = self.client.get(reverse("core:posicoes_exportar_excel"))
+        linhas = list(load_workbook(io.BytesIO(resposta.content)).active.values)
+        coluna = linhas[0].index("Alvo (R$)")
+        self.assertEqual(linhas[1][coluna], 44.0)  # 40,00 + 10%
 
     def test_exportar_pdf_retorna_arquivo_pdf_valido(self):
         resposta = self.client.get(reverse("core:posicoes_exportar_pdf"))
@@ -4695,6 +4735,7 @@ class RedistribuicaoPainelTests(TestCase):
         for resposta in (resposta_painel, resposta_posicoes):
             self.assertContains(resposta, "IGUAL3")
             self.assertContains(resposta, "Lucro/Perda por dia em carteira")
+            self.assertContains(resposta, "<th>Alvo</th>", html=True)
 
         self.assertContains(resposta_posicoes, reverse("core:operacao_vender", args=[operacao.id]))
         self.assertContains(resposta_posicoes, reverse("core:operacao_editar", args=[operacao.id]))

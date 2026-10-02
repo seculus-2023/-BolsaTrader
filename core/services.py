@@ -1136,6 +1136,23 @@ class Posicao:
         return self.lucro_perda_pct >= meta
 
     @property
+    def preco_alvo(self) -> Decimal | None:
+        """
+        Preço (R$) em que a posição atinge a meta de lucro: preço médio de
+        compra acrescido do percentual de meta cadastrado na compra (ou do
+        padrão do sistema quando não há um definido - mesma regra de
+        meta_lucro_atingida). None para posições só de reserva.
+        """
+        if self.apenas_reservado or not self.preco_medio:
+            return None
+        meta = abs(
+            self.meta_lucro_pct
+            if self.meta_lucro_pct is not None
+            else Decimal(str(settings.META_LUCRO_PADRAO))
+        )
+        return (self.preco_medio * (1 + meta / 100)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+    @property
     def variacao_pct_reserva(self) -> Decimal | None:
         """
         Para posições só de reserva (sem compra real): variação percentual do
@@ -1795,7 +1812,7 @@ def construir_comparativo_valores(
 # --------------------------------------------------------------------------
 COLUNAS_EXPORTACAO_POSICOES = [
     "Ativo", "Quantidade", "Preço médio (R$)", "Valor investido (R$)",
-    "Cotação atual (R$)", "Valor atual (R$)", "Lucro/Perda (R$)", "Lucro/Perda (%)",
+    "Cotação atual (R$)", "Alvo (R$)", "Valor atual (R$)", "Lucro/Perda (R$)", "Lucro/Perda (%)",
     "Meta lucro (%)", "Meta perda (%)", "Tendência", "Dias em carteira",
 ]
 
@@ -1807,6 +1824,7 @@ def _linha_exportacao_posicao(p: Posicao) -> list:
         float(p.preco_medio),
         float(p.valor_investido),
         float(p.preco_atual) if p.preco_atual is not None else None,
+        float(p.preco_alvo) if p.preco_alvo is not None else None,
         float(p.valor_atual) if p.valor_atual is not None else None,
         float(p.lucro_perda_valor) if p.lucro_perda_valor is not None else None,
         float(p.lucro_perda_pct) if p.lucro_perda_pct is not None else None,
@@ -1961,9 +1979,9 @@ def gerar_pdf_posicoes(
     for p in posicoes:
         l = _linha_exportacao_posicao(p)
         dados.append([
-            l[0], str(l[1]), fmt(l[2]), fmt(l[3]), fmt(l[4]), fmt(l[5]), fmt(l[6]), fmt(l[7], "%"),
-            fmt(l[8], "%", "padrão"), fmt(l[9], "%", "padrão"), l[10] or "—",
-            "hoje" if l[11] == 0 else (f"{l[11]} dias" if l[11] is not None else "—"),
+            l[0], str(l[1]), fmt(l[2]), fmt(l[3]), fmt(l[4]), fmt(l[5]), fmt(l[6]), fmt(l[7]), fmt(l[8], "%"),
+            fmt(l[9], "%", "padrão"), fmt(l[10], "%", "padrão"), l[11] or "—",
+            "hoje" if l[12] == 0 else (f"{l[12]} dias" if l[12] is not None else "—"),
         ])
 
     if len(dados) == 1:
@@ -1980,6 +1998,9 @@ def gerar_pdf_posicoes(
             ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
             ("TOPPADDING", (0, 0), (-1, -1), 5),
             ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+            # 13 colunas: com o padding lateral padrão (6) a tabela passa da margem da página
+            ("LEFTPADDING", (0, 0), (-1, -1), 3),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 3),
         ]))
         elementos.append(tabela)
 

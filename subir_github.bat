@@ -20,9 +20,7 @@ git add .
 git commit -m "%MENSAGEM%"
 if errorlevel 1 (
     echo.
-    echo Nada para enviar - nenhuma alteracao detectada, ou falha ao criar o commit.
-    pause
-    exit /b 0
+    echo Nenhuma alteracao nova para commitar - enviando os commits que ja existem.
 )
 
 echo.

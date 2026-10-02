@@ -3817,8 +3817,9 @@ def backtest_sinais_robo(
 #
 # O sistema já recebe mensagens via webhook (ver core.views.whatsapp_webhook)
 # - isso fecha o ciclo no outro sentido: enviar um aviso automático quando uma
-# meta de lucro/perda é atingida ou o robô consultor dá um sinal de compra/
-# venda, em vez de depender do usuário lembrar de abrir a tela Alertas. Cada
+# meta de lucro/perda é atingida (só esses alertas vão por WhatsApp - sinais
+# do robô consultor e de tendência ficam só na tela), em vez de depender do
+# usuário lembrar de abrir a tela Alertas. Cada
 # usuário configura seu próprio número em "Minha Conta" (ver
 # accounts.models.PerfilUsuario); sem WHATSAPP_ACCESS_TOKEN e
 # WHATSAPP_PHONE_NUMBER_ID configurados no .env, o envio fica desligado e os
@@ -3864,6 +3865,11 @@ def _notificar_whatsapp_usuario(usuario, mensagem: str) -> None:
     accounts.models.PerfilUsuario), quando o envio está configurado e o
     usuário tem um número salvo - silencioso em qualquer outro caso (usuário
     sem perfil, sem número, ou envio desligado).
+
+    Só envia para quem está logado (sessão válida - ver usuario_esta_logado):
+    o agendador automático de cotações gera alertas para todos os usuários
+    com operações, mas quem não está com sessão aberta só vê o alerta na
+    tela Alertas quando voltar a entrar, sem receber o WhatsApp.
     """
     if not whatsapp_envio_configurado():
         return
@@ -3871,7 +3877,7 @@ def _notificar_whatsapp_usuario(usuario, mensagem: str) -> None:
         numero = usuario.perfil.numero_whatsapp
     except ObjectDoesNotExist:
         return
-    if numero:
+    if numero and usuario_esta_logado(usuario):
         enviar_whatsapp(numero, mensagem)
 
 
@@ -4282,7 +4288,6 @@ def gerar_sinais_robo_para_usuario(usuario) -> list[Alerta]:
             )
             alerta = Alerta.objects.create(usuario=usuario, ativo=ativo, tipo=tipo, mensagem=mensagem)
             novos_alertas.append(alerta)
-            _notificar_whatsapp_usuario(usuario, alerta.mensagem)
 
         if sinal == "COMPRA":
             _reservar_automaticamente(usuario, ativo)
@@ -5218,3 +5223,17 @@ def usuarios_logados_agora() -> list[dict]:
     ]
     linhas.sort(key=lambda linha: linha["usuario"].username.lower())
     return linhas
+
+
+def usuario_esta_logado(usuario) -> bool:
+    """True quando o usuário tem pelo menos uma sessão válida (não expirada) agora - mesma aproximação de usuarios_logados_agora."""
+    from django.contrib.sessions.models import Session
+
+    for sessao in Session.objects.filter(expire_date__gte=timezone.now()):
+        try:
+            dados = sessao.get_decoded()
+        except Exception:
+            continue
+        if str(dados.get("_auth_user_id")) == str(usuario.pk):
+            return True
+    return False

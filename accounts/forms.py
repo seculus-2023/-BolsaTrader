@@ -10,6 +10,15 @@ class CadastroForm(UserCreationForm):
 
     email = forms.EmailField(required=True, label="E-mail")
     first_name = forms.CharField(required=True, label="Nome")
+    # Gravado em PerfilUsuario.numero_whatsapp - é o mesmo número editado depois em "Minha Conta".
+    telefone = forms.CharField(
+        required=False, label="Telefone (WhatsApp)", max_length=20,
+        widget=forms.TextInput(attrs={"placeholder": "5565999998888", "inputmode": "tel"}),
+        help_text="Formato internacional, com DDI e DDD (ex: 5565999998888). Opcional - usado para "
+        "receber avisos automáticos por WhatsApp.",
+    )
+
+    field_order = ["username", "first_name", "email", "telefone", "password1", "password2"]
 
     class Meta:
         model = User
@@ -23,12 +32,24 @@ class CadastroForm(UserCreationForm):
         for field in self.fields.values():
             field.widget.attrs.update({"class": "form-control-futurista"})
 
+    def clean_telefone(self):
+        # Aceita a máscara que o usuário costuma digitar (+55 (65) 99999-8888) e guarda só os dígitos.
+        telefone = self.cleaned_data["telefone"].strip()
+        numero = "".join(c for c in telefone if c not in " ()-+.")
+        if numero and not numero.isdigit():
+            raise forms.ValidationError("Informe um telefone válido, só com números (ex: 5565999998888).")
+        return numero
+
     def save(self, commit=True):
         user = super().save(commit=False)
         user.email = self.cleaned_data["email"]
         user.first_name = self.cleaned_data["first_name"]
         if commit:
             user.save()
+            if self.cleaned_data["telefone"]:
+                PerfilUsuario.objects.update_or_create(
+                    usuario=user, defaults={"numero_whatsapp": self.cleaned_data["telefone"]}
+                )
         return user
 
 

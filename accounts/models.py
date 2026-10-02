@@ -10,8 +10,9 @@ class PerfilUsuario(models.Model):
     quando o envio está configurado (ver core.services.enviar_whatsapp e
     core.services.WHATSAPP_ENVIO_CONFIGURADO).
 
-    Criado sob demanda (get_or_create) pela view accounts.views.minha_conta,
-    não em todo cadastro de usuário - por isso é OneToOne opcional, não uma
+    Criado no cadastro quando o usuário informa o telefone (accounts.forms.
+    CadastroForm) ou sob demanda (get_or_create) pela view
+    accounts.views.minha_conta - por isso é OneToOne opcional, não uma
     extensão obrigatória do User.
     """
 

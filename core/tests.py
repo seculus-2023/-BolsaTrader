@@ -2643,6 +2643,7 @@ class EnviarWhatsappTests(TestCase):
 
     @patch("core.services.enviar_whatsapp")
     def test_alerta_de_meta_dispara_envio_quando_usuario_tem_numero_cadastrado(self, mock_enviar):
+        self.client.login(username="investidor_wa", password="SenhaForte123!")
         PerfilUsuario.objects.create(usuario=self.usuario, numero_whatsapp="5565999998888")
         Operacao.objects.create(
             usuario=self.usuario, ativo=self.ativo, tipo=Operacao.COMPRA,
@@ -2656,6 +2657,22 @@ class EnviarWhatsappTests(TestCase):
 
         mock_enviar.assert_called_once()
         self.assertEqual(mock_enviar.call_args[0][0], "5565999998888")
+
+    @patch("core.services.enviar_whatsapp")
+    def test_alerta_nao_dispara_envio_para_usuario_que_nao_esta_logado(self, mock_enviar):
+        PerfilUsuario.objects.create(usuario=self.usuario, numero_whatsapp="5565999998888")
+        Operacao.objects.create(
+            usuario=self.usuario, ativo=self.ativo, tipo=Operacao.COMPRA,
+            quantidade=10, preco_unitario=Decimal("20.00"), data_operacao=date.today(),
+            meta_lucro_pct=Decimal("5.0"), meta_perda_pct=Decimal("-5.0"),
+        )
+        Cotacao.objects.create(ativo=self.ativo, data=date.today(), preco_fechamento=Decimal("25.00"))
+
+        with override_settings(WHATSAPP_ACCESS_TOKEN="token123", WHATSAPP_PHONE_NUMBER_ID="1234567890"):
+            alertas = gerar_alertas_para_usuario(self.usuario)
+
+        self.assertTrue(alertas)  # o alerta é gravado normalmente, só não vai por WhatsApp
+        mock_enviar.assert_not_called()
 
     @patch("core.services.enviar_whatsapp")
     def test_alerta_nao_dispara_envio_sem_numero_cadastrado(self, mock_enviar):

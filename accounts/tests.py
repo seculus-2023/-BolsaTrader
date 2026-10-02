@@ -5,6 +5,34 @@ from django.urls import reverse
 from .models import PerfilUsuario
 
 
+class CadastroTelefoneTests(TestCase):
+    """Telefone informado no cadastro vai para PerfilUsuario.numero_whatsapp."""
+
+    def _dados(self, **extra):
+        dados = {
+            "username": "novo_investidor", "first_name": "Novo", "email": "novo@example.com",
+            "password1": "SenhaForte123!", "password2": "SenhaForte123!",
+        }
+        dados.update(extra)
+        return dados
+
+    def test_cadastro_com_telefone_grava_no_perfil_so_digitos(self):
+        self.client.post(reverse("accounts:cadastro"), self._dados(telefone="+55 (65) 99999-8888"))
+        perfil = PerfilUsuario.objects.get(usuario__username="novo_investidor")
+        self.assertEqual(perfil.numero_whatsapp, "5565999998888")
+
+    def test_cadastro_sem_telefone_nao_cria_perfil(self):
+        self.client.post(reverse("accounts:cadastro"), self._dados())
+        self.assertTrue(User.objects.filter(username="novo_investidor").exists())
+        self.assertFalse(PerfilUsuario.objects.exists())
+
+    def test_telefone_com_letras_e_invalido(self):
+        resposta = self.client.post(reverse("accounts:cadastro"), self._dados(telefone="abc123"))
+        self.assertEqual(resposta.status_code, 200)
+        self.assertContains(resposta, "telefone válido")
+        self.assertFalse(User.objects.filter(username="novo_investidor").exists())
+
+
 class MinhaContaTests(TestCase):
     """Tela de edição do número de WhatsApp usado para avisos automáticos (ver core.services.enviar_whatsapp)."""
 

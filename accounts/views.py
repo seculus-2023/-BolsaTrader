@@ -48,7 +48,7 @@ def cadastro_view(request):
 def minha_conta_view(request):
     """
     Tela para o usuário informar/atualizar seu número de WhatsApp de contato
-    - o perfil é criado sob demanda na primeira visita a esta tela
+    e o bot do Telegram por onde recebe os avisos de alerta - o perfil é criado sob demanda na primeira visita a esta tela
     (get_or_create), não em todo cadastro de usuário.
     """
     perfil, _ = PerfilUsuario.objects.get_or_create(usuario=request.user)

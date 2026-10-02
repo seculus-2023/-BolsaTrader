@@ -69,6 +69,29 @@ class MinhaContaTests(TestCase):
         perfil = PerfilUsuario.objects.get(usuario=self.usuario)
         self.assertEqual(perfil.numero_whatsapp, "")
 
+    def test_salva_bot_do_telegram(self):
+        self.client.post(reverse("accounts:minha_conta"), {
+            "numero_whatsapp": "", "telegram_bot_token": " 123456789:AAF-abc_DEF ", "telegram_chat_id": "2065125150",
+        })
+        perfil = PerfilUsuario.objects.get(usuario=self.usuario)
+        self.assertEqual(perfil.telegram_bot_token, "123456789:AAF-abc_DEF")
+        self.assertEqual(perfil.telegram_chat_id, "2065125150")
+
+    def test_token_do_telegram_fora_do_formato_e_invalido(self):
+        resposta = self.client.post(reverse("accounts:minha_conta"), {
+            "numero_whatsapp": "", "telegram_bot_token": "nao-e-token", "telegram_chat_id": "2065125150",
+        })
+        self.assertEqual(resposta.status_code, 200)
+        self.assertContains(resposta, "Token inválido")
+
+    def test_telegram_exige_token_e_chat_id_juntos(self):
+        resposta = self.client.post(reverse("accounts:minha_conta"), {
+            "numero_whatsapp": "", "telegram_bot_token": "123456789:AAF-abc_DEF", "telegram_chat_id": "",
+        })
+        self.assertEqual(resposta.status_code, 200)
+        self.assertContains(resposta, "preencha o token do bot e o Chat ID")
+        self.assertFalse(PerfilUsuario.objects.filter(usuario=self.usuario, telegram_bot_token__gt="").exists())
+
     def test_outro_usuario_nao_ve_nem_altera_perfil_alheio(self):
         outro = User.objects.create_user(username="outro_conta", password="SenhaForte123!")
         PerfilUsuario.objects.create(usuario=outro, numero_whatsapp="5565911112222")

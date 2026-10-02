@@ -1,3 +1,5 @@
+import re
+
 from django import forms
 from django.contrib.auth.forms import UserCreationForm
 from django.contrib.auth.models import User
@@ -61,17 +63,21 @@ class LoginFuturistaForm(forms.Form):
 
 class PerfilUsuarioForm(forms.ModelForm):
     """
-    Edita o número de WhatsApp de contato do usuário (opcional). O
-    BolsaTrader não envia mensagens para esse número - os alertas aparecem
-    só na tela Alertas.
+    Edita os dados da conta do usuário (todos opcionais): o número de
+    WhatsApp de contato (o BolsaTrader não envia mensagens para ele) e o bot
+    do Telegram por onde o usuário recebe os avisos de alerta.
     """
 
     class Meta:
         model = PerfilUsuario
-        fields = ["numero_whatsapp"]
+        fields = ["numero_whatsapp", "telegram_bot_token", "telegram_chat_id"]
         labels = {"numero_whatsapp": "Número do WhatsApp"}
         widgets = {
             "numero_whatsapp": forms.TextInput(attrs={"placeholder": "5565999998888"}),
+            "telegram_bot_token": forms.TextInput(
+                attrs={"placeholder": "123456789:AAF...", "autocomplete": "off"}
+            ),
+            "telegram_chat_id": forms.TextInput(attrs={"placeholder": "2065125150"}),
         }
 
     def __init__(self, *args, **kwargs):
@@ -87,3 +93,28 @@ class PerfilUsuarioForm(forms.ModelForm):
                 "parênteses, traço ou o sinal de +."
             )
         return numero
+
+    def clean_telegram_bot_token(self):
+        token = self.cleaned_data["telegram_bot_token"].strip()
+        if token and not re.fullmatch(r"\d+:[\w-]+", token):
+            raise forms.ValidationError(
+                "Token inválido - copie exatamente como o @BotFather mostrou (ex: 123456789:AAF...)."
+            )
+        return token
+
+    def clean_telegram_chat_id(self):
+        chat_id = self.cleaned_data["telegram_chat_id"].strip()
+        if chat_id and not re.fullmatch(r"-?\d+", chat_id):
+            raise forms.ValidationError("Chat ID inválido - use só números (ex: 2065125150).")
+        return chat_id
+
+    def clean(self):
+        dados = super().clean()
+        # só valida o par quando os dois campos passaram na validação individual
+        if "telegram_bot_token" in dados and "telegram_chat_id" in dados:
+            if bool(dados["telegram_bot_token"]) != bool(dados["telegram_chat_id"]):
+                raise forms.ValidationError(
+                    "Para receber avisos pelo Telegram, preencha o token do bot e o Chat ID "
+                    "(ou deixe os dois em branco)."
+                )
+        return dados

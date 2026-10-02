@@ -4073,27 +4073,36 @@ def gerar_sugestoes_ia(maiores_altas: list[dict], maiores_baixas: list[dict]) ->
 TELEGRAM_TIMEOUT_SEGUNDOS = 10
 
 
-def telegram_configurado() -> bool:
-    """True quando há token do bot e chat de destino configurados (.env)."""
-    return bool(settings.TELEGRAM_BOT_TOKEN and settings.TELEGRAM_CHAT_ID)
-
-
-def enviar_notificacao_telegram(mensagem: str) -> bool:
+def credenciais_telegram(usuario) -> tuple[str, str] | None:
     """
-    Envia uma mensagem de texto pelo bot do Telegram para o chat configurado
-    (TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID no .env). Retorna True se o
-    Telegram confirmou o envio.
+    (token do bot, chat de destino) cadastrados pelo usuário em "Minha Conta"
+    (accounts.models.PerfilUsuario) - cada usuário usa o seu próprio bot.
+    None quando ele não tem perfil ou falta um dos dois campos.
+    """
+    perfil = getattr(usuario, "perfil", None)
+    if perfil is None or not (perfil.telegram_bot_token and perfil.telegram_chat_id):
+        return None
+    return perfil.telegram_bot_token, perfil.telegram_chat_id
+
+
+def enviar_notificacao_telegram(usuario, mensagem: str) -> bool:
+    """
+    Envia uma mensagem de texto para o usuário pelo bot do Telegram que ele
+    cadastrou (ver credenciais_telegram). Retorna True se o Telegram
+    confirmou o envio.
 
     Nunca levanta exceção: uma falha aqui (sem internet, token inválido) não
     pode derrubar o ciclo de cotações nem a tela que gerou o alerta - só fica
     registrada no log. O log não inclui a exceção crua porque o texto dela
     traz a URL da requisição, e a URL contém o token do bot.
     """
-    if not telegram_configurado():
+    credenciais = credenciais_telegram(usuario)
+    if credenciais is None:
         return False
+    token, chat_id = credenciais
 
-    url = f"https://api.telegram.org/bot{settings.TELEGRAM_BOT_TOKEN}/sendMessage"
-    payload = {"chat_id": settings.TELEGRAM_CHAT_ID, "text": mensagem}
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
+    payload = {"chat_id": chat_id, "text": mensagem}
     try:
         resposta = requests.post(url, data=payload, timeout=TELEGRAM_TIMEOUT_SEGUNDOS)
         dados = resposta.json()
@@ -4115,12 +4124,12 @@ def notificar_alertas_telegram(usuario, alertas: list[Alerta]) -> bool:
     única mensagem. Como os alertas não se repetem no mesmo dia para o mesmo
     ativo/tipo, cada um é avisado uma vez só.
     """
-    if not alertas or not telegram_configurado():
+    if not alertas or credenciais_telegram(usuario) is None:
         return False
 
     linhas = [f"🔔 BolsaTrader - {usuario.get_username()}"]
     linhas += [f"• {alerta.mensagem}" for alerta in alertas]
-    return enviar_notificacao_telegram("\n".join(linhas))
+    return enviar_notificacao_telegram(usuario, "\n".join(linhas))
 
 
 # --------------------------------------------------------------------------

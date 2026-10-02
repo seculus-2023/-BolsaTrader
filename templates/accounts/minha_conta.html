@@ -6,10 +6,15 @@
     Informe seu número de WhatsApp de contato (opcional). Os avisos de meta de lucro/perda aparecem em
     <a href="{% url 'core:alertas' %}">Alertas</a>.
 </p>
+<p style="color: var(--text-dim);">
+    Para receber esses avisos também pelo Telegram, crie um bot no @BotFather, envie uma mensagem para ele
+    e informe abaixo o token do bot e o seu Chat ID.
+</p>
 
 <div class="card-glass" style="max-width: 480px; margin-top: 1rem;">
     <form method="post" class="form-futurista">
         {% csrf_token %}
+        {{ form.non_field_errors }}
         {% for field in form %}
             <label for="{{ field.id_for_label }}">{{ field.label }}</label>
             {{ field }}

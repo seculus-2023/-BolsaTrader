@@ -5,8 +5,9 @@ from django.db import models
 class PerfilUsuario(models.Model):
     """
     Dados complementares do usuário, além do que o User padrão do Django já
-    guarda - hoje só o número de WhatsApp de contato do usuário (o
-    BolsaTrader não envia mensagens para ele; os alertas aparecem só na tela).
+    guarda: o número de WhatsApp de contato (o BolsaTrader não envia
+    mensagens para ele) e o bot do Telegram do próprio usuário, por onde ele
+    recebe os avisos de alerta (core.services.notificar_alertas_telegram).
 
     Criado no cadastro quando o usuário informa o telefone (accounts.forms.
     CadastroForm) ou sob demanda (get_or_create) pela view
@@ -20,6 +21,16 @@ class PerfilUsuario(models.Model):
     numero_whatsapp = models.CharField(
         "Número do WhatsApp", max_length=20, blank=True,
         help_text="Formato internacional, só dígitos (ex: 5565999998888). Opcional.",
+    )
+    # Cada usuário usa o seu próprio bot (criado no @BotFather) - sem os dois
+    # campos preenchidos, nada é enviado pelo Telegram para este usuário.
+    telegram_bot_token = models.CharField(
+        "Token do bot do Telegram", max_length=100, blank=True,
+        help_text="Token do seu bot, criado no @BotFather (ex: 123456789:AAF...). Opcional.",
+    )
+    telegram_chat_id = models.CharField(
+        "Chat ID do Telegram", max_length=32, blank=True,
+        help_text="ID do chat que recebe os avisos (ex: 2065125150). Opcional.",
     )
     atualizado_em = models.DateTimeField(auto_now=True)
 

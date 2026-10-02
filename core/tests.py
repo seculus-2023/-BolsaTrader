@@ -27,6 +27,8 @@ from django.contrib.sessions.models import Session
 from django.urls import reverse
 from django.utils import timezone
 
+from accounts.models import PerfilUsuario
+
 from . import services as core_services
 from .forms import OperacaoForm, VendaLoteForm
 from .models import (
@@ -925,19 +927,30 @@ class NotificacaoTelegramTests(TestCase):
         )
         Cotacao.objects.create(ativo=self.ativo, data=date.today(), preco_fechamento=Decimal("25.00"))  # +25%
 
+    def _cadastrar_telegram(self, usuario, token="token-falso", chat_id="123"):
+        return PerfilUsuario.objects.create(
+            usuario=usuario, telegram_bot_token=token, telegram_chat_id=chat_id,
+        )
+
     @patch("core.services.requests.post")
-    def test_sem_token_configurado_nao_envia(self, mock_post):
-        with override_settings(TELEGRAM_BOT_TOKEN="", TELEGRAM_CHAT_ID="123"):
-            alertas = gerar_alertas_para_usuario(self.usuario)
+    def test_usuario_sem_perfil_nao_envia(self, mock_post):
+        alertas = gerar_alertas_para_usuario(self.usuario)
+        self.assertTrue(alertas)
+        mock_post.assert_not_called()
+
+    @patch("core.services.requests.post")
+    def test_sem_token_cadastrado_nao_envia(self, mock_post):
+        self._cadastrar_telegram(self.usuario, token="")
+        alertas = gerar_alertas_para_usuario(self.usuario)
         self.assertTrue(alertas)
         mock_post.assert_not_called()
 
     @patch("core.services.requests.post")
     def test_alerta_novo_e_enviado_uma_vez_so(self, mock_post):
         mock_post.return_value = Mock(status_code=200, json=Mock(return_value={"ok": True}))
-        with override_settings(TELEGRAM_BOT_TOKEN="token-falso", TELEGRAM_CHAT_ID="123"):
-            gerar_alertas_para_usuario(self.usuario)
-            gerar_alertas_para_usuario(self.usuario)  # mesmo dia: nenhum alerta novo
+        self._cadastrar_telegram(self.usuario)
+        gerar_alertas_para_usuario(self.usuario)
+        gerar_alertas_para_usuario(self.usuario)  # mesmo dia: nenhum alerta novo
 
         mock_post.assert_called_once()
         args, kwargs = mock_post.call_args
@@ -947,13 +960,26 @@ class NotificacaoTelegramTests(TestCase):
         self.assertIn("BBDC4: meta de lucro atingida", kwargs["data"]["text"])
 
     @patch("core.services.requests.post")
+    def test_cada_usuario_usa_o_proprio_bot(self, mock_post):
+        mock_post.return_value = Mock(status_code=200, json=Mock(return_value={"ok": True}))
+        outro = User.objects.create_user(username="outro_tg", password="SenhaForte123!")
+        self._cadastrar_telegram(self.usuario)
+        self._cadastrar_telegram(outro, token="token-do-outro", chat_id="456")
+
+        self.assertTrue(core_services.enviar_notificacao_telegram(outro, "oi"))
+
+        args, kwargs = mock_post.call_args
+        self.assertEqual(args[0], "https://api.telegram.org/bottoken-do-outro/sendMessage")
+        self.assertEqual(kwargs["data"]["chat_id"], "456")
+
+    @patch("core.services.requests.post")
     def test_falha_no_telegram_nao_impede_o_alerta_nem_vaza_o_token(self, mock_post):
         mock_post.side_effect = requests.ConnectionError(
             "https://api.telegram.org/bottoken-falso/sendMessage"
         )
-        with override_settings(TELEGRAM_BOT_TOKEN="token-falso", TELEGRAM_CHAT_ID="123"):
-            with self.assertLogs("core.services", level="WARNING") as logs:
-                alertas = gerar_alertas_para_usuario(self.usuario)
+        self._cadastrar_telegram(self.usuario)
+        with self.assertLogs("core.services", level="WARNING") as logs:
+            alertas = gerar_alertas_para_usuario(self.usuario)
 
         self.assertIn(Alerta.LUCRO, [a.tipo for a in alertas])
         self.assertNotIn("token-falso", "\n".join(logs.output))
@@ -963,9 +989,9 @@ class NotificacaoTelegramTests(TestCase):
         mock_post.return_value = Mock(
             status_code=401, json=Mock(return_value={"ok": False, "description": "Unauthorized"}),
         )
-        with override_settings(TELEGRAM_BOT_TOKEN="token-falso", TELEGRAM_CHAT_ID="123"):
-            with self.assertLogs("core.services", level="WARNING"):
-                self.assertFalse(core_services.enviar_notificacao_telegram("oi"))
+        self._cadastrar_telegram(self.usuario)
+        with self.assertLogs("core.services", level="WARNING"):
+            self.assertFalse(core_services.enviar_notificacao_telegram(self.usuario, "oi"))
 
 
 class BrapiIntegracaoTests(TestCase):

@@ -26,7 +26,6 @@ import requests
 from bs4 import BeautifulSoup
 from django.conf import settings
 from django.contrib.auth import get_user_model
-from django.core.exceptions import ObjectDoesNotExist
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 
@@ -3813,75 +3812,6 @@ def backtest_sinais_robo(
 
 
 # --------------------------------------------------------------------------
-# Envio de avisos proativos via WhatsApp (Meta Cloud API)
-#
-# O sistema já recebe mensagens via webhook (ver core.views.whatsapp_webhook)
-# - isso fecha o ciclo no outro sentido: enviar um aviso automático quando uma
-# meta de lucro/perda é atingida (só esses alertas vão por WhatsApp - sinais
-# do robô consultor e de tendência ficam só na tela), em vez de depender do
-# usuário lembrar de abrir a tela Alertas. Cada
-# usuário configura seu próprio número em "Minha Conta" (ver
-# accounts.models.PerfilUsuario); sem WHATSAPP_ACCESS_TOKEN e
-# WHATSAPP_PHONE_NUMBER_ID configurados no .env, o envio fica desligado e os
-# alertas continuam funcionando normalmente, só na tela.
-# --------------------------------------------------------------------------
-def whatsapp_envio_configurado() -> bool:
-    """True quando as credenciais do WhatsApp Business (Meta Cloud API) para ENVIAR mensagens estão configuradas."""
-    return bool(settings.WHATSAPP_ACCESS_TOKEN and settings.WHATSAPP_PHONE_NUMBER_ID)
-
-
-def enviar_whatsapp(numero_destino: str, mensagem: str) -> bool:
-    """
-    Envia uma mensagem de texto avulsa via WhatsApp Business (Meta Cloud API)
-    para `numero_destino` (formato internacional, só dígitos - ex:
-    5565999998888). Retorna True se a API aceitou o envio, False em qualquer
-    falha (número inválido, token expirado, API fora do ar etc.) - nunca
-    levanta exceção, porque um aviso por WhatsApp que falha não pode impedir
-    o alerta de ser gravado e exibido normalmente na tela (ver
-    _notificar_whatsapp_usuario).
-    """
-    if not whatsapp_envio_configurado() or not numero_destino:
-        return False
-
-    url = f"https://graph.facebook.com/v20.0/{settings.WHATSAPP_PHONE_NUMBER_ID}/messages"
-    headers = {"Authorization": f"Bearer {settings.WHATSAPP_ACCESS_TOKEN}"}
-    payload = {
-        "messaging_product": "whatsapp",
-        "to": numero_destino,
-        "type": "text",
-        "text": {"body": mensagem},
-    }
-    try:
-        resposta = requests.post(url, json=payload, headers=headers, timeout=10)
-        resposta.raise_for_status()
-        return True
-    except requests.RequestException:
-        return False
-
-
-def _notificar_whatsapp_usuario(usuario, mensagem: str) -> None:
-    """
-    Envia `mensagem` para o WhatsApp cadastrado do usuário (ver
-    accounts.models.PerfilUsuario), quando o envio está configurado e o
-    usuário tem um número salvo - silencioso em qualquer outro caso (usuário
-    sem perfil, sem número, ou envio desligado).
-
-    Só envia para quem está logado (sessão válida - ver usuario_esta_logado):
-    o agendador automático de cotações gera alertas para todos os usuários
-    com operações, mas quem não está com sessão aberta só vê o alerta na
-    tela Alertas quando voltar a entrar, sem receber o WhatsApp.
-    """
-    if not whatsapp_envio_configurado():
-        return
-    try:
-        numero = usuario.perfil.numero_whatsapp
-    except ObjectDoesNotExist:
-        return
-    if numero and usuario_esta_logado(usuario):
-        enviar_whatsapp(numero, mensagem)
-
-
-# --------------------------------------------------------------------------
 # "Análise da B3 hoje" por IA (tela Análise de Mercado)
 #
 # A IA só interpreta e comenta dados que o sistema já calculou sozinho
@@ -4138,6 +4068,62 @@ def gerar_sugestoes_ia(maiores_altas: list[dict], maiores_baixas: list[dict]) ->
 
 
 # --------------------------------------------------------------------------
+# Notificações pelo Telegram
+# --------------------------------------------------------------------------
+TELEGRAM_TIMEOUT_SEGUNDOS = 10
+
+
+def telegram_configurado() -> bool:
+    """True quando há token do bot e chat de destino configurados (.env)."""
+    return bool(settings.TELEGRAM_BOT_TOKEN and settings.TELEGRAM_CHAT_ID)
+
+
+def enviar_notificacao_telegram(mensagem: str) -> bool:
+    """
+    Envia uma mensagem de texto pelo bot do Telegram para o chat configurado
+    (TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID no .env). Retorna True se o
+    Telegram confirmou o envio.
+
+    Nunca levanta exceção: uma falha aqui (sem internet, token inválido) não
+    pode derrubar o ciclo de cotações nem a tela que gerou o alerta - só fica
+    registrada no log. O log não inclui a exceção crua porque o texto dela
+    traz a URL da requisição, e a URL contém o token do bot.
+    """
+    if not telegram_configurado():
+        return False
+
+    url = f"https://api.telegram.org/bot{settings.TELEGRAM_BOT_TOKEN}/sendMessage"
+    payload = {"chat_id": settings.TELEGRAM_CHAT_ID, "text": mensagem}
+    try:
+        resposta = requests.post(url, data=payload, timeout=TELEGRAM_TIMEOUT_SEGUNDOS)
+        dados = resposta.json()
+    except (requests.RequestException, ValueError) as exc:
+        logger.warning("Falha ao enviar notificação pelo Telegram (%s).", type(exc).__name__)
+        return False
+
+    if not dados.get("ok"):
+        logger.warning(
+            "Telegram recusou a notificação (HTTP %s): %s", resposta.status_code, dados.get("description"),
+        )
+        return False
+    return True
+
+
+def notificar_alertas_telegram(usuario, alertas: list[Alerta]) -> bool:
+    """
+    Avisa pelo Telegram os alertas recém-criados de um usuário, todos numa
+    única mensagem. Como os alertas não se repetem no mesmo dia para o mesmo
+    ativo/tipo, cada um é avisado uma vez só.
+    """
+    if not alertas or not telegram_configurado():
+        return False
+
+    linhas = [f"🔔 BolsaTrader - {usuario.get_username()}"]
+    linhas += [f"• {alerta.mensagem}" for alerta in alertas]
+    return enviar_notificacao_telegram("\n".join(linhas))
+
+
+# --------------------------------------------------------------------------
 # Geração de alertas/lembretes
 # --------------------------------------------------------------------------
 def gerar_alertas_para_usuario(usuario) -> list[Alerta]:
@@ -4196,7 +4182,6 @@ def gerar_alertas_para_usuario(usuario) -> list[Alerta]:
                     percentual=posicao.lucro_perda_pct,
                 )
                 novos_alertas.append(alerta)
-                _notificar_whatsapp_usuario(usuario, alerta.mensagem)
 
         if posicao.tendencia in ("ALTA", "BAIXA"):
             ja_existe_tendencia = Alerta.objects.filter(
@@ -4215,6 +4200,7 @@ def gerar_alertas_para_usuario(usuario) -> list[Alerta]:
                 )
                 novos_alertas.append(alerta)
 
+    notificar_alertas_telegram(usuario, novos_alertas)
     return novos_alertas
 
 
@@ -4292,6 +4278,7 @@ def gerar_sinais_robo_para_usuario(usuario) -> list[Alerta]:
         if sinal == "COMPRA":
             _reservar_automaticamente(usuario, ativo)
 
+    notificar_alertas_telegram(usuario, novos_alertas)
     return novos_alertas
 
 
@@ -5223,17 +5210,3 @@ def usuarios_logados_agora() -> list[dict]:
     ]
     linhas.sort(key=lambda linha: linha["usuario"].username.lower())
     return linhas
-
-
-def usuario_esta_logado(usuario) -> bool:
-    """True quando o usuário tem pelo menos uma sessão válida (não expirada) agora - mesma aproximação de usuarios_logados_agora."""
-    from django.contrib.sessions.models import Session
-
-    for sessao in Session.objects.filter(expire_date__gte=timezone.now()):
-        try:
-            dados = sessao.get_decoded()
-        except Exception:
-            continue
-        if str(dados.get("_auth_user_id")) == str(usuario.pk):
-            return True
-    return False

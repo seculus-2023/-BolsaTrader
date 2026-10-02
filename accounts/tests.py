@@ -34,7 +34,7 @@ class CadastroTelefoneTests(TestCase):
 
 
 class MinhaContaTests(TestCase):
-    """Tela de edição do número de WhatsApp usado para avisos automáticos (ver core.services.enviar_whatsapp)."""
+    """Tela de edição do número de WhatsApp de contato do usuário."""
 
     def setUp(self):
         self.usuario = User.objects.create_user(username="investidor_conta", password="SenhaForte123!")

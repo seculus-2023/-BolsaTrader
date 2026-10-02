@@ -14,8 +14,7 @@ class CadastroForm(UserCreationForm):
     telefone = forms.CharField(
         required=False, label="Telefone (WhatsApp)", max_length=20,
         widget=forms.TextInput(attrs={"placeholder": "5565999998888", "inputmode": "tel"}),
-        help_text="Formato internacional, com DDI e DDD (ex: 5565999998888). Opcional - usado para "
-        "receber avisos automáticos por WhatsApp.",
+        help_text="Formato internacional, com DDI e DDD (ex: 5565999998888). Opcional.",
     )
 
     field_order = ["username", "first_name", "email", "telefone", "password1", "password2"]
@@ -62,16 +61,15 @@ class LoginFuturistaForm(forms.Form):
 
 class PerfilUsuarioForm(forms.ModelForm):
     """
-    Edita o número de WhatsApp para onde o BolsaTrader envia avisos
-    proativos (meta de lucro/perda atingida, sinal do robô consultor) - ver
-    core.services.enviar_whatsapp. Deixar em branco desliga o envio pra esse
-    usuário; os alertas continuam aparecendo normalmente na tela.
+    Edita o número de WhatsApp de contato do usuário (opcional). O
+    BolsaTrader não envia mensagens para esse número - os alertas aparecem
+    só na tela Alertas.
     """
 
     class Meta:
         model = PerfilUsuario
         fields = ["numero_whatsapp"]
-        labels = {"numero_whatsapp": "Número do WhatsApp para avisos"}
+        labels = {"numero_whatsapp": "Número do WhatsApp"}
         widgets = {
             "numero_whatsapp": forms.TextInput(attrs={"placeholder": "5565999998888"}),
         }

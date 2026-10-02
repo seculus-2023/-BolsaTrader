@@ -47,11 +47,9 @@ def cadastro_view(request):
 @login_required
 def minha_conta_view(request):
     """
-    Tela para o usuário informar/atualizar seu número de WhatsApp, usado para
-    receber avisos proativos (meta de lucro/perda atingida, sinal do robô
-    consultor - ver core.services.enviar_whatsapp) - o perfil é criado sob
-    demanda na primeira visita a esta tela (get_or_create), não em todo
-    cadastro de usuário.
+    Tela para o usuário informar/atualizar seu número de WhatsApp de contato
+    - o perfil é criado sob demanda na primeira visita a esta tela
+    (get_or_create), não em todo cadastro de usuário.
     """
     perfil, _ = PerfilUsuario.objects.get_or_create(usuario=request.user)
 

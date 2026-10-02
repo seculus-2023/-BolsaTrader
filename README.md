@@ -42,3 +42,5 @@ python manage.py test
 
 **Consulte o manual completo (instalação passo a passo e manual de uso) no arquivo
 `BolsaTrader_Manual_Instalacao_e_Uso.docx`.**
+
+

@@ -27,8 +27,6 @@ from django.contrib.sessions.models import Session
 from django.urls import reverse
 from django.utils import timezone
 
-from accounts.models import PerfilUsuario
-
 from . import services as core_services
 from .forms import OperacaoForm, VendaLoteForm
 from .models import (
@@ -42,7 +40,6 @@ from .services import (
     buscar_historico_precos, backfill_historico_cotacoes, backtest_sinais_robo,
     buscar_historico_cdi, calcular_comparativo_benchmark, _retorno_indice_periodo, _retorno_cdi_periodo,
     calcular_concentracao_setor, calcular_metricas_risco,
-    enviar_whatsapp, whatsapp_envio_configurado,
     registrar_atualizacao_carteira, excluir_registros_atualizacao_antigos,
     excluir_registros_atualizacao_por_periodo, construir_grafico_atualizacoes_dia,
     calcular_variacoes_historico, executar_ciclo_atualizacao_cotacoes, iniciar_agendador_cotacoes_embutido,
@@ -915,6 +912,60 @@ class AlertasTests(TestCase):
         gerar_alertas_para_usuario(self.usuario)
         total_depois = Alerta.objects.count()
         self.assertEqual(total_antes, total_depois)
+
+
+class NotificacaoTelegramTests(TestCase):
+    def setUp(self):
+        self.usuario = User.objects.create_user(username="investidor_tg", password="SenhaForte123!")
+        self.ativo = Ativo.objects.create(ticker="BBDC4")
+        Operacao.objects.create(
+            usuario=self.usuario, ativo=self.ativo, tipo=Operacao.COMPRA,
+            quantidade=10, preco_unitario=Decimal("20.00"), data_operacao=date.today(),
+            meta_lucro_pct=Decimal("5.0"), meta_perda_pct=Decimal("-5.0"),
+        )
+        Cotacao.objects.create(ativo=self.ativo, data=date.today(), preco_fechamento=Decimal("25.00"))  # +25%
+
+    @patch("core.services.requests.post")
+    def test_sem_token_configurado_nao_envia(self, mock_post):
+        with override_settings(TELEGRAM_BOT_TOKEN="", TELEGRAM_CHAT_ID="123"):
+            alertas = gerar_alertas_para_usuario(self.usuario)
+        self.assertTrue(alertas)
+        mock_post.assert_not_called()
+
+    @patch("core.services.requests.post")
+    def test_alerta_novo_e_enviado_uma_vez_so(self, mock_post):
+        mock_post.return_value = Mock(status_code=200, json=Mock(return_value={"ok": True}))
+        with override_settings(TELEGRAM_BOT_TOKEN="token-falso", TELEGRAM_CHAT_ID="123"):
+            gerar_alertas_para_usuario(self.usuario)
+            gerar_alertas_para_usuario(self.usuario)  # mesmo dia: nenhum alerta novo
+
+        mock_post.assert_called_once()
+        args, kwargs = mock_post.call_args
+        self.assertEqual(args[0], "https://api.telegram.org/bottoken-falso/sendMessage")
+        self.assertEqual(kwargs["data"]["chat_id"], "123")
+        self.assertIn("investidor_tg", kwargs["data"]["text"])
+        self.assertIn("BBDC4: meta de lucro atingida", kwargs["data"]["text"])
+
+    @patch("core.services.requests.post")
+    def test_falha_no_telegram_nao_impede_o_alerta_nem_vaza_o_token(self, mock_post):
+        mock_post.side_effect = requests.ConnectionError(
+            "https://api.telegram.org/bottoken-falso/sendMessage"
+        )
+        with override_settings(TELEGRAM_BOT_TOKEN="token-falso", TELEGRAM_CHAT_ID="123"):
+            with self.assertLogs("core.services", level="WARNING") as logs:
+                alertas = gerar_alertas_para_usuario(self.usuario)
+
+        self.assertIn(Alerta.LUCRO, [a.tipo for a in alertas])
+        self.assertNotIn("token-falso", "\n".join(logs.output))
+
+    @patch("core.services.requests.post")
+    def test_telegram_recusando_retorna_false(self, mock_post):
+        mock_post.return_value = Mock(
+            status_code=401, json=Mock(return_value={"ok": False, "description": "Unauthorized"}),
+        )
+        with override_settings(TELEGRAM_BOT_TOKEN="token-falso", TELEGRAM_CHAT_ID="123"):
+            with self.assertLogs("core.services", level="WARNING"):
+                self.assertFalse(core_services.enviar_notificacao_telegram("oi"))
 
 
 class BrapiIntegracaoTests(TestCase):
@@ -2608,100 +2659,6 @@ class MetricasRiscoTests(TestCase):
         Cotacao.objects.create(ativo=self.ativo, data=date.today(), preco_fechamento=Decimal("33.00"))
         resposta = self.client.get(reverse("core:posicoes"))
         self.assertContains(resposta, "Indicadores de risco")
-
-
-class EnviarWhatsappTests(TestCase):
-    """core.services.enviar_whatsapp / whatsapp_envio_configurado e o disparo a partir dos alertas."""
-
-    def setUp(self):
-        self.usuario = User.objects.create_user(username="investidor_wa", password="SenhaForte123!")
-        self.ativo = Ativo.objects.create(ticker="PETR4")
-
-    def test_envio_desligado_sem_credenciais_configuradas(self):
-        with override_settings(WHATSAPP_ACCESS_TOKEN="", WHATSAPP_PHONE_NUMBER_ID=""):
-            self.assertFalse(whatsapp_envio_configurado())
-            self.assertFalse(enviar_whatsapp("5565999998888", "teste"))
-
-    @patch("core.services.requests.post")
-    def test_envio_bem_sucedido_chama_a_api_da_meta_corretamente(self, mock_post):
-        mock_post.return_value.raise_for_status = lambda: None
-        with override_settings(WHATSAPP_ACCESS_TOKEN="token123", WHATSAPP_PHONE_NUMBER_ID="1234567890"):
-            resultado = enviar_whatsapp("5565999998888", "PETR4: meta de lucro atingida")
-
-        self.assertTrue(resultado)
-        url_chamada = mock_post.call_args[0][0]
-        self.assertIn("1234567890", url_chamada)
-        payload = mock_post.call_args.kwargs["json"]
-        self.assertEqual(payload["to"], "5565999998888")
-        self.assertEqual(payload["text"]["body"], "PETR4: meta de lucro atingida")
-
-    @patch("core.services.requests.post")
-    def test_falha_na_api_retorna_false_sem_lancar_excecao(self, mock_post):
-        mock_post.side_effect = requests.RequestException("fora do ar")
-        with override_settings(WHATSAPP_ACCESS_TOKEN="token123", WHATSAPP_PHONE_NUMBER_ID="1234567890"):
-            self.assertFalse(enviar_whatsapp("5565999998888", "teste"))
-
-    @patch("core.services.enviar_whatsapp")
-    def test_alerta_de_meta_dispara_envio_quando_usuario_tem_numero_cadastrado(self, mock_enviar):
-        self.client.login(username="investidor_wa", password="SenhaForte123!")
-        PerfilUsuario.objects.create(usuario=self.usuario, numero_whatsapp="5565999998888")
-        Operacao.objects.create(
-            usuario=self.usuario, ativo=self.ativo, tipo=Operacao.COMPRA,
-            quantidade=10, preco_unitario=Decimal("20.00"), data_operacao=date.today(),
-            meta_lucro_pct=Decimal("5.0"), meta_perda_pct=Decimal("-5.0"),
-        )
-        Cotacao.objects.create(ativo=self.ativo, data=date.today(), preco_fechamento=Decimal("25.00"))
-
-        with override_settings(WHATSAPP_ACCESS_TOKEN="token123", WHATSAPP_PHONE_NUMBER_ID="1234567890"):
-            gerar_alertas_para_usuario(self.usuario)
-
-        mock_enviar.assert_called_once()
-        self.assertEqual(mock_enviar.call_args[0][0], "5565999998888")
-
-    @patch("core.services.enviar_whatsapp")
-    def test_alerta_nao_dispara_envio_para_usuario_que_nao_esta_logado(self, mock_enviar):
-        PerfilUsuario.objects.create(usuario=self.usuario, numero_whatsapp="5565999998888")
-        Operacao.objects.create(
-            usuario=self.usuario, ativo=self.ativo, tipo=Operacao.COMPRA,
-            quantidade=10, preco_unitario=Decimal("20.00"), data_operacao=date.today(),
-            meta_lucro_pct=Decimal("5.0"), meta_perda_pct=Decimal("-5.0"),
-        )
-        Cotacao.objects.create(ativo=self.ativo, data=date.today(), preco_fechamento=Decimal("25.00"))
-
-        with override_settings(WHATSAPP_ACCESS_TOKEN="token123", WHATSAPP_PHONE_NUMBER_ID="1234567890"):
-            alertas = gerar_alertas_para_usuario(self.usuario)
-
-        self.assertTrue(alertas)  # o alerta é gravado normalmente, só não vai por WhatsApp
-        mock_enviar.assert_not_called()
-
-    @patch("core.services.enviar_whatsapp")
-    def test_alerta_nao_dispara_envio_sem_numero_cadastrado(self, mock_enviar):
-        Operacao.objects.create(
-            usuario=self.usuario, ativo=self.ativo, tipo=Operacao.COMPRA,
-            quantidade=10, preco_unitario=Decimal("20.00"), data_operacao=date.today(),
-            meta_lucro_pct=Decimal("5.0"), meta_perda_pct=Decimal("-5.0"),
-        )
-        Cotacao.objects.create(ativo=self.ativo, data=date.today(), preco_fechamento=Decimal("25.00"))
-
-        with override_settings(WHATSAPP_ACCESS_TOKEN="token123", WHATSAPP_PHONE_NUMBER_ID="1234567890"):
-            gerar_alertas_para_usuario(self.usuario)
-
-        mock_enviar.assert_not_called()
-
-    @patch("core.services.enviar_whatsapp")
-    def test_alerta_nao_dispara_envio_quando_credenciais_nao_configuradas(self, mock_enviar):
-        PerfilUsuario.objects.create(usuario=self.usuario, numero_whatsapp="5565999998888")
-        Operacao.objects.create(
-            usuario=self.usuario, ativo=self.ativo, tipo=Operacao.COMPRA,
-            quantidade=10, preco_unitario=Decimal("20.00"), data_operacao=date.today(),
-            meta_lucro_pct=Decimal("5.0"), meta_perda_pct=Decimal("-5.0"),
-        )
-        Cotacao.objects.create(ativo=self.ativo, data=date.today(), preco_fechamento=Decimal("25.00"))
-
-        with override_settings(WHATSAPP_ACCESS_TOKEN="", WHATSAPP_PHONE_NUMBER_ID=""):
-            gerar_alertas_para_usuario(self.usuario)
-
-        mock_enviar.assert_not_called()
 
 
 class AnaliseB3IaTests(TestCase):

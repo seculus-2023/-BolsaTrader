@@ -1812,7 +1812,7 @@ def construir_comparativo_valores(
 # Exportação das posições em carteira (Excel / PDF)
 # --------------------------------------------------------------------------
 COLUNAS_EXPORTACAO_POSICOES = [
-    "Ativo", "Quantidade", "Preço médio (R$)", "Valor investido (R$)",
+    "Ativo", "Quantidade", "Preço compra (R$)", "Valor investido (R$)",
     "Cotação atual (R$)", "Alvo (R$)", "Valor atual (R$)", "Lucro/Perda (R$)", "Lucro/Perda (%)",
     "Meta lucro (%)", "Meta perda (%)", "Tendência", "Dias em carteira",
 ]

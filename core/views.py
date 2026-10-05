@@ -1452,6 +1452,7 @@ def tradingview(request):
     contexto = {
         "tickers": tickers,
         "tradingview_url_pesquisa": settings.TRADINGVIEW_URL_PESQUISA,
+        "home_broker_url": settings.HOME_BROKER_URL,
     }
     return render(request, "core/tradingview.html", contexto)
 

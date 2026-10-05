@@ -28,16 +28,42 @@
         <button type="submit" id="btn-abrir-tradingview-url" class="btn-futurista">Abrir em nova aba</button>
     </form>
 </div>
+
+<div class="card-glass" style="margin-bottom: 1.4rem;">
+    <h3 style="margin-top: 0;">Abrir o Home Broker da corretora em nova aba</h3>
+    <p style="color: var(--text-dim);">
+        Abra o Home Broker da sua corretora (ex: Clear) para enviar ordens. Assim como o TradingView, o Home Broker
+        não permite ser aberto dentro de outra página (bloqueio de segurança da corretora), por isso ele abre em
+        uma nova aba. O valor já vem preenchido com a URL configurada em <code>HOME_BROKER_URL</code> no
+        <code>.env</code> - cole outra URL se usar outra corretora.
+    </p>
+    <form id="form-home-broker-url" style="display: flex; flex-wrap: wrap; gap: .6rem;" onsubmit="return false;">
+        <input
+            type="url"
+            id="campo-home-broker-url"
+            value="{{ home_broker_url }}"
+            placeholder="https://trader.clear.com.br/home-broker/new/"
+            required
+            style="flex: 1 1 320px; padding: .55rem .8rem; border-radius: .5rem; border: 1px solid var(--borda, #2a3550); background: var(--bg-input, #0D1526); color: var(--text, #fff);"
+        >
+        <button type="submit" id="btn-abrir-home-broker-url" class="btn-futurista">Abrir Home Broker</button>
+    </form>
+</div>
 <script>
     (function () {
-        var form = document.getElementById("form-tradingview-url");
-        var campo = document.getElementById("campo-tradingview-url");
-        if (!form || !campo) return;
-        form.addEventListener("submit", function () {
-            var url = campo.value.trim();
-            if (url) {
-                window.open(url, "_blank", "noopener,noreferrer");
-            }
+        [
+            ["form-tradingview-url", "campo-tradingview-url"],
+            ["form-home-broker-url", "campo-home-broker-url"]
+        ].forEach(function (ids) {
+            var form = document.getElementById(ids[0]);
+            var campo = document.getElementById(ids[1]);
+            if (!form || !campo) return;
+            form.addEventListener("submit", function () {
+                var url = campo.value.trim();
+                if (url) {
+                    window.open(url, "_blank", "noopener,noreferrer");
+                }
+            });
         });
     })();
 </script>

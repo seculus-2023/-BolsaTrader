@@ -271,6 +271,14 @@ TRADINGVIEW_URL_PESQUISA = config(
     default="https://br.tradingview.com/markets/stocks-brazil/market-movers-all-stocks/",
 )
 
+# Home Broker da corretora: URL padrão do campo "abrir Home Broker" da tela
+# TradingView - o usuário pode digitar/colar outra URL na hora (ex: home broker
+# de outra corretora), este é só o valor pré-preenchido no campo.
+HOME_BROKER_URL = config(
+    "HOME_BROKER_URL",
+    default="https://trader.clear.com.br/home-broker/new/",
+)
+
 
 # --------------------------------------------------------------------------
 # Horário de negociação da B3 (Bolsa de Valores) - mostrado em destaque nas

@@ -4,6 +4,9 @@ from django.contrib.auth.views import LoginView, LogoutView
 from django.shortcuts import render, redirect
 from django.urls import reverse_lazy
 from django.contrib import messages
+from django.views.decorators.http import require_POST
+
+from core.services import limpar_dados_sistema
 
 from .forms import CadastroForm, PerfilUsuarioForm
 from .models import PerfilUsuario
@@ -63,3 +66,25 @@ def minha_conta_view(request):
         form = PerfilUsuarioForm(instance=perfil)
 
     return render(request, "accounts/minha_conta.html", {"form": form})
+
+
+@login_required
+@require_POST
+def limpar_dados_view(request):
+    """
+    Apaga os dados de TODOS os usuários (operações, alertas, conta corrente,
+    cripto, cotações, notícias etc.), mantendo só Ações da B3, os usuários e
+    Minha Conta - ver core.services.limpar_dados_sistema. Qualquer usuário
+    logado pode usar, mas precisa confirmar digitando a própria senha.
+    """
+    senha = request.POST.get("senha", "")
+    if not senha or not request.user.check_password(senha):
+        messages.error(request, "Senha incorreta - nenhum dado foi apagado.")
+        return redirect("accounts:minha_conta")
+
+    total = limpar_dados_sistema()
+    messages.success(
+        request,
+        f"Dados do sistema apagados ({total} registro(s)). Ações da B3, usuários e Minha Conta foram mantidos.",
+    )
+    return redirect("accounts:minha_conta")

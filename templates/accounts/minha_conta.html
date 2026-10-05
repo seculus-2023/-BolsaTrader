@@ -29,6 +29,32 @@
     </form>
 </div>
 
+<div class="card-glass" style="max-width: 480px; margin-top: 2rem; border-color: var(--neon-red);">
+    <h3 style="margin-top: 0; color: var(--neon-red);">Limpar dados do sistema</h3>
+    <p style="color: var(--text-dim);">
+        Apaga <strong>todos os dados de todos os usuários</strong>: operações, alertas, conta corrente,
+        criptomoedas, post-its, histórico de atualizações, ativos e cotações, índices, notícias e fontes de
+        notícias e mensagens do WhatsApp. Ficam só <strong>Ações da B3</strong>, os <strong>usuários</strong>
+        cadastrados e os dados de <strong>Minha Conta</strong>. Não dá para desfazer.
+    </p>
+    <form method="post" action="{% url 'accounts:limpar_dados' %}" class="form-futurista" id="form-limpar-dados">
+        {% csrf_token %}
+        <label for="campo-senha-limpar">Digite sua senha para confirmar</label>
+        <input type="password" name="senha" id="campo-senha-limpar" required autocomplete="current-password">
+        <button type="submit" class="btn-futurista" style="margin-top: 1.4rem; background: var(--neon-red); border-color: var(--neon-red);">
+            Limpar dados
+        </button>
+    </form>
+</div>
+
+<script>
+    document.getElementById("form-limpar-dados").addEventListener("submit", function (evento) {
+        if (!confirm("Apagar TODOS os dados do sistema (de todos os usuários)? Ficam só Ações da B3, usuários e Minha Conta. Não dá para desfazer.")) {
+            evento.preventDefault();
+        }
+    });
+</script>
+
 <script>
     // Botão de olho ao lado dos campos mascarados (assinatura eletrônica):
     // alterna entre mostrar e esconder o valor digitado.

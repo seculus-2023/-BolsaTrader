@@ -31,10 +31,11 @@ from django.utils.dateparse import parse_datetime
 
 logger = logging.getLogger(__name__)
 
+from django.db import transaction
 from django.db.models import F, Sum
 
 from .models import (
-    ConsumoApiBrapi,
+    ConsumoApiBrapi, MensagemWhatsapp,
     Ativo, Cotacao, Operacao, Alerta, FonteNoticia, Noticia, AcaoB3, CotacaoIndice,
     RegistroAtualizacaoCarteira, ContaCorrente, LancamentoContaCorrente, PostIt,
     CriptoAtivo, OperacaoCripto, CotacaoCripto, RegistroAtualizacaoCarteiraCripto,
@@ -5244,3 +5245,49 @@ def usuarios_logados_agora() -> list[dict]:
     ]
     linhas.sort(key=lambda linha: linha["usuario"].username.lower())
     return linhas
+
+
+# --------------------------------------------------------------------------
+# Limpeza geral dos dados (botão "Limpar dados do sistema" em Minha Conta)
+# --------------------------------------------------------------------------
+# Apagados de TODOS os usuários, na ordem em que aparecem (filhos antes dos
+# pais, por causa dos on_delete=PROTECT de Operacao.ativo e
+# OperacaoCripto.cripto_ativo). Ficam de fora só o catálogo Ações da B3
+# (AcaoB3), o contador de consumo da API brapi.dev (ConsumoApiBrapi - controle
+# do orçamento mensal do plano, não é cadastro) e, no app accounts, os
+# usuários e seus perfis (Minha Conta). Model novo no core precisa entrar
+# numa das duas listas - core.tests.LimparDadosSistemaTests confere isso.
+MODELOS_LIMPOS_NA_LIMPEZA_GERAL = [
+    LancamentoContaCorrente,
+    ContaCorrente,
+    OperacaoCripto,
+    CotacaoCripto,
+    RegistroAtualizacaoCarteiraCripto,
+    CriptoAtivo,
+    Alerta,
+    Operacao,
+    Cotacao,
+    Ativo,
+    RegistroAtualizacaoCarteira,
+    CotacaoIndice,
+    Noticia,
+    FonteNoticia,
+    MensagemWhatsapp,
+    PostIt,
+]
+MODELOS_PRESERVADOS_NA_LIMPEZA_GERAL = [AcaoB3, ConsumoApiBrapi]
+
+
+@transaction.atomic
+def limpar_dados_sistema() -> int:
+    """
+    Apaga todos os dados do sistema, exceto o catálogo Ações da B3, os
+    usuários e seus perfis (ver MODELOS_LIMPOS_NA_LIMPEZA_GERAL). Tudo numa
+    transação só: se algo falhar, nada é apagado. Devolve o total de
+    registros apagados.
+    """
+    total = 0
+    for modelo in MODELOS_LIMPOS_NA_LIMPEZA_GERAL:
+        apagados, _ = modelo.objects.all().delete()
+        total += apagados
+    return total

@@ -5806,3 +5806,50 @@ class ContasLogadasNoPainelTests(TestCase):
         resposta = self.client.get(reverse("core:dashboard"))
 
         self.assertContains(resposta, "investidor_outro_logado")
+
+
+class LimparDadosSistemaTests(TestCase):
+    """Botão "Limpar dados do sistema" de Minha Conta (accounts.views.limpar_dados_view)."""
+
+    def setUp(self):
+        from core.models import AcaoB3, Ativo, FonteNoticia, Operacao
+        self.usuario = User.objects.create_user(username="investidor_limpeza", password="SenhaForte123!")
+        self.outro = User.objects.create_user(username="outro_limpeza", password="SenhaForte123!")
+        PerfilUsuario.objects.create(usuario=self.usuario, numero_whatsapp="5565999998888")
+        ativo = Ativo.objects.create(ticker="PETR4")
+        for usuario in (self.usuario, self.outro):
+            Operacao.objects.create(
+                usuario=usuario, ativo=ativo, tipo=Operacao.COMPRA,
+                quantidade=10, preco_unitario=Decimal("5.00"), data_operacao=date.today(),
+            )
+        AcaoB3.objects.create(ticker="VALE3")
+        FonteNoticia.objects.create(nome="Fonte", url="https://exemplo.com/")
+        self.client.login(username="investidor_limpeza", password="SenhaForte123!")
+
+    def test_senha_errada_nao_apaga_nada(self):
+        from core.models import Operacao
+        resposta = self.client.post(reverse("accounts:limpar_dados"), {"senha": "errada"}, follow=True)
+        self.assertContains(resposta, "Senha incorreta")
+        self.assertEqual(Operacao.objects.count(), 2)
+
+    def test_get_nao_apaga(self):
+        from core.models import Operacao
+        resposta = self.client.get(reverse("accounts:limpar_dados"))
+        self.assertEqual(resposta.status_code, 405)
+        self.assertEqual(Operacao.objects.count(), 2)
+
+    def test_senha_certa_apaga_tudo_menos_acoes_b3_usuarios_e_perfis(self):
+        from core.models import AcaoB3, Ativo, FonteNoticia, Operacao
+        resposta = self.client.post(reverse("accounts:limpar_dados"), {"senha": "SenhaForte123!"})
+        self.assertRedirects(resposta, reverse("accounts:minha_conta"))
+        self.assertEqual(Operacao.objects.count(), 0)  # inclusive as do outro usuário
+        self.assertEqual(Ativo.objects.count(), 0)
+        self.assertEqual(FonteNoticia.objects.count(), 0)
+        self.assertEqual(AcaoB3.objects.count(), 1)
+        self.assertEqual(User.objects.count(), 2)
+        self.assertEqual(PerfilUsuario.objects.get(usuario=self.usuario).numero_whatsapp, "5565999998888")
+
+    def test_todo_model_do_core_esta_classificado(self):
+        from core.services import MODELOS_LIMPOS_NA_LIMPEZA_GERAL, MODELOS_PRESERVADOS_NA_LIMPEZA_GERAL
+        classificados = set(MODELOS_LIMPOS_NA_LIMPEZA_GERAL) | set(MODELOS_PRESERVADOS_NA_LIMPEZA_GERAL)
+        self.assertEqual(set(django_apps.get_app_config("core").get_models()), classificados)

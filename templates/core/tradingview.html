@@ -30,12 +30,14 @@
 </div>
 
 <div class="card-glass" style="margin-bottom: 1.4rem;">
-    <h3 style="margin-top: 0;">Abrir o Home Broker da corretora em nova aba</h3>
+    <h3 style="margin-top: 0;">Abrir o Home Broker da corretora ao lado do sistema</h3>
     <p style="color: var(--text-dim);">
-        Abra o Home Broker da sua corretora (ex: Clear) para enviar ordens. Assim como o TradingView, o Home Broker
-        não permite ser aberto dentro de outra página (bloqueio de segurança da corretora), por isso ele abre em
-        uma nova aba. O valor já vem preenchido com a URL configurada em <code>HOME_BROKER_URL</code> no
-        <code>.env</code> - cole outra URL se usar outra corretora.
+        Abra o Home Broker da sua corretora (ex: Clear) para enviar ordens. A corretora não permite que o Home
+        Broker seja embutido dentro de outra página (bloqueio de segurança <code>frame-ancestors</code>), então ele
+        abre numa janela própria, sem abas, já posicionada na metade direita da tela - deixe o BolsaTrader na
+        metade esquerda para trabalhar com os dois lado a lado. Clicar de novo reaproveita a mesma janela. O valor
+        já vem preenchido com a URL configurada em <code>HOME_BROKER_URL</code> no <code>.env</code> - cole outra
+        URL se usar outra corretora.
     </p>
     <form id="form-home-broker-url" style="display: flex; flex-wrap: wrap; gap: .6rem;" onsubmit="return false;">
         <input
@@ -51,19 +53,44 @@
 </div>
 <script>
     (function () {
-        [
-            ["form-tradingview-url", "campo-tradingview-url"],
-            ["form-home-broker-url", "campo-home-broker-url"]
-        ].forEach(function (ids) {
-            var form = document.getElementById(ids[0]);
-            var campo = document.getElementById(ids[1]);
+        function ligar(idForm, idCampo, abrir) {
+            var form = document.getElementById(idForm);
+            var campo = document.getElementById(idCampo);
             if (!form || !campo) return;
             form.addEventListener("submit", function () {
                 var url = campo.value.trim();
-                if (url) {
-                    window.open(url, "_blank", "noopener,noreferrer");
-                }
+                if (url) abrir(url);
             });
+        }
+
+        ligar("form-tradingview-url", "campo-tradingview-url", function (url) {
+            window.open(url, "_blank", "noopener,noreferrer");
+        });
+
+        // Home Broker: janela própria (popup sem abas) encaixada na metade direita
+        // da tela. O nome fixo faz um novo clique reaproveitar a mesma janela.
+        ligar("form-home-broker-url", "campo-home-broker-url", function (url) {
+            var tela = window.screen;
+            var esquerdaTela = tela.availLeft || 0;
+            var topoTela = tela.availTop || 0;
+            var largura = Math.floor(tela.availWidth / 2);
+            var altura = tela.availHeight;
+            var recursos = [
+                "popup=yes",
+                "width=" + largura,
+                "height=" + altura,
+                "left=" + (esquerdaTela + tela.availWidth - largura),
+                "top=" + topoTela,
+                "resizable=yes",
+                "scrollbars=yes"
+            ].join(",");
+            var janela = window.open(url, "bolsatrader_home_broker", recursos);
+            if (!janela) {
+                alert("O navegador bloqueou a janela do Home Broker. Permita pop-ups para este site e tente de novo.");
+                return;
+            }
+            try { janela.opener = null; } catch (e) {}
+            janela.focus();
         });
     })();
 </script>

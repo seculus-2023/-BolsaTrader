@@ -7,7 +7,8 @@ class PerfilUsuario(models.Model):
     Dados complementares do usuário, além do que o User padrão do Django já
     guarda: o número de WhatsApp de contato (o BolsaTrader não envia
     mensagens para ele) e o bot do Telegram do próprio usuário, por onde ele
-    recebe os avisos de alerta (core.services.notificar_alertas_telegram).
+    recebe os avisos de alerta (core.services.notificar_alertas_telegram), e
+    a assinatura eletrônica da corretora, só para consulta do usuário.
 
     Criado no cadastro quando o usuário informa o telefone (accounts.forms.
     CadastroForm) ou sob demanda (get_or_create) pela view
@@ -31,6 +32,13 @@ class PerfilUsuario(models.Model):
     telegram_chat_id = models.CharField(
         "Chat ID do Telegram", max_length=32, blank=True,
         help_text="ID do chat que recebe os avisos (ex: 2065125150). Opcional.",
+    )
+    # Assinatura eletrônica que a corretora (ex: Clear) pede para confirmar o
+    # envio de ordens no Home Broker - só guardada aqui para consulta do próprio
+    # usuário; o BolsaTrader não envia ordens à corretora.
+    assinatura_eletronica = models.CharField(
+        "Assinatura eletrônica da corretora", max_length=32, blank=True,
+        help_text="Assinatura que a corretora pede para confirmar ordens no Home Broker. Opcional.",
     )
     atualizado_em = models.DateTimeField(auto_now=True)
 

@@ -92,6 +92,18 @@ class MinhaContaTests(TestCase):
         self.assertContains(resposta, "preencha o token do bot e o Chat ID")
         self.assertFalse(PerfilUsuario.objects.filter(usuario=self.usuario, telegram_bot_token__gt="").exists())
 
+    def test_salva_assinatura_eletronica(self):
+        self.client.post(reverse("accounts:minha_conta"), {
+            "numero_whatsapp": "", "assinatura_eletronica": " 12345678 ",
+        })
+        perfil = PerfilUsuario.objects.get(usuario=self.usuario)
+        self.assertEqual(perfil.assinatura_eletronica, "12345678")
+
+    def test_assinatura_eletronica_aparece_mascarada(self):
+        PerfilUsuario.objects.create(usuario=self.usuario, assinatura_eletronica="12345678")
+        resposta = self.client.get(reverse("accounts:minha_conta"))
+        self.assertContains(resposta, 'type="password"')
+
     def test_outro_usuario_nao_ve_nem_altera_perfil_alheio(self):
         outro = User.objects.create_user(username="outro_conta", password="SenhaForte123!")
         PerfilUsuario.objects.create(usuario=outro, numero_whatsapp="5565911112222")

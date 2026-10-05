@@ -65,13 +65,14 @@ class PerfilUsuarioForm(forms.ModelForm):
     """
     Edita os dados da conta do usuário (todos opcionais): o número de
     WhatsApp de contato (o BolsaTrader não envia mensagens para ele) e o bot
-    do Telegram por onde o usuário recebe os avisos de alerta e a assinatura
-    eletrônica da corretora.
+    do Telegram por onde o usuário recebe os avisos de alerta, e o login
+    (usuário/senha) e a assinatura eletrônica da corretora.
     """
 
     class Meta:
         model = PerfilUsuario
-        fields = ["numero_whatsapp", "telegram_bot_token", "telegram_chat_id", "assinatura_eletronica"]
+        fields = ["numero_whatsapp", "telegram_bot_token", "telegram_chat_id",
+                  "corretora_usuario", "corretora_senha", "assinatura_eletronica"]
         labels = {"numero_whatsapp": "Número do WhatsApp"}
         widgets = {
             "numero_whatsapp": forms.TextInput(attrs={"placeholder": "5565999998888"}),
@@ -79,7 +80,11 @@ class PerfilUsuarioForm(forms.ModelForm):
                 attrs={"placeholder": "123456789:AAF...", "autocomplete": "off"}
             ),
             "telegram_chat_id": forms.TextInput(attrs={"placeholder": "2065125150"}),
-            # mascarada na tela (render_value mantém o valor salvo ao reabrir o form)
+            "corretora_usuario": forms.TextInput(attrs={"autocomplete": "off"}),
+            # mascaradas na tela (render_value mantém o valor salvo ao reabrir o form)
+            "corretora_senha": forms.PasswordInput(
+                render_value=True, attrs={"autocomplete": "new-password"}
+            ),
             "assinatura_eletronica": forms.PasswordInput(
                 render_value=True, attrs={"autocomplete": "off"}
             ),
@@ -106,6 +111,9 @@ class PerfilUsuarioForm(forms.ModelForm):
                 "Token inválido - copie exatamente como o @BotFather mostrou (ex: 123456789:AAF...)."
             )
         return token
+
+    def clean_corretora_usuario(self):
+        return self.cleaned_data["corretora_usuario"].strip()
 
     def clean_assinatura_eletronica(self):
         return self.cleaned_data["assinatura_eletronica"].strip()

@@ -99,6 +99,14 @@ class MinhaContaTests(TestCase):
         perfil = PerfilUsuario.objects.get(usuario=self.usuario)
         self.assertEqual(perfil.assinatura_eletronica, "12345678")
 
+    def test_salva_usuario_e_senha_da_corretora(self):
+        self.client.post(reverse("accounts:minha_conta"), {
+            "numero_whatsapp": "", "corretora_usuario": " 12345678900 ", "corretora_senha": "Senha da Corretora1",
+        })
+        perfil = PerfilUsuario.objects.get(usuario=self.usuario)
+        self.assertEqual(perfil.corretora_usuario, "12345678900")
+        self.assertEqual(perfil.corretora_senha, "Senha da Corretora1")
+
     def test_assinatura_eletronica_aparece_mascarada(self):
         PerfilUsuario.objects.create(usuario=self.usuario, assinatura_eletronica="12345678")
         resposta = self.client.get(reverse("accounts:minha_conta"))

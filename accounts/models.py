@@ -8,7 +8,8 @@ class PerfilUsuario(models.Model):
     guarda: o número de WhatsApp de contato (o BolsaTrader não envia
     mensagens para ele) e o bot do Telegram do próprio usuário, por onde ele
     recebe os avisos de alerta (core.services.notificar_alertas_telegram), e
-    a assinatura eletrônica da corretora, só para consulta do usuário.
+    o login (usuário/senha) e a assinatura eletrônica da corretora, só para
+    consulta do usuário.
 
     Criado no cadastro quando o usuário informa o telefone (accounts.forms.
     CadastroForm) ou sob demanda (get_or_create) pela view
@@ -33,9 +34,17 @@ class PerfilUsuario(models.Model):
         "Chat ID do Telegram", max_length=32, blank=True,
         help_text="ID do chat que recebe os avisos (ex: 2065125150). Opcional.",
     )
-    # Assinatura eletrônica que a corretora (ex: Clear) pede para confirmar o
-    # envio de ordens no Home Broker - só guardada aqui para consulta do próprio
-    # usuário; o BolsaTrader não envia ordens à corretora.
+    # Login da corretora e assinatura eletrônica que ela (ex: Clear) pede para
+    # confirmar o envio de ordens no Home Broker - só guardados aqui para
+    # consulta do próprio usuário; o BolsaTrader não acessa a corretora.
+    corretora_usuario = models.CharField(
+        "Usuário da corretora", max_length=100, blank=True,
+        help_text="Login (CPF, e-mail ou código) usado para entrar no Home Broker. Opcional.",
+    )
+    corretora_senha = models.CharField(
+        "Senha da corretora", max_length=128, blank=True,
+        help_text="Senha de acesso ao Home Broker. Opcional.",
+    )
     assinatura_eletronica = models.CharField(
         "Assinatura eletrônica da corretora", max_length=32, blank=True,
         help_text="Assinatura que a corretora pede para confirmar ordens no Home Broker. Opcional.",

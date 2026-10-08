@@ -4789,7 +4789,7 @@ class RedistribuicaoPainelTests(TestCase):
         for resposta in (resposta_painel, resposta_posicoes):
             self.assertContains(resposta, "IGUAL3")
             self.assertContains(resposta, "Lucro/Perda por dia em carteira")
-            self.assertContains(resposta, "<th>Alvo</th>", html=True)
+            self.assertContains(resposta, '<th class="coluna-alvo">Alvo</th>', html=True)
 
         self.assertContains(resposta_posicoes, reverse("core:operacao_vender", args=[operacao.id]))
         self.assertContains(resposta_posicoes, reverse("core:operacao_editar", args=[operacao.id]))

@@ -17,7 +17,7 @@ Painel de Controle, que é só um resumo.
                 <th>Ativo</th>
                 <th>Preço compra</th>
                 <th class="coluna-destaque">Cotação atual</th>
-                <th>Alvo</th>
+                <th class="coluna-alvo">Alvo</th>
                 <th>Lucro/Perda (%)</th>
                 <th>Lucro/Perda por dia em carteira</th>
                 <th>Lucro/Perda (R$)</th>
@@ -71,7 +71,7 @@ Painel de Controle, que é só um resumo.
                 </td>
                 <td>R$ {{ p.preco_medio }}</td>
                 <td class="coluna-destaque">{% if p.preco_atual %}R$ {{ p.preco_atual }}{% else %}&mdash;{% endif %}</td>
-                <td title="Preço compra + {% if p.meta_lucro_pct %}{{ p.meta_lucro_pct }}% (meta de lucro cadastrada na compra){% else %}meta de lucro padrão do sistema{% endif %}">
+                <td class="coluna-alvo" title="Preço compra +{% if p.meta_lucro_pct %}{{ p.meta_lucro_pct }}% (meta de lucro cadastrada na compra){% else %}meta de lucro padrão do sistema{% endif %}">
                     {% if p.preco_alvo %}R$ {{ p.preco_alvo }}{% else %}&mdash;{% endif %}
                 </td>
                 <td class="{% if p.situacao == 'LUCRO' %}valor-positivo{% elif p.situacao == 'PERDA' %}valor-negativo{% else %}valor-neutro{% endif %}">

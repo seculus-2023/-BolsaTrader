@@ -348,6 +348,21 @@ table.tabela-futurista tr:hover td.coluna-destaque {
     background: rgba(0, 240, 255, 0.16);
 }
 
+/* Coluna Alvo (preço da meta de lucro) - roxo, pra não confundir com o ciano da Cotação atual. */
+table.tabela-futurista td.coluna-alvo {
+    background: rgba(168, 85, 247, 0.10);
+    color: var(--neon-purple);
+    font-weight: 700;
+}
+
+table.tabela-futurista th.coluna-alvo {
+    background: rgba(168, 85, 247, 0.18);
+}
+
+table.tabela-futurista tr:hover td.coluna-alvo {
+    background: rgba(168, 85, 247, 0.18);
+}
+
 /*
  * Linha destacada quando a meta de lucro foi atingida - sinaliza "considere
  * vender". Usa dourado/âmbar (não o verde de "valor-positivo") para não se

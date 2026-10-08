@@ -3119,6 +3119,8 @@ class RelatorioScannerEIaServicosTests(TestCase):
                 {"nome": "Suporte e resistência", "chave": "ALTA", "label": "Rompeu a resistência recente", "classe": "alta"},
                 {"nome": "Tendência de curto prazo", "chave": "ALTA", "label": "Alta", "classe": "alta"},
             ],
+            "votos_alta": 5,
+            "votos_baixa": 0,
             "volatilidade_pct": 22.5,
             "atr": 1.5,
             "suporte_resistencia": {"suporte": 8.0, "resistencia": 12.0, "rompeu_resistencia": True, "perdeu_suporte": False},
@@ -3147,7 +3149,7 @@ class RelatorioScannerEIaServicosTests(TestCase):
         import openpyxl
         wb = openpyxl.load_workbook(io.BytesIO(conteudo))
         self.assertEqual(
-            wb.sheetnames, ["Scanner Técnico", "Análise da B3 (IA)", "Sugestões de hoje (IA)"],
+            wb.sheetnames, ["Scanner Técnico", "Ranking técnico", "Análise da B3 (IA)", "Sugestões de hoje (IA)"],
         )
 
         ws1 = wb["Scanner Técnico"]

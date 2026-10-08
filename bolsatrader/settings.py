@@ -55,6 +55,12 @@ CSRF_TRUSTED_ORIGINS = config(
     cast=Csv(),
 )
 
+# Nomes de cookie próprios: o navegador não separa cookies por porta, então
+# outros projetos Django rodando em localhost (sessionid/csrftoken padrão)
+# sobrescreviam a sessão daqui e o login era pedido de novo a todo momento.
+SESSION_COOKIE_NAME = "bolsatrader_sessionid"
+CSRF_COOKIE_NAME = "bolsatrader_csrftoken"
+
 # --------------------------------------------------------------------------
 # HTTPS em produção - o Service Worker do PWA (ver static/js/service-worker-
 # source.js) só registra em conexões HTTPS ou em localhost, então sem isso o

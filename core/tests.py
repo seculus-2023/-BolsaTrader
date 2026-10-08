@@ -213,6 +213,35 @@ class VendaValidacaoELucroTests(TestCase):
         self.assertFalse(form.is_valid())
         self.assertIn("preco_venda", form.errors)
 
+    def test_form_sugere_preco_alvo_da_meta_do_lote_como_preco_de_venda(self):
+        compra = self._compra(preco="30.00")
+        compra.meta_lucro_pct = Decimal("10")
+        compra.save()
+        form = VendaLoteForm(instance=compra)
+        self.assertEqual(form.initial["preco_venda"], Decimal("33.00"))
+
+    @override_settings(META_LUCRO_PADRAO=5)
+    def test_form_sugere_preco_alvo_da_meta_padrao_sem_meta_no_lote(self):
+        form = VendaLoteForm(instance=self._compra(preco="30.00"))
+        self.assertEqual(form.initial["preco_venda"], Decimal("31.50"))
+
+    def test_form_mantem_preco_de_venda_ja_registrado(self):
+        compra = self._compra(preco="30.00")
+        compra.quantidade_vendida = 10
+        compra.preco_venda = Decimal("35.00")
+        compra.save()
+        form = VendaLoteForm(instance=compra)
+        self.assertEqual(form.initial["preco_venda"], Decimal("35.00"))
+
+    def test_tela_de_venda_mostra_preco_alvo(self):
+        compra = self._compra(preco="30.00")
+        compra.meta_lucro_pct = Decimal("10")
+        compra.save()
+        resposta = self.client.get(reverse("core:operacao_vender", args=[compra.id]))
+        self.assertContains(resposta, "Preço alvo")
+        self.assertContains(resposta, "R$ 33,00")
+        self.assertContains(resposta, 'value="33.00"')
+
     def test_view_bloqueia_venda_maior_que_o_lote_e_nao_altera_a_operacao(self):
         compra = self._compra(quantidade=5)
         resposta = self.client.post(

@@ -513,6 +513,9 @@ class VendaLoteForm(forms.ModelForm):
 
         if not self.initial.get("data_venda"):
             self.initial["data_venda"] = timezone.localdate()
+        # venda ainda não registrada: sugere o preço alvo (meta de lucro) do lote
+        if not self.initial.get("preco_venda") and self.instance.preco_alvo:
+            self.initial["preco_venda"] = self.instance.preco_alvo
 
         for name, field in self.fields.items():
             css = field.widget.attrs.get("class", "")

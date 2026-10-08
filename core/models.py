@@ -1,4 +1,4 @@
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 
 from django.conf import settings
 from django.core.exceptions import ValidationError
@@ -257,6 +257,23 @@ class Operacao(models.Model):
             else Decimal(str(settings.META_LUCRO_PADRAO))
         )
         return pct_atual >= meta
+
+    @property
+    def preco_alvo(self):
+        """
+        Preço (R$) em que este lote atinge a meta de lucro: preço de compra
+        acrescido da meta do lote (ou da padrão do sistema) - mesma regra de
+        meta_lucro_atingida. Sugerido como preço na tela de venda. None para
+        reservas.
+        """
+        if self.tipo != self.COMPRA or not self.preco_unitario:
+            return None
+        meta = abs(
+            self.meta_lucro_pct
+            if self.meta_lucro_pct is not None
+            else Decimal(str(settings.META_LUCRO_PADRAO))
+        )
+        return (self.preco_unitario * (1 + meta / 100)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
     @property
     def variacao_pct_reserva(self):

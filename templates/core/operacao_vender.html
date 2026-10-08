@@ -15,6 +15,9 @@
         {% else %}
             Saldo disponível para vender: <strong>{{ operacao.saldo }}</strong>.
         {% endif %}
+        {% if operacao.preco_alvo %}
+            <br>🎯 Preço alvo (meta de lucro): <strong>R$ {{ operacao.preco_alvo }}</strong>{% if not operacao.preco_venda %} - sugerido no preço de venda abaixo{% endif %}.
+        {% endif %}
     </p>
 
     <form method="post" class="form-futurista">

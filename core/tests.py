@@ -3289,6 +3289,29 @@ class RelatorioScannerEIaViewTests(TestCase):
         self.assertIn("RELS3", valores_sugestoes)
         self.assertIn("Boa oportunidade de entrada hoje.", valores_sugestoes)
 
+    def test_exportar_excel_tem_aba_de_ranking_tecnico_mesmo_sem_ia(self):
+        with override_settings(OPENAI_API_KEY=""):
+            resposta = self.client.get(reverse("core:scanner_ia_exportar_excel"))
+        import io
+        import openpyxl
+        wb = openpyxl.load_workbook(io.BytesIO(resposta.content))
+        self.assertIn("Ranking técnico", wb.sheetnames)
+        self.assertEqual(wb.sheetnames.index("Ranking técnico"), 1)  # logo depois do Scanner Técnico
+
+    @patch("core.services._score_scanner")
+    def test_ranking_tecnico_ordena_por_pontuacao_e_ignora_sem_pontuacao(self, mock_score):
+        from core.services import _ranking_tecnico_scanner
+        mock_score.side_effect = lambda item: item["score_fake"]
+        itens = [
+            {"ativo": Ativo(ticker="AAAA3"), "veredito_label": "Neutro", "score_fake": 40},
+            {"ativo": Ativo(ticker="BBBB3"), "veredito_label": "Compra", "score_fake": 85},
+            {"ativo": Ativo(ticker="CCCC3"), "veredito_label": "—", "score_fake": None},
+        ]
+        ranking = _ranking_tecnico_scanner(itens)
+        self.assertEqual([linha["ticker"] for linha in ranking], ["BBBB3", "AAAA3"])
+        self.assertEqual(ranking[0]["score"], 85)
+        self.assertEqual(ranking[0]["veredito_label"], "Compra")
+
     def test_nao_mostra_ativo_de_outro_usuario(self):
         outro_usuario = User.objects.create_user(username="investidor_relatorio_outro", password="SenhaForte123!")
         ativo_de_outro = Ativo.objects.create(ticker="ALHEIA3")

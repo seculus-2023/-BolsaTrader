@@ -828,8 +828,8 @@ def _analise_e_sugestoes_ia_para_relatorio(usuario) -> dict:
 @login_required
 def scanner_ia_exportar_excel(request):
     """
-    Relatório combinado (planilha .xlsx com três abas) do Scanner Técnico
-    completo, da Análise da B3 hoje por IA e das Sugestões de hoje por IA -
+    Relatório combinado (planilha .xlsx com quatro abas) do Scanner Técnico
+    completo, do Ranking técnico, da Análise da B3 hoje por IA e das Sugestões de hoje por IA -
     ver core.services.gerar_excel_scanner_e_analise_ia.
     """
     resultados = escanear_carteira(request.user)

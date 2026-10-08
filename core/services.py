@@ -3500,14 +3500,34 @@ def _linha_scanner(item: dict) -> list:
     ]
 
 
+def _ranking_tecnico_scanner(resultados_scanner: list[dict]) -> list[dict]:
+    """
+    Ranking técnico dos ativos acompanhados para os relatórios Scanner + IA:
+    mesma pontuação (ver _score_scanner) e ordem (maior primeiro) do ranking
+    da tela Análise de Mercado, mas calculado direto do Scanner Técnico - não
+    depende da IA, então sai no relatório mesmo sem IA configurada.
+    """
+    ranking = [
+        {
+            "ticker": item["ativo"].ticker,
+            "score": _score_scanner(item),
+            "veredito_label": item["veredito_label"],
+        }
+        for item in resultados_scanner
+    ]
+    ranking = [linha for linha in ranking if linha["score"] is not None]
+    return sorted(ranking, key=lambda linha: linha["score"], reverse=True)
+
+
 def gerar_excel_scanner_e_analise_ia(
     resultados_scanner: list[dict], analise_ia: dict | None, erro_ia: str | None,
     sugestoes_ia: dict | None = None, erro_sugestoes_ia: str | None = None,
 ) -> bytes:
     """
-    Gera uma planilha .xlsx com três abas: o Scanner Técnico completo (cada
+    Gera uma planilha .xlsx com quatro abas: o Scanner Técnico completo (cada
     indicador, suporte/resistência, ATR e o plano de trade sugerido) de todo
-    ativo em carteira, a Análise da B3 hoje por IA (ver gerar_analise_b3_ia) e
+    ativo em carteira, o Ranking técnico dos ativos acompanhados (ver
+    _ranking_tecnico_scanner), a Análise da B3 hoje por IA (ver gerar_analise_b3_ia) e
     as Sugestões de hoje por IA (ver gerar_sugestoes_ia), quando configuradas
     - `analise_ia`/`erro_ia`/`sugestoes_ia`/`erro_sugestoes_ia` vêm de
     chamadas já feitas por quem chama esta função (não recalcula sozinha,
@@ -3538,6 +3558,30 @@ def gerar_excel_scanner_e_analise_ia(
     for indice in range(1, len(COLUNAS_SCANNER) + 1):
         ws.column_dimensions[get_column_letter(indice)].width = 16
     ws.freeze_panes = "A6"
+
+    ws_ranking = wb.create_sheet("Ranking técnico")
+    ws_ranking.append(["Ranking técnico dos ativos acompanhados"])
+    ws_ranking.append([f"Gerado em {timezone.localtime().strftime('%d/%m/%Y %H:%M')}"])
+    ws_ranking.append([
+        "Ordenado pela pontuação do Scanner Técnico (0 a 100, calculada localmente) - "
+        "não é uma previsão nem recomendação de investimento.",
+    ])
+    ws_ranking.append([])
+    ranking = _ranking_tecnico_scanner(resultados_scanner)
+    if ranking:
+        ws_ranking.append(["Posição", "Ativo", "Pontuação", "Veredito"])
+        for celula in ws_ranking[5]:
+            celula.font = Font(bold=True, color="FFFFFF")
+            celula.fill = PatternFill("solid", fgColor="0D1526")
+            celula.alignment = Alignment(horizontal="center")
+        for posicao, linha in enumerate(ranking, start=1):
+            ws_ranking.append([posicao, linha["ticker"], f"{linha['score']}/100", linha["veredito_label"]])
+        ws_ranking.column_dimensions["A"].width = 10
+        ws_ranking.column_dimensions["B"].width = 14
+        ws_ranking.column_dimensions["C"].width = 12
+        ws_ranking.column_dimensions["D"].width = 22
+    else:
+        ws_ranking.append(["Nenhum ativo com pontuação técnica para ranquear."])
 
     ws2 = wb.create_sheet("Análise da B3 (IA)")
     ws2.append(["Análise da B3 hoje (IA)"])
@@ -3604,9 +3648,10 @@ def gerar_pdf_scanner_e_analise_ia(
     sugestoes_ia: dict | None = None, erro_sugestoes_ia: str | None = None,
 ) -> bytes:
     """
-    Gera um PDF com três seções: o Scanner Técnico (veredito, suporte/
-    resistência, ATR e plano de trade sugerido) de todo ativo em carteira, a
-    Análise da B3 hoje por IA e as Sugestões de hoje por IA, quando
+    Gera um PDF com quatro seções: o Scanner Técnico (veredito, suporte/
+    resistência, ATR e plano de trade sugerido) de todo ativo em carteira, o
+    Ranking técnico dos ativos acompanhados, a Análise da B3 hoje por IA e as
+    Sugestões de hoje por IA, quando
     configuradas - mesma observação de gerar_excel_scanner_e_analise_ia sobre
     os parâmetros de IA já virem prontos de quem chama.
     """
@@ -3675,6 +3720,36 @@ def gerar_pdf_scanner_e_analise_ia(
             ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
         ]))
         elementos.append(tabela)
+
+    elementos.append(Spacer(1, 0.7 * cm))
+    elementos.append(Paragraph("Ranking técnico dos ativos acompanhados", estilos["Heading2"]))
+    elementos.append(Paragraph(
+        "Ordenado pela pontuação do Scanner Técnico (0 a 100, calculada localmente a partir de IFR, médias "
+        "móveis, MACD, volume, suporte/resistência e tendência) - não é uma previsão, só reflete quantos "
+        "indicadores apontam para cada lado agora.",
+        estilo_celula,
+    ))
+    elementos.append(Spacer(1, 0.2 * cm))
+    ranking = _ranking_tecnico_scanner(resultados_scanner)
+    if ranking:
+        dados_ranking = [["Posição", "Ativo", "Pontuação", "Veredito"]]
+        for posicao, linha in enumerate(ranking, start=1):
+            dados_ranking.append([f"{posicao}º", linha["ticker"], f"{linha['score']}/100", linha["veredito_label"]])
+        tabela_ranking = Table(dados_ranking, colWidths=[2 * cm, 3.5 * cm, 3 * cm, 5 * cm], repeatRows=1, hAlign="LEFT")
+        tabela_ranking.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#0D1526")),
+            ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+            ("FONTSIZE", (0, 0), (-1, -1), 8),
+            ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#cccccc")),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#eef2f7")]),
+            ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("TOPPADDING", (0, 0), (-1, -1), 5),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+        ]))
+        elementos.append(tabela_ranking)
+    else:
+        elementos.append(Paragraph("Nenhum ativo com pontuação técnica para ranquear.", estilos["Normal"]))
 
     elementos.append(Spacer(1, 0.7 * cm))
     elementos.append(Paragraph("Análise da B3 hoje (IA)", estilos["Heading2"]))

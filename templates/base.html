@@ -23,7 +23,7 @@
 <body>
     {% if user.is_authenticated %}
     <header class="navbar-futurista">
-        <div class="brand">⚡ BOLSATRADER</div>
+        <a href="{% url 'core:dashboard' %}" class="brand" title="Ir para o Painel de Controle">⚡ BOLSATRADER</a>
         <button type="button" class="nav-toggle" id="btn-menu-mobile" aria-label="Abrir menu" aria-expanded="false" aria-controls="nav-principal">☰</button>
         <nav id="nav-principal">
             <a href="{% url 'core:dashboard' %}">Painel</a>

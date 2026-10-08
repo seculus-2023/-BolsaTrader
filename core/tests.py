@@ -5907,3 +5907,17 @@ class LimparDadosSistemaTests(TestCase):
         from core.services import MODELOS_LIMPOS_NA_LIMPEZA_GERAL, MODELOS_PRESERVADOS_NA_LIMPEZA_GERAL
         classificados = set(MODELOS_LIMPOS_NA_LIMPEZA_GERAL) | set(MODELOS_PRESERVADOS_NA_LIMPEZA_GERAL)
         self.assertEqual(set(django_apps.get_app_config("core").get_models()), classificados)
+
+
+class LogoNavbarTests(TestCase):
+    """base.html: a logo BOLSATRADER da navbar leva ao Painel de Controle."""
+
+    def test_logo_aponta_para_o_painel_de_controle(self):
+        User.objects.create_user(username="investidor_logo", password="SenhaForte123!")
+        self.client.login(username="investidor_logo", password="SenhaForte123!")
+        resposta = self.client.get(reverse("core:posicoes"))
+        self.assertContains(
+            resposta,
+            f'<a href="{reverse("core:dashboard")}" class="brand" title="Ir para o Painel de Controle">⚡ BOLSATRADER</a>',
+            html=True,
+        )

@@ -14,6 +14,7 @@
     --neon-green: #39ff8f;
     --neon-red: #ff3860;
     --neon-yellow: #ffd54a;
+    --neon-orange: #ff8c1a;
     --glass-border: rgba(0, 240, 255, 0.25);
     --glass-bg: rgba(13, 21, 38, 0.55);
     --text-main: #e7f6ff;
@@ -348,19 +349,19 @@ table.tabela-futurista tr:hover td.coluna-destaque {
     background: rgba(0, 240, 255, 0.16);
 }
 
-/* Coluna Alvo (preço da meta de lucro) - roxo, pra não confundir com o ciano da Cotação atual. */
+/* Coluna Alvo (preço da meta de lucro) - laranja, pra não confundir com o ciano da Cotação atual. */
 table.tabela-futurista td.coluna-alvo {
-    background: rgba(168, 85, 247, 0.10);
-    color: var(--neon-purple);
+    background: rgba(255, 140, 26, 0.10);
+    color: var(--neon-orange);
     font-weight: 700;
 }
 
 table.tabela-futurista th.coluna-alvo {
-    background: rgba(168, 85, 247, 0.18);
+    background: rgba(255, 140, 26, 0.18);
 }
 
 table.tabela-futurista tr:hover td.coluna-alvo {
-    background: rgba(168, 85, 247, 0.18);
+    background: rgba(255, 140, 26, 0.18);
 }
 
 /*

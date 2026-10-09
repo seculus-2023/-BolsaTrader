@@ -14,6 +14,7 @@ from django.shortcuts import render, redirect, get_object_or_404
 from django.utils import timezone
 from django.utils.dateparse import parse_date, parse_datetime
 from django.views.decorators.csrf import csrf_exempt
+from django.views.decorators.clickjacking import xframe_options_sameorigin
 from django.views.decorators.http import require_GET, require_POST
 
 from .forms import (
@@ -1608,6 +1609,7 @@ def registros_cotacao(request):
 
 
 @login_required
+@xframe_options_sameorigin
 def registros_cotacao_grafico(request, ticker):
     """
     Gráfico (aberto em popup, dentro de um iframe - ver base.html) dos
@@ -1615,6 +1617,10 @@ def registros_cotacao_grafico(request, ticker):
     como linhas de referência. Compra e alvo vêm por parâmetro
     (?compra=&alvo=, passados pela grid de origem - lote ou posição); sem
     eles, usa o preço médio e o alvo da posição em carteira do ativo.
+
+    xframe_options_sameorigin: o XFrameOptionsMiddleware manda DENY por
+    padrão, o que impediria o próprio site de carregar esta página no iframe
+    do popup ("a conexão foi recusada").
     """
     ativo = get_object_or_404(Ativo, ticker=ticker.upper())
     preco_compra = _decimal_do_get(request, "compra")

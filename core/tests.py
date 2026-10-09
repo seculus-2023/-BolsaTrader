@@ -6047,6 +6047,10 @@ class RegistroCotacaoTests(TestCase):
         self.assertEqual(resposta.context["preco_compra"], Decimal("30.00"))
         self.assertEqual(resposta.context["preco_alvo"], Decimal("33.00"))
 
+    def test_grafico_pode_ser_aberto_no_iframe_do_proprio_site(self):
+        resposta = self.client.get(reverse("core:registros_cotacao_grafico", args=["PETR4"]))
+        self.assertEqual(resposta["X-Frame-Options"], "SAMEORIGIN")
+
     def test_grids_de_compradas_mostram_botao_do_grafico(self):
         url_grafico = reverse("core:registros_cotacao_grafico", args=["PETR4"])
         for nome in ("core:posicoes", "core:operacao_lista", "core:dashboard"):

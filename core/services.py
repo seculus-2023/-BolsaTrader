@@ -37,7 +37,7 @@ from django.db.models import F, Sum
 from .models import (
     ConsumoApiBrapi, MensagemWhatsapp,
     Ativo, Cotacao, Operacao, Alerta, FonteNoticia, Noticia, AcaoB3, CotacaoIndice,
-    RegistroAtualizacaoCarteira, ContaCorrente, LancamentoContaCorrente, PostIt,
+    RegistroAtualizacaoCarteira, RegistroCotacao, ContaCorrente, LancamentoContaCorrente, PostIt,
     CriptoAtivo, OperacaoCripto, CotacaoCripto, RegistroAtualizacaoCarteiraCripto,
 )
 
@@ -542,6 +542,7 @@ def executar_ciclo_atualizacao_cotacoes() -> dict:
         total_alertas += len(gerar_alertas_para_usuario(usuario))
         total_sinais_robo += len(gerar_sinais_robo_para_usuario(usuario))
         registrar_atualizacao_carteira(usuario)
+        registrar_cotacoes_compradas(usuario, RegistroCotacao.AUTOMATICA)
 
     return {
         "ativos_total": ativos.count(),
@@ -1332,6 +1333,122 @@ def registrar_atualizacao_carteira(usuario, posicoes: list[Posicao] | None = Non
         lucro_perda=lucro_perda,
         lucro_perda_pct=lucro_perda_pct,
     )
+
+
+# --------------------------------------------------------------------------
+# Registros de cotações dos ativos comprados (log a cada atualização) - ver
+# core.models.RegistroCotacao, a grid em Detalhes de Cotações e o gráfico
+# em popup (compra x alvo) das grids de ativos comprados.
+# --------------------------------------------------------------------------
+def registrar_cotacao(usuario, ativo: Ativo, preco, origem: str = RegistroCotacao.AUTOMATICA) -> RegistroCotacao:
+    """Grava um registro de cotação (ativo, data, hora, valor) com a data/hora local de agora."""
+    agora = timezone.localtime()
+    return RegistroCotacao.objects.create(
+        usuario=usuario,
+        ativo=ativo,
+        data=agora.date(),
+        hora=agora.time().replace(microsecond=0),
+        preco=Decimal(str(preco)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP),
+        origem=origem,
+    )
+
+
+def registrar_cotacoes_compradas(usuario, origem: str = RegistroCotacao.AUTOMATICA) -> int:
+    """
+    Grava um registro de cotação para cada ativo que o usuário tem em
+    carteira (saldo comprado > 0) - chamado logo depois de atualizar as
+    cotações, pelo ciclo automático (executar_ciclo_atualizacao_cotacoes) e
+    pelo botão "Atualizar cotações agora". Usa só a cotação de HOJE: se a
+    atualização do ativo falhou e a última cotação é de outro dia, não
+    registra um valor velho como se fosse de agora. Retorna quantos gravou.
+    """
+    hoje = timezone.localdate()
+    total = 0
+    for ativo in Ativo.objects.filter(id__in=ativos_distintos_comprados(usuario)):
+        cotacao = ativo.cotacoes.filter(data=hoje).first()
+        if cotacao is None:
+            continue
+        registrar_cotacao(usuario, ativo, cotacao.preco_fechamento, origem)
+        total += 1
+    return total
+
+
+def excluir_registros_cotacao_ativo(usuario, ativo: Ativo) -> int:
+    """Exclui todos os registros de cotação do usuário para o ativo (pergunta feita após a venda)."""
+    excluidos, _ = RegistroCotacao.objects.filter(usuario=usuario, ativo=ativo).delete()
+    return excluidos
+
+
+def construir_grafico_registros_cotacao(
+    registros_cronologico: list[RegistroCotacao], preco_compra: Decimal | None, preco_alvo: Decimal | None,
+    largura: int = 640, altura: int = 260, padding: int = 30,
+) -> dict | None:
+    """
+    Monta os dados (SVG) do gráfico em popup dos registros de cotação de um
+    ativo, com duas linhas horizontais de referência: o preço de compra e o
+    preço alvo (meta de lucro). A escala vertical inclui as duas
+    referências, pra elas aparecerem sempre dentro do gráfico mesmo quando
+    a cotação ainda está longe do alvo. Recebe os registros em ordem
+    cronológica (mais antigo primeiro). None quando não há registros.
+    """
+    if not registros_cronologico:
+        return None
+
+    precos = [float(r.preco) for r in registros_cronologico]
+    referencias = [float(v) for v in (preco_compra, preco_alvo) if v is not None]
+    valor_min = min(precos + referencias)
+    valor_max = max(precos + referencias)
+    margem = (valor_max - valor_min) * 0.08 or max(valor_max * 0.01, 0.01)
+    valor_min -= margem
+    valor_max += margem
+    faixa = valor_max - valor_min
+
+    plot_largura = largura - (padding * 2)
+    plot_altura = altura - (padding * 2)
+
+    def y_de(valor: float) -> float:
+        return round(padding + (1 - (valor - valor_min) / faixa) * plot_altura, 2)
+
+    def real(valor: float) -> str:
+        return f"R$ {valor:,.2f}".replace(",", "#").replace(".", ",").replace("#", ".")
+
+    total = len(registros_cronologico)
+    pontos = []
+    comandos_path = []
+    for i, (registro, preco) in enumerate(zip(registros_cronologico, precos)):
+        x = round(padding + (i * plot_largura / (total - 1) if total > 1 else plot_largura / 2), 2)
+        y = y_de(preco)
+        comandos_path.append(f"{'M' if i == 0 else 'L'}{x} {y}")
+        pontos.append({
+            "x": x,
+            "y": y,
+            "data_label": f"{registro.data:%d/%m/%Y} {registro.hora:%H:%M}",
+            "preco_label": real(preco),
+            "variacao_label": (
+                f"{(preco - float(preco_compra)) / float(preco_compra) * 100:+.2f}% s/ compra".replace(".", ",")
+                if preco_compra else None
+            ),
+            "variacao_positiva": bool(preco_compra) and preco >= float(preco_compra),
+        })
+
+    return {
+        "id_svg": "pontos-registros-cotacao",
+        "largura": largura,
+        "altura": altura,
+        "x_inicio": padding,
+        "x_fim": largura - padding,
+        "y_topo": padding,
+        "y_base": altura - padding,
+        "path_d": " ".join(comandos_path),
+        "pontos": pontos,
+        "y_compra": y_de(float(preco_compra)) if preco_compra is not None else None,
+        "y_alvo": y_de(float(preco_alvo)) if preco_alvo is not None else None,
+        "compra_label": real(float(preco_compra)) if preco_compra is not None else None,
+        "alvo_label": real(float(preco_alvo)) if preco_alvo is not None else None,
+        "faixa_min_label": real(valor_min),
+        "faixa_max_label": real(valor_max),
+        "tendencia_alta": preco_compra is None or precos[-1] >= float(preco_compra),
+    }
 
 
 def excluir_registros_atualizacao_antigos(usuario, dias: int) -> int:
@@ -5342,6 +5459,7 @@ MODELOS_LIMPOS_NA_LIMPEZA_GERAL = [
     Alerta,
     Operacao,
     Cotacao,
+    RegistroCotacao,
     Ativo,
     RegistroAtualizacaoCarteira,
     CotacaoIndice,

@@ -1157,3 +1157,106 @@ form.form-futurista label {
 @keyframes girar-atualizando {
     to { transform: rotate(360deg); }
 }
+
+/* =========================================================
+   Registros de cotações: gráfico em popup (compra x alvo)
+   ========================================================= */
+body.pagina-popup {
+    min-height: 0;
+    padding: 1.2rem 1.4rem;
+}
+
+.grafico-cotacoes.grafico-registros-cotacao {
+    height: 300px;
+}
+
+.grafico-referencia {
+    stroke-width: 1.5;
+    stroke-dasharray: 6 4;
+    vector-effect: non-scaling-stroke;
+}
+
+.grafico-referencia.referencia-compra { stroke: var(--neon-cyan); }
+.grafico-referencia.referencia-alvo { stroke: var(--neon-orange); }
+
+.legenda-registros-cotacao {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1.2rem;
+    margin-top: .6rem;
+    font-size: .85rem;
+    color: var(--text-dim);
+}
+
+.legenda-registros-cotacao .amostra {
+    display: inline-block;
+    width: 22px;
+    height: 0;
+    vertical-align: middle;
+    margin-right: .3rem;
+    border-top: 2px solid var(--neon-green);
+}
+
+.legenda-registros-cotacao .amostra.referencia-compra { border-top: 2px dashed var(--neon-cyan); }
+.legenda-registros-cotacao .amostra.referencia-alvo { border-top: 2px dashed var(--neon-orange); }
+
+/* Popup (modal) que carrega a página do gráfico num iframe - ver base.html */
+.popup-grafico[hidden] {
+    display: none;
+}
+
+.popup-grafico {
+    position: fixed;
+    inset: 0;
+    background: rgba(5, 9, 18, 0.8);
+    backdrop-filter: blur(2px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 16px;
+    z-index: 9998;
+}
+
+.popup-grafico-caixa {
+    position: relative;
+    width: min(860px, 100%);
+    height: min(620px, 100%);
+    background: var(--bg-1);
+    border: 1px solid var(--glass-border);
+    border-radius: 14px;
+    box-shadow: 0 0 30px rgba(0, 240, 255, 0.15);
+    overflow: hidden;
+}
+
+.popup-grafico-caixa iframe {
+    width: 100%;
+    height: 100%;
+    border: 0;
+    display: block;
+}
+
+.popup-grafico-fechar {
+    position: absolute;
+    top: .5rem;
+    right: .5rem;
+    z-index: 1;
+}
+
+/* Botão 📈 ao lado do ticker nas grids de ativos comprados */
+.btn-grafico-cotacao {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    margin-left: .35rem;
+    padding: .1rem .3rem;
+    border: 1px solid var(--glass-border);
+    border-radius: 6px;
+    font-size: .85rem;
+    line-height: 1.2;
+    text-decoration: none;
+    vertical-align: middle;
+}
+
+.btn-grafico-cotacao:hover {
+    background: rgba(0, 240, 255, 0.12);
+}

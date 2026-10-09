@@ -541,6 +541,43 @@ class RegistroAtualizacaoCarteira(models.Model):
         return f"{self.usuario} - {self.criado_em:%d/%m/%Y %H:%M}"
 
 
+class RegistroCotacao(models.Model):
+    """
+    Registro (log) da cotação de um ativo comprado pelo usuário, gravado a
+    cada atualização de cotações - pelo ciclo automático (agendador embutido
+    / comando "atualizar_cotacoes"), pelo botão "Atualizar cotações agora"
+    ou pela consulta avulsa em Detalhes de Cotações. Só entram ativos com
+    saldo em carteira (ver core.services.registrar_cotacoes_compradas).
+    Alimenta a grid de registros em Detalhes de Cotações e o gráfico em
+    popup (compra x alvo) das grids de ativos comprados.
+    """
+
+    AUTOMATICA = "AUTOMATICA"
+    MANUAL = "MANUAL"
+    ORIGEM_CHOICES = [
+        (AUTOMATICA, "Automática"),
+        (MANUAL, "Manual"),
+    ]
+
+    usuario = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="registros_cotacao",
+    )
+    ativo = models.ForeignKey(Ativo, on_delete=models.CASCADE, related_name="registros_cotacao")
+    data = models.DateField("Data", default=timezone.localdate)
+    hora = models.TimeField("Hora")
+    preco = models.DecimalField("Valor da cotação (R$)", max_digits=12, decimal_places=2)
+    origem = models.CharField("Origem", max_length=10, choices=ORIGEM_CHOICES, default=AUTOMATICA)
+
+    class Meta:
+        verbose_name = "Registro de cotação"
+        verbose_name_plural = "Registros de cotações"
+        ordering = ["-data", "-hora", "-id"]
+        indexes = [models.Index(fields=["usuario", "ativo", "data", "hora"])]
+
+    def __str__(self):
+        return f"{self.ativo.ticker} {self.data:%d/%m/%Y} {self.hora:%H:%M} R$ {self.preco}"
+
+
 class ConsumoApiBrapi(models.Model):
     """
     Contador diário de requisições feitas à API brapi.dev - base do controle

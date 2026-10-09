@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block titulo %}Registros de cotação de {{ ativo.ticker }} - BolsaTrader{% endblock %}
+{% block conteudo %}
+<h1>Registros de cotação de {{ ativo.ticker }}</h1>
+
+<div class="card-glass" style="max-width: 640px;">
+    <h3 style="margin-top: 0;">Deseja excluir os registros de cotação deste ativo?</h3>
+    <p style="color: var(--text-dim);">
+        Existem <strong>{{ total }}</strong> registro(s) de cotação de {{ ativo.ticker }} gravados nas atualizações
+        (automáticas e manuais).
+        {% if ainda_em_carteira %}
+            <br>⚠ Você ainda tem saldo deste ativo em carteira &mdash; novos registros continuarão sendo gravados
+            nas próximas atualizações.
+        {% endif %}
+        <br>A exclusão não pode ser desfeita.
+    </p>
+    <form method="post" style="display: flex; gap: .6rem; flex-wrap: wrap;">
+        {% csrf_token %}
+        <button type="submit" name="excluir" value="sim" class="btn-futurista" style="color: var(--neon-red); border-color: rgba(255, 56, 96, .4);">🗑️ Sim, excluir todos</button>
+        <button type="submit" name="excluir" value="nao" class="btn-futurista btn-secundario">Não, manter</button>
+    </form>
+</div>
+{% endblock %}

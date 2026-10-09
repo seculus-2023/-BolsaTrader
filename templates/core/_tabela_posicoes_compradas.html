@@ -7,6 +7,7 @@ fizer sentido na tela) em volta desta tabela. Passe "ocultar_acoes=True"
 no include pra tirar a coluna Ação (vender/alterar/excluir) - usado no
 Painel de Controle, que é só um resumo.
 {% endcomment %}
+{% load l10n %}
 {% if posicoes_compradas %}
     <div class="tabela-scroll">
     <table class="tabela-futurista">
@@ -59,6 +60,7 @@ Painel de Controle, que é só um resumo.
                 </td>
                 <td>
                     <strong title="{{ p.ativo.nome_longo|default:p.ativo.nome }}">{{ p.ativo.ticker }}</strong>
+                    <a href="{% url 'core:registros_cotacao_grafico' p.ativo.ticker %}?compra={{ p.preco_medio|unlocalize }}&alvo={{ p.preco_alvo|unlocalize }}" class="btn-grafico-cotacao" title="Gráfico das cotações registradas (compra x alvo)" aria-label="Gráfico das cotações de {{ p.ativo.ticker }}">📈</a>
                     {% if p.quantidade_reservada %}
                         <span class="badge-tendencia badge-neutro" style="margin-left: .4rem;">🔖 +{{ p.quantidade_reservada }} reservada{{ p.quantidade_reservada|pluralize }}</span>
                     {% endif %}

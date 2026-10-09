@@ -32,7 +32,7 @@ from .forms import (
 )
 from .models import (
     Operacao, Alerta, Ativo, Cotacao, MensagemWhatsapp, FonteNoticia, AcaoB3, RegistroAtualizacaoCarteira,
-    LancamentoContaCorrente, CriptoAtivo, OperacaoCripto, RegistroAtualizacaoCarteiraCripto,
+    LancamentoContaCorrente, CriptoAtivo, OperacaoCripto, RegistroAtualizacaoCarteiraCripto, RegistroCotacao,
 )
 from .services import (
     calcular_posicoes,
@@ -76,6 +76,10 @@ from .services import (
     atualizar_benchmarks,
     ultimo_valor_ibovespa,
     registrar_atualizacao_carteira,
+    registrar_cotacao,
+    registrar_cotacoes_compradas,
+    excluir_registros_cotacao_ativo,
+    construir_grafico_registros_cotacao,
     excluir_registros_atualizacao_antigos,
     excluir_registros_atualizacao_por_periodo,
     calcular_variacoes_historico,
@@ -453,6 +457,8 @@ def operacao_vender(request, operacao_id):
                 resultado = "lucro" if operacao.lucro_perda_realizado >= 0 else "perda"
                 mensagem += f" {resultado.capitalize()} realizado: R$ {operacao.lucro_perda_realizado}."
             messages.success(request, mensagem)
+            if RegistroCotacao.objects.filter(usuario=request.user, ativo=operacao.ativo).exists():
+                return redirect("core:registros_cotacao_excluir", ticker=operacao.ativo.ticker)
             return redirect("core:operacao_lista")
     else:
         form = VendaLoteForm(instance=operacao)
@@ -994,6 +1000,7 @@ def atualizar_cotacoes_agora(request):
     gerar_alertas_para_usuario(request.user)
     gerar_sinais_robo_para_usuario(request.user)
     registrar_atualizacao_carteira(request.user)
+    registrar_cotacoes_compradas(request.user, RegistroCotacao.MANUAL)
     return redirect("core:dashboard")
 
 
@@ -1496,7 +1503,9 @@ def consultar_cotacao_avulsa(request):
     brapi.dev, junto com o IFR/RSI calculado a partir do histórico recente
     (ver core.services.buscar_cotacao_atual_com_historico e calcular_rsi) -
     não precisa ser um ativo que o usuário já comprou. Usada pelo campo de
-    busca na página de Detalhes de Cotações. Não grava nada no banco.
+    busca na página de Detalhes de Cotações. Só grava algo no banco quando o
+    ticker é de um ativo que o usuário tem em carteira: aí a cotação entra nos
+    registros de cotações (ver core.models.RegistroCotacao), como manual.
     """
     ticker = (request.GET.get("ticker") or "").strip().upper()
     if not ticker or not TICKER_VALIDO.match(ticker):
@@ -1521,6 +1530,14 @@ def consultar_cotacao_avulsa(request):
     rsi = calcular_rsi(precos_historico)
     rsi_classe_chave = _classificar_rsi(rsi)
 
+    registrado = False
+    ativo_comprado = Ativo.objects.filter(
+        ticker=ticker, id__in=ativos_distintos_comprados(request.user)
+    ).first()
+    if ativo_comprado:
+        registrar_cotacao(request.user, ativo_comprado, preco, RegistroCotacao.MANUAL)
+        registrado = True
+
     return JsonResponse({
         "ok": True,
         "ticker": ticker,
@@ -1541,6 +1558,113 @@ def consultar_cotacao_avulsa(request):
         "rsi": rsi,
         "rsi_label": RSI_LABELS[rsi_classe_chave],
         "rsi_classe": RSI_CLASSES[rsi_classe_chave],
+        "registrado": registrado,
+    })
+
+
+def _decimal_do_get(request, nome: str) -> Decimal | None:
+    """Lê um valor decimal positivo da query string (aceita vírgula) - None se ausente ou inválido."""
+    try:
+        valor = Decimal((request.GET.get(nome) or "").strip().replace(",", "."))
+    except ArithmeticError:
+        return None
+    return valor if valor.is_finite() and valor > 0 else None
+
+
+REGISTROS_COTACAO_LIMITE = 500
+
+
+@login_required
+@require_GET
+def registros_cotacao(request):
+    """
+    Grid (via AJAX, JSON) dos registros de cotações dos ativos comprados do
+    usuário, mais recentes primeiro - botão "Ver registros de cotações" em
+    Detalhes de Cotações. Filtro opcional por ?ticker=; limitado aos
+    REGISTROS_COTACAO_LIMITE mais recentes pra não pesar a tela.
+    """
+    registros = RegistroCotacao.objects.filter(usuario=request.user).select_related("ativo")
+    ticker = (request.GET.get("ticker") or "").strip().upper()
+    if ticker:
+        registros = registros.filter(ativo__ticker=ticker)
+    total = registros.count()
+
+    return JsonResponse({
+        "ok": True,
+        "ticker": ticker,
+        "total": total,
+        "limite": REGISTROS_COTACAO_LIMITE,
+        "registros": [
+            {
+                "ativo": r.ativo.ticker,
+                "data": r.data.strftime("%d/%m/%Y"),
+                "hora": r.hora.strftime("%H:%M:%S"),
+                "preco": float(r.preco),
+                "origem": r.get_origem_display(),
+            }
+            for r in registros[:REGISTROS_COTACAO_LIMITE]
+        ],
+    })
+
+
+@login_required
+def registros_cotacao_grafico(request, ticker):
+    """
+    Gráfico (aberto em popup, dentro de um iframe - ver base.html) dos
+    registros de cotação de um ativo, com o preço de compra e o preço alvo
+    como linhas de referência. Compra e alvo vêm por parâmetro
+    (?compra=&alvo=, passados pela grid de origem - lote ou posição); sem
+    eles, usa o preço médio e o alvo da posição em carteira do ativo.
+    """
+    ativo = get_object_or_404(Ativo, ticker=ticker.upper())
+    preco_compra = _decimal_do_get(request, "compra")
+    preco_alvo = _decimal_do_get(request, "alvo")
+    if preco_compra is None or preco_alvo is None:
+        posicao = next(
+            (p for p in calcular_posicoes(request.user) if p.ativo.id == ativo.id and not p.apenas_reservado),
+            None,
+        )
+        if posicao:
+            preco_compra = preco_compra or posicao.preco_medio
+            preco_alvo = preco_alvo or posicao.preco_alvo
+
+    registros = list(
+        RegistroCotacao.objects.filter(usuario=request.user, ativo=ativo).order_by("data", "hora", "id")
+    )
+    return render(request, "core/registros_cotacao_grafico.html", {
+        "ativo": ativo,
+        "preco_compra": preco_compra,
+        "preco_alvo": preco_alvo,
+        "registros": registros,
+        "ultimo": registros[-1] if registros else None,
+        "grafico": construir_grafico_registros_cotacao(registros, preco_compra, preco_alvo),
+    })
+
+
+@login_required
+def registros_cotacao_excluir(request, ticker):
+    """
+    Pergunta feita depois de vender um ativo: excluir ou não todos os
+    registros de cotação dele (ver core.views.operacao_vender). "Sim" (POST
+    com excluir=sim) apaga todos os registros do usuário para o ativo;
+    "Não" só volta para Minhas Operações.
+    """
+    ativo = get_object_or_404(Ativo, ticker=ticker.upper())
+    if request.method == "POST":
+        if request.POST.get("excluir") == "sim":
+            excluidos = excluir_registros_cotacao_ativo(request.user, ativo)
+            messages.success(request, f"{excluidos} registro(s) de cotação de {ativo.ticker} excluído(s).")
+        else:
+            messages.info(request, f"Registros de cotação de {ativo.ticker} mantidos.")
+        return redirect("core:operacao_lista")
+
+    total = RegistroCotacao.objects.filter(usuario=request.user, ativo=ativo).count()
+    if not total:
+        return redirect("core:operacao_lista")
+    return render(request, "core/registros_cotacao_excluir.html", {
+        "ativo": ativo,
+        "total": total,
+        "ainda_em_carteira": ativo.id in ativos_distintos_comprados(request.user),
     })
 
 

@@ -34,7 +34,7 @@ from .forms import OperacaoForm, VendaLoteForm
 from .models import (
     Ativo, Cotacao, Operacao, Alerta, MensagemWhatsapp, CotacaoIndice, RegistroAtualizacaoCarteira,
     ContaCorrente, LancamentoContaCorrente, PostIt,
-    CriptoAtivo, OperacaoCripto, CotacaoCripto, RegistroAtualizacaoCarteiraCripto,
+    CriptoAtivo, OperacaoCripto, CotacaoCripto, RegistroAtualizacaoCarteiraCripto, RegistroCotacao,
 )
 from .services import (
     calcular_posicoes, analisar_tendencia, gerar_alertas_para_usuario, construir_comparativo_valores,
@@ -5921,3 +5921,133 @@ class LogoNavbarTests(TestCase):
             f'<a href="{reverse("core:dashboard")}" class="brand" title="Ir para o Painel de Controle">⚡ BOLSATRADER</a>',
             html=True,
         )
+
+
+class RegistroCotacaoTests(TestCase):
+    """
+    Registros de cotações dos ativos comprados (core.models.RegistroCotacao):
+    gravados nas atualizações automática/manual, grid em Detalhes de
+    Cotações, pergunta de exclusão após a venda e gráfico em popup.
+    """
+
+    def setUp(self):
+        self.usuario = User.objects.create_user(username="investidor_registros", password="SenhaForte123!")
+        self.client.login(username="investidor_registros", password="SenhaForte123!")
+        self.ativo = Ativo.objects.create(ticker="PETR4")
+        self.compra = Operacao.objects.create(
+            usuario=self.usuario, ativo=self.ativo, tipo=Operacao.COMPRA,
+            quantidade=10, preco_unitario=Decimal("30.00"), data_operacao=date.today(),
+            meta_lucro_pct=Decimal("10.0"),
+        )
+
+    def _mock_cotacao(self, mock_get, preco=32.0):
+        mock_get.return_value.raise_for_status = lambda: None
+        mock_get.return_value.json = lambda: {"results": [{"symbol": "PETR4", "regularMarketPrice": preco}]}
+
+    @patch("core.services.requests.get")
+    def test_ciclo_automatico_registra_cotacao_dos_ativos_comprados(self, mock_get):
+        self._mock_cotacao(mock_get)
+        reserva_ativo = Ativo.objects.create(ticker="VALE3")
+        Operacao.objects.create(
+            usuario=self.usuario, ativo=reserva_ativo, tipo=Operacao.RESERVAR,
+            quantidade=1, preco_unitario=Decimal("60.00"), data_operacao=date.today(),
+        )
+
+        executar_ciclo_atualizacao_cotacoes()
+
+        registros = RegistroCotacao.objects.filter(usuario=self.usuario)
+        self.assertEqual(registros.count(), 1)  # só o comprado - reserva não entra
+        registro = registros.get()
+        self.assertEqual(registro.ativo, self.ativo)
+        self.assertEqual(registro.preco, Decimal("32.00"))
+        self.assertEqual(registro.origem, RegistroCotacao.AUTOMATICA)
+        self.assertEqual(registro.data, timezone.localdate())
+
+    @patch("core.views.mercado_b3_aberto", return_value=True)
+    @patch("core.services.requests.get")
+    def test_botao_atualizar_registra_cotacao_como_manual(self, mock_get, _mock_aberto):
+        self._mock_cotacao(mock_get, preco=31.5)
+
+        self.client.get(reverse("core:atualizar_cotacoes"))
+
+        registro = RegistroCotacao.objects.get(usuario=self.usuario)
+        self.assertEqual(registro.origem, RegistroCotacao.MANUAL)
+        self.assertEqual(registro.preco, Decimal("31.50"))
+
+    def test_nao_registra_cotacao_antiga_quando_atualizacao_do_dia_falhou(self):
+        Cotacao.objects.create(
+            ativo=self.ativo, data=date.today() - timedelta(days=1), preco_fechamento=Decimal("29.00"),
+        )
+        self.assertEqual(core_services.registrar_cotacoes_compradas(self.usuario), 0)
+        self.assertFalse(RegistroCotacao.objects.exists())
+
+    def test_grid_de_registros_filtra_por_ticker_e_isola_usuarios(self):
+        outro_ativo = Ativo.objects.create(ticker="VALE3")
+        core_services.registrar_cotacao(self.usuario, self.ativo, Decimal("31.00"))
+        core_services.registrar_cotacao(self.usuario, outro_ativo, Decimal("61.00"))
+        outro_usuario = User.objects.create_user(username="outro_registros", password="SenhaForte123!")
+        core_services.registrar_cotacao(outro_usuario, self.ativo, Decimal("99.00"))
+
+        dados = self.client.get(reverse("core:registros_cotacao")).json()
+        self.assertEqual(dados["total"], 2)
+
+        dados = self.client.get(reverse("core:registros_cotacao"), {"ticker": "petr4"}).json()
+        self.assertEqual(dados["total"], 1)
+        self.assertEqual(dados["registros"][0]["ativo"], "PETR4")
+        self.assertEqual(dados["registros"][0]["preco"], 31.0)
+        self.assertEqual(set(dados["registros"][0]), {"ativo", "data", "hora", "preco", "origem"})
+
+    def _vender_tudo(self):
+        return self.client.post(
+            reverse("core:operacao_vender", args=[self.compra.id]),
+            {"quantidade_vendida": "10", "preco_venda": "35.00", "data_venda": date.today().isoformat()},
+        )
+
+    def test_venda_pergunta_se_exclui_registros_e_sim_exclui_todos_do_ativo(self):
+        outro_ativo = Ativo.objects.create(ticker="VALE3")
+        core_services.registrar_cotacao(self.usuario, self.ativo, Decimal("31.00"))
+        core_services.registrar_cotacao(self.usuario, self.ativo, Decimal("32.00"))
+        core_services.registrar_cotacao(self.usuario, outro_ativo, Decimal("61.00"))
+
+        resposta = self._vender_tudo()
+        url_pergunta = reverse("core:registros_cotacao_excluir", args=["PETR4"])
+        self.assertRedirects(resposta, url_pergunta)
+        self.assertContains(self.client.get(url_pergunta), "Deseja excluir os registros de cotação")
+
+        self.client.post(url_pergunta, {"excluir": "sim"})
+        self.assertFalse(RegistroCotacao.objects.filter(ativo=self.ativo).exists())
+        self.assertTrue(RegistroCotacao.objects.filter(ativo=outro_ativo).exists())
+
+    def test_venda_responder_nao_mantem_os_registros(self):
+        core_services.registrar_cotacao(self.usuario, self.ativo, Decimal("31.00"))
+        self._vender_tudo()
+        self.client.post(reverse("core:registros_cotacao_excluir", args=["PETR4"]), {"excluir": "nao"})
+        self.assertEqual(RegistroCotacao.objects.filter(ativo=self.ativo).count(), 1)
+
+    def test_venda_sem_registros_nao_pergunta(self):
+        self.assertRedirects(self._vender_tudo(), reverse("core:operacao_lista"))
+
+    def test_grafico_usa_compra_e_alvo_como_referencia(self):
+        core_services.registrar_cotacao(self.usuario, self.ativo, Decimal("31.00"))
+        core_services.registrar_cotacao(self.usuario, self.ativo, Decimal("32.00"))
+
+        resposta = self.client.get(
+            reverse("core:registros_cotacao_grafico", args=["PETR4"]), {"compra": "30.00", "alvo": "33.00"}
+        )
+        self.assertEqual(resposta.status_code, 200)
+        grafico = resposta.context["grafico"]
+        self.assertEqual(len(grafico["pontos"]), 2)
+        # a escala inclui as referências: alvo acima e compra abaixo das cotações
+        self.assertLess(grafico["y_alvo"], min(p["y"] for p in grafico["pontos"]))
+        self.assertGreater(grafico["y_compra"], max(p["y"] for p in grafico["pontos"]))
+
+    def test_grafico_sem_parametros_usa_preco_medio_e_alvo_da_posicao(self):
+        core_services.registrar_cotacao(self.usuario, self.ativo, Decimal("31.00"))
+        resposta = self.client.get(reverse("core:registros_cotacao_grafico", args=["PETR4"]))
+        self.assertEqual(resposta.context["preco_compra"], Decimal("30.00"))
+        self.assertEqual(resposta.context["preco_alvo"], Decimal("33.00"))
+
+    def test_grids_de_compradas_mostram_botao_do_grafico(self):
+        url_grafico = reverse("core:registros_cotacao_grafico", args=["PETR4"])
+        for nome in ("core:posicoes", "core:operacao_lista", "core:dashboard"):
+            self.assertContains(self.client.get(reverse(nome)), url_grafico, msg_prefix=nome)

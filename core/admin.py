@@ -2,7 +2,7 @@ from django.contrib import admin
 
 from .models import (
     Ativo, Operacao, Cotacao, Alerta, MensagemWhatsapp, FonteNoticia, Noticia, CotacaoIndice,
-    ContaCorrente, LancamentoContaCorrente,
+    ContaCorrente, LancamentoContaCorrente, RegistroCotacao,
 )
 
 
@@ -22,6 +22,13 @@ class CotacaoIndiceAdmin(admin.ModelAdmin):
 class OperacaoAdmin(admin.ModelAdmin):
     list_display = ("usuario", "ativo", "tipo", "quantidade", "preco_unitario", "data_operacao")
     list_filter = ("tipo", "data_operacao")
+    search_fields = ("ativo__ticker", "usuario__username")
+
+
+@admin.register(RegistroCotacao)
+class RegistroCotacaoAdmin(admin.ModelAdmin):
+    list_display = ("usuario", "ativo", "data", "hora", "preco", "origem")
+    list_filter = ("origem", "data")
     search_fields = ("ativo__ticker", "usuario__username")
 
 

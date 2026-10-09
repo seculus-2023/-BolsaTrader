@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% load l10n %}
 {% block titulo %}Minhas Operações - BolsaTrader{% endblock %}
 {% block conteudo %}
 <h1>Minhas Operações</h1>
@@ -130,6 +131,9 @@
                 </td>
                 <td>
                     <strong title="{{ op.ativo.nome_longo|default:op.ativo.nome }}">{{ op.ativo.ticker }}</strong>
+                    {% if op.saldo > 0 %}
+                    <a href="{% url 'core:registros_cotacao_grafico' op.ativo.ticker %}?compra={{ op.preco_unitario|unlocalize }}&alvo={{ op.preco_alvo|unlocalize }}" class="btn-grafico-cotacao" title="Gráfico das cotações registradas (compra x alvo)" aria-label="Gráfico das cotações de {{ op.ativo.ticker }}">📈</a>
+                    {% endif %}
                     {% if op.meta_lucro_atingida %}
                         <span class="badge-venda">🎯 Meta atingida &mdash; vender</span>
                     {% endif %}

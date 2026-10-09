@@ -1,0 +1,84 @@
+{% load static l10n %}
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gráfico de cotações {{ ativo.ticker }} - BolsaTrader</title>
+    <link rel="stylesheet" href="{% static 'css/futurista.css' %}">
+</head>
+<body class="pagina-popup">
+    {% comment %}
+    Página sem navbar/rodapé: é carregada dentro do iframe do popup de
+    gráfico (ver #popup-grafico-cotacao em base.html).
+    {% endcomment %}
+    <h2 style="margin: 0 0 .2rem;">{{ ativo.ticker }}{% if ativo.nome %} <small style="color: var(--text-dim); font-family: 'Rajdhani', sans-serif;">— {{ ativo.nome }}</small>{% endif %}</h2>
+    <p style="color: var(--text-dim); margin: 0 0 1rem; font-size: .9rem;">
+        Registros de cotação gravados nas atualizações (automáticas e manuais), comparados ao preço de compra e ao alvo.
+    </p>
+
+    <div class="grid-stats">
+        <div class="stat-tile">
+            <div class="label">Preço de compra</div>
+            <div class="value" style="color: var(--neon-cyan);">{% if preco_compra %}R$ {{ preco_compra }}{% else %}&mdash;{% endif %}</div>
+        </div>
+        <div class="stat-tile">
+            <div class="label">Alvo</div>
+            <div class="value" style="color: var(--neon-orange);">{% if preco_alvo %}R$ {{ preco_alvo }}{% else %}&mdash;{% endif %}</div>
+        </div>
+        <div class="stat-tile">
+            <div class="label">Última cotação registrada</div>
+            <div class="value">
+                {% if ultimo %}R$ {{ ultimo.preco }} <small style="font-size: .75rem; color: var(--text-dim);">{{ ultimo.data|date:"d/m/Y" }} {{ ultimo.hora|time:"H:i" }}</small>{% else %}&mdash;{% endif %}
+            </div>
+        </div>
+        <div class="stat-tile">
+            <div class="label">Registros</div>
+            <div class="value">{{ registros|length }}</div>
+        </div>
+    </div>
+
+    {% if grafico %}
+    <div class="grafico-wrap">
+        {% localize off %}
+        <svg viewBox="0 0 {{ grafico.largura }} {{ grafico.altura }}"
+             class="grafico-cotacoes grafico-registros-cotacao" preserveAspectRatio="none"
+             data-pontos-id="{{ grafico.id_svg }}"
+             role="img" aria-label="Registros de cotação de {{ ativo.ticker }} com preço de compra e alvo">
+            <line x1="{{ grafico.x_inicio }}" y1="{{ grafico.y_topo }}" x2="{{ grafico.x_fim }}" y2="{{ grafico.y_topo }}" class="grafico-grid" />
+            <line x1="{{ grafico.x_inicio }}" y1="{{ grafico.y_base }}" x2="{{ grafico.x_fim }}" y2="{{ grafico.y_base }}" class="grafico-grid" />
+            {% if grafico.y_compra is not None %}
+            <line x1="{{ grafico.x_inicio }}" y1="{{ grafico.y_compra }}" x2="{{ grafico.x_fim }}" y2="{{ grafico.y_compra }}" class="grafico-referencia referencia-compra" />
+            {% endif %}
+            {% if grafico.y_alvo is not None %}
+            <line x1="{{ grafico.x_inicio }}" y1="{{ grafico.y_alvo }}" x2="{{ grafico.x_fim }}" y2="{{ grafico.y_alvo }}" class="grafico-referencia referencia-alvo" />
+            {% endif %}
+            <path d="{{ grafico.path_d }}" fill="none" class="grafico-linha {% if grafico.tendencia_alta %}linha-alta{% else %}linha-baixa{% endif %}" />
+            {% for p in grafico.pontos %}
+                {% if forloop.last or grafico.pontos|length < 40 %}
+                <circle cx="{{ p.x }}" cy="{{ p.y }}" r="{% if forloop.last %}4{% else %}2.5{% endif %}" class="grafico-marcador {% if grafico.tendencia_alta %}linha-alta{% else %}linha-baixa{% endif %}" />
+                {% endif %}
+            {% endfor %}
+        </svg>
+        {% endlocalize %}
+        {{ grafico.pontos|json_script:grafico.id_svg }}
+        <div class="grafico-eixos">
+            <span>{{ grafico.faixa_min_label }}</span>
+            <span>{{ grafico.faixa_max_label }}</span>
+        </div>
+        <div class="legenda-registros-cotacao">
+            <span><i class="amostra linha-cotacao"></i> Cotação registrada</span>
+            {% if grafico.compra_label %}<span><i class="amostra referencia-compra"></i> Compra ({{ grafico.compra_label }})</span>{% endif %}
+            {% if grafico.alvo_label %}<span><i class="amostra referencia-alvo"></i> Alvo ({{ grafico.alvo_label }})</span>{% endif %}
+        </div>
+    </div>
+    {% else %}
+    <p style="color: var(--text-dim);">
+        Ainda não há registros de cotação para {{ ativo.ticker }}. Eles são gravados a cada atualização de cotações
+        (automática ou pelo botão "Atualizar cotações agora") enquanto o ativo estiver em carteira.
+    </p>
+    {% endif %}
+
+    <script src="{% static 'js/grafico.js' %}" defer></script>
+</body>
+</html>

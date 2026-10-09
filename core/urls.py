@@ -71,6 +71,17 @@ urlpatterns = [
         name="historico_atualizacoes_exportar_pdf",
     ),
     path("cotacoes/consultar/", views.consultar_cotacao_avulsa, name="consultar_cotacao_avulsa"),
+    path("cotacoes/registros/", views.registros_cotacao, name="registros_cotacao"),
+    path(
+        "cotacoes/registros/<str:ticker>/grafico/",
+        views.registros_cotacao_grafico,
+        name="registros_cotacao_grafico",
+    ),
+    path(
+        "cotacoes/registros/<str:ticker>/excluir/",
+        views.registros_cotacao_excluir,
+        name="registros_cotacao_excluir",
+    ),
     path("noticias/", views.noticias, name="noticias"),
     path("noticias/atualizar/", views.noticias_atualizar, name="noticias_atualizar"),
     path("noticias/fontes/<int:fonte_id>/alternar/", views.noticia_fonte_alternar, name="noticia_fonte_alternar"),

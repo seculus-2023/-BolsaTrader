@@ -31,8 +31,10 @@
             <input type="text" id="campo-ticker-avulso" placeholder="Ex.: PETR4" autocomplete="off" maxlength="15" style="text-transform: uppercase;">
         </div>
         <button type="submit" id="btn-consultar-avulso" class="btn-futurista">Pesquisar cotação</button>
+        <button type="button" id="btn-registros-cotacao" class="btn-futurista btn-secundario" title="Mostra os registros de cotações dos ativos comprados (do ticker informado, ou de todos)">📋 Registros de cotações</button>
     </form>
     <div id="resultado-consulta-avulsa" style="margin-top: 1.2rem;"></div>
+    <div id="resultado-registros-cotacao" style="margin-top: 1.2rem;" hidden></div>
 </div>
 
 <div class="card-glass" style="margin: 1.5rem 0 2rem;">
@@ -274,7 +276,12 @@
                             '<div><span>Moeda</span><strong>' + escapeHtml(dados.moeda) + '</strong></div>' +
                             '<div><span>Faixa 52 semanas</span><strong>' + faixa52 + '</strong></div>' +
                         '</div>' +
-                        (dados.hora_cotacao ? '<div class="cotacao-rodape"><span>Cotação de: ' + escapeHtml(dados.hora_cotacao) + '</span></div>' : "") +
+                        (dados.hora_cotacao || dados.registrado
+                            ? '<div class="cotacao-rodape">' +
+                                (dados.hora_cotacao ? '<span>Cotação de: ' + escapeHtml(dados.hora_cotacao) + '</span>' : '') +
+                                (dados.registrado ? '<span>📋 Registrada nos registros de cotações</span>' : '') +
+                              '</div>'
+                            : "") +
                     '</div>';
             } catch (erro) {
                 resultado.innerHTML = '<p style="color: var(--neon-red);">Falha ao consultar a API. Tente novamente.</p>';
@@ -285,6 +292,62 @@
         }
 
         form.addEventListener("submit", pesquisar);
+
+        // Botão "Registros de cotações": grid com ativo, data, hora e valor
+        // das cotações registradas dos ativos comprados - do ticker
+        // informado no campo, ou de todos quando o campo está vazio.
+        var botaoRegistros = document.getElementById("btn-registros-cotacao");
+        var resultadoRegistros = document.getElementById("resultado-registros-cotacao");
+        var urlGrafico = "{% url 'core:registros_cotacao_grafico' 'TICKER' %}";
+
+        async function mostrarRegistros() {
+            var ticker = campoTicker.value.trim().toUpperCase();
+            botaoRegistros.disabled = true;
+            resultadoRegistros.hidden = false;
+            resultadoRegistros.innerHTML = '<p style="color: var(--text-dim);">Carregando registros...</p>';
+            try {
+                var resposta = await fetch(
+                    "{% url 'core:registros_cotacao' %}?ticker=" + encodeURIComponent(ticker)
+                );
+                var dados = await resposta.json();
+                var titulo = "Registros de cotações" + (dados.ticker ? " &mdash; " + escapeHtml(dados.ticker) : " &mdash; todos os ativos comprados");
+                if (!dados.registros.length) {
+                    resultadoRegistros.innerHTML = '<h3 style="margin-top: 0;">' + titulo + '</h3>' +
+                        '<p style="color: var(--text-dim);">Nenhum registro de cotação encontrado. Os registros são gravados a cada ' +
+                        'atualização de cotações (automática ou pelo botão "Atualizar cotações agora") para os ativos em carteira.</p>';
+                    return;
+                }
+                var linhas = dados.registros.map(function (r) {
+                    return '<tr>' +
+                        '<td><strong>' + escapeHtml(r.ativo) + '</strong> ' +
+                            '<a href="' + urlGrafico.replace("TICKER", encodeURIComponent(r.ativo)) + '" class="btn-grafico-cotacao" ' +
+                            'title="Gráfico das cotações registradas (compra x alvo)">📈</a></td>' +
+                        '<td>' + escapeHtml(r.data) + '</td>' +
+                        '<td>' + escapeHtml(r.hora) + '</td>' +
+                        '<td class="coluna-destaque">' + formatarReal(r.preco) + '</td>' +
+                        '<td>' + escapeHtml(r.origem) + '</td>' +
+                    '</tr>';
+                }).join("");
+                var aviso = dados.total > dados.registros.length
+                    ? '<p style="color: var(--text-dim); font-size: .85rem;">Mostrando os ' + dados.registros.length +
+                      ' registros mais recentes de ' + dados.total + '.</p>'
+                    : '<p style="color: var(--text-dim); font-size: .85rem;">' + dados.total + ' registro(s).</p>';
+                resultadoRegistros.innerHTML =
+                    '<h3 style="margin-top: 0;">' + titulo + '</h3>' + aviso +
+                    '<div class="tabela-scroll" style="max-height: 480px; overflow-y: auto;">' +
+                        '<table class="tabela-futurista">' +
+                            '<thead><tr><th>Ativo</th><th>Data</th><th>Hora</th><th class="coluna-destaque">Valor da cotação</th><th>Origem</th></tr></thead>' +
+                            '<tbody>' + linhas + '</tbody>' +
+                        '</table>' +
+                    '</div>';
+            } catch (erro) {
+                resultadoRegistros.innerHTML = '<p style="color: var(--neon-red);">Falha ao carregar os registros. Tente novamente.</p>';
+            } finally {
+                botaoRegistros.disabled = false;
+            }
+        }
+
+        botaoRegistros.addEventListener("click", mostrarRegistros);
 
         // Escolher um ativo comprado preenche o ticker e já pesquisa.
         var seletorComprado = document.getElementById("campo-ativo-comprado");

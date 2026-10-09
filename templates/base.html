@@ -83,6 +83,45 @@
     </a>
     {% endif %}
 
+    {% if user.is_authenticated %}
+    <div id="popup-grafico-cotacao" class="popup-grafico" role="dialog" aria-modal="true" aria-label="Gráfico de cotações" hidden>
+        <div class="popup-grafico-caixa">
+            <button type="button" class="btn-futurista btn-secundario btn-icone popup-grafico-fechar" title="Fechar" aria-label="Fechar">✕</button>
+            <iframe title="Gráfico de cotações"></iframe>
+        </div>
+    </div>
+    <script>
+        (function () {
+            // Botões 📈 das grids de ativos comprados (.btn-grafico-cotacao):
+            // abrem o gráfico dos registros de cotação (compra x alvo) num
+            // popup, em vez de navegar para fora da tela. O href continua
+            // válido como alternativa (ex.: abrir em nova aba).
+            var popup = document.getElementById("popup-grafico-cotacao");
+            var iframe = popup.querySelector("iframe");
+
+            function fechar() {
+                popup.hidden = true;
+                iframe.src = "about:blank";
+            }
+
+            document.addEventListener("click", function (evento) {
+                var botao = evento.target.closest(".btn-grafico-cotacao");
+                if (!botao || evento.ctrlKey || evento.metaKey || evento.shiftKey) return;
+                evento.preventDefault();
+                iframe.src = botao.href;
+                popup.hidden = false;
+            });
+            popup.querySelector(".popup-grafico-fechar").addEventListener("click", fechar);
+            popup.addEventListener("click", function (evento) {
+                if (evento.target === popup) fechar();
+            });
+            document.addEventListener("keydown", function (evento) {
+                if (evento.key === "Escape" && !popup.hidden) fechar();
+            });
+        })();
+    </script>
+    {% endif %}
+
     <div id="overlay-atualizando" class="overlay-atualizando" hidden>
         <div class="spinner-atualizando" aria-hidden="true"></div>
         <p id="overlay-atualizando-texto">Atualizando...</p>

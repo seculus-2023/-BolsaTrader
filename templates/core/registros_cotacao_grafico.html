@@ -40,6 +40,12 @@
 
     {% if grafico %}
     <div class="grafico-wrap">
+        <div class="grafico-registros-area">
+        <div class="rotulos-linhas-esquerda" aria-hidden="true">
+            {% for r in grafico.rotulos_esquerda %}
+            <span class="rotulo-linha {{ r.classe }}" style="top: {{ r.topo_pct|unlocalize }}%;"><small>{{ r.titulo }}</small>{{ r.valor }}</span>
+            {% endfor %}
+        </div>
         {% localize off %}
         <svg viewBox="0 0 {{ grafico.largura }} {{ grafico.altura }}"
              class="grafico-cotacoes grafico-registros-cotacao" preserveAspectRatio="none"
@@ -61,6 +67,12 @@
             {% endfor %}
         </svg>
         {% endlocalize %}
+        <div class="rotulos-linhas-esquerda rotulos-linhas-direita" aria-hidden="true">
+            {% for r in grafico.rotulos_esquerda %}
+            <span class="rotulo-linha {{ r.classe }}" style="top: {{ r.topo_pct|unlocalize }}%;"><small>{{ r.titulo }}</small>{{ r.valor }}</span>
+            {% endfor %}
+        </div>
+        </div>
         {{ grafico.pontos|json_script:grafico.id_svg }}
         <div class="grafico-eixos">
             <span>{{ grafico.faixa_min_label }}</span>

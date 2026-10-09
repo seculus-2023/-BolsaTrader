@@ -1179,6 +1179,52 @@ body.pagina-popup {
 .grafico-referencia.referencia-compra { stroke: var(--neon-cyan); }
 .grafico-referencia.referencia-alvo { stroke: var(--neon-orange); }
 
+/* Rótulos (valor) das linhas dos dois lados do gráfico: Alvo, Compra, Última */
+.grafico-registros-area {
+    display: flex;
+    align-items: stretch;
+}
+
+.grafico-registros-area .grafico-registros-cotacao {
+    flex: 1;
+    min-width: 0;
+}
+
+.rotulos-linhas-esquerda {
+    position: relative;
+    flex: 0 0 96px;
+    height: 300px;
+}
+
+.rotulo-linha {
+    position: absolute;
+    right: 6px;
+    transform: translateY(-50%);
+    font-size: .75rem;
+    font-weight: 700;
+    line-height: 1.1;
+    text-align: right;
+    white-space: nowrap;
+}
+
+.rotulos-linhas-direita .rotulo-linha {
+    right: auto;
+    left: 6px;
+    text-align: left;
+}
+
+.rotulo-linha small {
+    display: block;
+    font-size: .65rem;
+    font-weight: 400;
+    color: var(--text-dim);
+}
+
+.rotulo-linha.referencia-alvo { color: var(--neon-orange); }
+.rotulo-linha.referencia-compra { color: var(--neon-cyan); }
+.rotulo-linha.linha-alta { color: var(--neon-green); }
+.rotulo-linha.linha-baixa { color: var(--neon-red); }
+
 .legenda-registros-cotacao {
     display: flex;
     flex-wrap: wrap;

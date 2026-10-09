@@ -1431,10 +1431,37 @@ def construir_grafico_registros_cotacao(
             "variacao_positiva": bool(preco_compra) and preco >= float(preco_compra),
         })
 
+    def pct_de(y: float) -> float:
+        # Posição vertical (% da altura do SVG) dos rótulos HTML à esquerda do gráfico.
+        return round(y / altura * 100, 2)
+
+    rotulos_esquerda = []
+    if preco_alvo is not None:
+        rotulos_esquerda.append({"classe": "referencia-alvo", "titulo": "Alvo",
+                                 "valor": real(float(preco_alvo)), "topo_pct": pct_de(y_de(float(preco_alvo)))})
+    if preco_compra is not None:
+        rotulos_esquerda.append({"classe": "referencia-compra", "titulo": "Compra",
+                                 "valor": real(float(preco_compra)), "topo_pct": pct_de(y_de(float(preco_compra)))})
+    rotulos_esquerda.append({
+        "classe": "linha-alta" if preco_compra is None or precos[-1] >= float(preco_compra) else "linha-baixa",
+        "titulo": "Última", "valor": real(precos[-1]), "topo_pct": pct_de(pontos[-1]["y"]),
+    })
+    # Afasta rótulos de linhas muito próximas pra não sobrepor o texto (~32px num gráfico de 300px).
+    distancia_min = 11.0
+    rotulos_esquerda.sort(key=lambda r: r["topo_pct"])
+    for anterior, atual in zip(rotulos_esquerda, rotulos_esquerda[1:]):
+        if atual["topo_pct"] - anterior["topo_pct"] < distancia_min:
+            atual["topo_pct"] = round(anterior["topo_pct"] + distancia_min, 2)
+    excesso = rotulos_esquerda[-1]["topo_pct"] - 96
+    if excesso > 0:
+        for r in rotulos_esquerda:
+            r["topo_pct"] = round(r["topo_pct"] - excesso, 2)
+
     return {
         "id_svg": "pontos-registros-cotacao",
         "largura": largura,
         "altura": altura,
+        "rotulos_esquerda": rotulos_esquerda,
         "x_inicio": padding,
         "x_fim": largura - padding,
         "y_topo": padding,

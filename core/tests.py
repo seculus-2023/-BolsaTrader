@@ -30,11 +30,12 @@ from django.utils import timezone
 from accounts.models import PerfilUsuario
 
 from . import services as core_services
-from .forms import OperacaoForm, VendaLoteForm
+from .forms import OperacaoForm, VendaLoteForm, PrevisaoAnalistaForm
 from .models import (
     Ativo, Cotacao, Operacao, Alerta, MensagemWhatsapp, CotacaoIndice, RegistroAtualizacaoCarteira,
     ContaCorrente, LancamentoContaCorrente, PostIt,
     CriptoAtivo, OperacaoCripto, CotacaoCripto, RegistroAtualizacaoCarteiraCripto, RegistroCotacao,
+    PrevisaoAnalista,
 )
 from .services import (
     calcular_posicoes, analisar_tendencia, gerar_alertas_para_usuario, construir_comparativo_valores,
@@ -70,6 +71,7 @@ from .services import (
     atualizar_cotacoes_cripto_ativos, calcular_posicoes_cripto,
     registrar_atualizacao_carteira_cripto,
     usuarios_logados_agora,
+    avaliar_previsao_analista, avaliar_previsoes_analistas, buscar_consenso_analistas,
 )
 
 
@@ -6055,3 +6057,169 @@ class RegistroCotacaoTests(TestCase):
         url_grafico = reverse("core:registros_cotacao_grafico", args=["PETR4"])
         for nome in ("core:posicoes", "core:operacao_lista", "core:dashboard"):
             self.assertContains(self.client.get(reverse(nome)), url_grafico, msg_prefix=nome)
+
+
+class PrevisoesAnalistasTests(TestCase):
+    """Previsões dos analistas (alvo de 12 meses) comparadas com o preço real."""
+
+    def setUp(self):
+        self.usuario = User.objects.create_user("analista", password="senha-forte-123")
+        self.ativo = Ativo.objects.create(ticker="PETR4")
+        self.hoje = date(2026, 10, 10)
+
+    def _previsao(self, data_registro, preco="30.00", alvo="36.00", usuario=None, ativo=None):
+        return PrevisaoAnalista.objects.create(
+            usuario=usuario or self.usuario, ativo=ativo or self.ativo, data_registro=data_registro,
+            preco_registro=Decimal(preco), alvo_medio=Decimal(alvo),
+        )
+
+    def _cotacao(self, data_, fechamento, maxima=None, minima=None, ativo=None):
+        return Cotacao.objects.create(
+            ativo=ativo or self.ativo, data=data_, preco_fechamento=Decimal(fechamento),
+            maxima=Decimal(maxima) if maxima else None, minima=Decimal(minima) if minima else None,
+        )
+
+    def test_alta_concluida_acerta_direcao_e_alvo_no_periodo_mas_nao_no_fim(self):
+        previsao = self._previsao(date(2025, 9, 1))
+        cotacoes = [
+            self._cotacao(date(2025, 8, 29), "50.00"),  # antes do registro: ignorada
+            self._cotacao(date(2026, 3, 2), "35.00", maxima="36.50"),
+            self._cotacao(date(2026, 8, 31), "33.00"),
+            self._cotacao(date(2026, 9, 10), "20.00"),  # depois do vencimento: ignorada
+        ]
+        resultado = avaliar_previsao_analista(previsao, cotacoes, hoje=self.hoje)
+
+        self.assertTrue(resultado["concluida"])
+        self.assertEqual(resultado["direcao_prevista"], "ALTA")
+        self.assertEqual(resultado["preco_final"], Decimal("33.00"))
+        self.assertEqual(resultado["variacao_real_pct"], Decimal("10.00"))
+        self.assertTrue(resultado["acertou_direcao"])
+        self.assertFalse(resultado["alvo_no_fim"])
+        self.assertTrue(resultado["alvo_no_periodo"])
+        self.assertEqual(resultado["erro_alvo_pct"], Decimal("-8.33"))
+        self.assertFalse(resultado["dados_incompletos"])
+
+    def test_baixa_em_andamento_e_parcial(self):
+        previsao = self._previsao(date(2026, 6, 1), preco="30.00", alvo="25.00")
+        cotacoes = [self._cotacao(date(2026, 10, 9), "24.00", minima="23.50")]
+        resultado = avaliar_previsao_analista(previsao, cotacoes, hoje=self.hoje)
+
+        self.assertFalse(resultado["concluida"])
+        self.assertEqual(resultado["dias_restantes"], 234)
+        self.assertEqual(resultado["direcao_prevista"], "BAIXA")
+        self.assertTrue(resultado["acertou_direcao"])
+        self.assertTrue(resultado["alvo_no_fim"])
+        self.assertTrue(resultado["alvo_no_periodo"])
+
+    def test_sem_cotacao_no_periodo_fica_sem_resultado(self):
+        previsao = self._previsao(date(2025, 1, 2))
+        resultado = avaliar_previsao_analista(previsao, [], hoje=self.hoje)
+        self.assertIsNone(resultado["acertou_direcao"])
+        self.assertTrue(resultado["dados_incompletos"])
+
+    def test_vencida_com_ultima_cotacao_longe_do_vencimento_marca_dados_incompletos(self):
+        previsao = self._previsao(date(2025, 1, 2))
+        resultado = avaliar_previsao_analista(previsao, [self._cotacao(date(2025, 6, 2), "31.00")], hoje=self.hoje)
+        self.assertTrue(resultado["dados_incompletos"])
+        self.assertTrue(resultado["acertou_direcao"])
+
+    def test_resumo_separa_concluidas_e_compara_com_taxa_base(self):
+        outro_ativo = Ativo.objects.create(ticker="VALE3")
+        self._previsao(date(2025, 9, 1))  # alta, subiu -> acerto
+        self._previsao(date(2025, 9, 1), ativo=outro_ativo)  # alta, caiu -> erro
+        self._previsao(date(2026, 9, 1))  # em andamento, sem cotação depois do registro
+        self._cotacao(date(2026, 8, 31), "40.00")
+        self._cotacao(date(2026, 8, 31), "28.00", ativo=outro_ativo)
+        self._previsao(date(2025, 9, 1), usuario=User.objects.create_user("outro", password="senha-forte-123"))
+
+        resultado = avaliar_previsoes_analistas(self.usuario, hoje=self.hoje)
+
+        self.assertEqual(len(resultado["avaliacoes"]), 3)
+        concluidas = resultado["concluidas"]
+        self.assertEqual(concluidas["total"], 2)
+        self.assertEqual(concluidas["direcao"], {"acertos": 1, "total": 2, "pct": 50.0})
+        self.assertEqual(concluidas["base_alta_pct"], 50.0)
+        self.assertEqual(concluidas["previstas_alta_pct"], 100.0)
+        self.assertEqual(concluidas["alvo_no_fim"]["acertos"], 1)
+        self.assertEqual(resultado["em_andamento"]["total"], 1)
+        self.assertEqual(resultado["em_andamento"]["com_preco"], 0)
+
+    def test_tela_registra_previsao_e_isola_usuarios(self):
+        self._cotacao(timezone.localdate(), "31.00")
+        self._previsao(date(2025, 9, 1))
+        self.client.force_login(self.usuario)
+        resposta = self.client.get(reverse("core:previsoes_analistas"))
+        self.assertEqual(resposta.status_code, 200)
+        self.assertContains(resposta, "PETR4")
+
+        resposta = self.client.post(reverse("core:previsoes_analistas"), {
+            "ticker": "itub4", "data_registro": "2026-10-01", "preco_registro": "35.00",
+            "alvo_medio": "42.00", "alvo_minimo": "38.00", "alvo_maximo": "48.00",
+            "recomendacao": "COMPRA", "numero_analistas": "12", "origem": "API",
+        })
+        self.assertRedirects(resposta, reverse("core:previsoes_analistas"))
+        previsao = PrevisaoAnalista.objects.get(usuario=self.usuario, ativo__ticker="ITUB4")
+        self.assertEqual(previsao.origem, PrevisaoAnalista.API)
+        self.assertEqual(previsao.data_vencimento, date(2027, 10, 1))
+
+        intruso = User.objects.create_user("intruso", password="senha-forte-123")
+        self.client.force_login(intruso)
+        resposta = self.client.post(reverse("core:previsao_analista_excluir", args=[previsao.id]))
+        self.assertEqual(resposta.status_code, 404)
+        self.assertTrue(PrevisaoAnalista.objects.filter(id=previsao.id).exists())
+
+    def test_formulario_rejeita_faixa_incoerente(self):
+        form = PrevisaoAnalistaForm({
+            "ticker": "PETR4", "data_registro": "2026-10-01", "preco_registro": "30.00",
+            "alvo_medio": "36.00", "alvo_minimo": "37.00", "alvo_maximo": "35.00",
+        }, usuario=self.usuario)
+        self.assertFalse(form.is_valid())
+        self.assertIn("alvo_minimo", form.errors)
+        self.assertIn("alvo_maximo", form.errors)
+
+    @patch("core.services.requests.get")
+    def test_consenso_vem_do_modulo_financial_data(self, mock_get):
+        mock_get.return_value.raise_for_status = lambda: None
+        mock_get.return_value.json = lambda: {"results": [{
+            "symbol": "PETR4", "regularMarketPrice": 30.5,
+            "financialData": {
+                "targetMeanPrice": 38.2, "targetLowPrice": 31, "targetHighPrice": 45,
+                "recommendationKey": "buy", "numberOfAnalystOpinions": 14,
+            },
+        }]}
+        self.client.force_login(self.usuario)
+        resposta = self.client.get(reverse("core:previsoes_analistas_consenso"), {"ticker": "petr4"})
+        dados = resposta.json()
+        self.assertTrue(dados["ok"])
+        self.assertTrue(dados["tem_consenso"])
+        self.assertEqual(dados["preco"], "30.50")
+        self.assertEqual(dados["alvo_medio"], "38.20")
+        self.assertEqual(dados["recomendacao"], "COMPRA")
+        self.assertEqual(dados["numero_analistas"], 14)
+        self.assertEqual(mock_get.call_args.kwargs["params"]["modules"], "financialData")
+
+    @patch("core.services.requests.get")
+    def test_consenso_indisponivel_no_plano_cai_para_so_cotacao(self, mock_get):
+        recusada = Mock(status_code=400)
+        recusada.raise_for_status.side_effect = requests.HTTPError(response=recusada)
+        cotacao = Mock()
+        cotacao.raise_for_status = lambda: None
+        cotacao.json = lambda: {"results": [{"symbol": "PETR4", "regularMarketPrice": 30.5}]}
+        mock_get.side_effect = [recusada, cotacao]
+
+        consenso = buscar_consenso_analistas("PETR4")
+
+        self.assertEqual(consenso["preco"], Decimal("30.50"))
+        self.assertIsNone(consenso["alvo_medio"])
+        self.assertEqual(consenso["recomendacao"], "")
+
+    @patch("core.services.requests.get")
+    def test_ciclo_automatico_inclui_ativos_com_previsao_em_andamento(self, mock_get):
+        mock_get.return_value.raise_for_status = lambda: None
+        mock_get.return_value.json = lambda: {"results": [{"symbol": "PETR4", "regularMarketPrice": 31.0}]}
+        self._previsao(timezone.localdate() - timedelta(days=10))
+
+        resumo = executar_ciclo_atualizacao_cotacoes()
+
+        self.assertEqual(resumo["ativos_total"], 1)
+        self.assertTrue(Cotacao.objects.filter(ativo=self.ativo, data=timezone.localdate()).exists())

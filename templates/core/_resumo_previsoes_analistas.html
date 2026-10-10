@@ -1,0 +1,39 @@
+<div class="card-glass" style="flex: 1 1 380px;">
+    <h2 style="margin-top: 0;">{{ titulo }}</h2>
+    {% if resumo.com_preco %}
+    <div class="grid-stats">
+        <div class="stat-tile">
+            <div class="label">Acerto da direção</div>
+            <div class="value">{% if resumo.direcao.pct is not None %}{{ resumo.direcao.pct }}%{% else %}—{% endif %}</div>
+            <div style="color: var(--text-dim); font-size: .8rem;">{{ resumo.direcao.acertos }} de {{ resumo.direcao.total }}</div>
+        </div>
+        <div class="stat-tile">
+            <div class="label">Taxa base de alta</div>
+            <div class="value">{{ resumo.base_alta_pct }}%</div>
+            <div style="color: var(--text-dim); font-size: .8rem;">consenso de alta em {{ resumo.previstas_alta_pct }}%</div>
+        </div>
+        <div class="stat-tile">
+            <div class="label">Alvo atingido no fim</div>
+            <div class="value">{% if resumo.alvo_no_fim.pct is not None %}{{ resumo.alvo_no_fim.pct }}%{% else %}—{% endif %}</div>
+            <div style="color: var(--text-dim); font-size: .8rem;">{{ resumo.alvo_no_fim.acertos }} de {{ resumo.alvo_no_fim.total }}</div>
+        </div>
+        <div class="stat-tile">
+            <div class="label">Alvo atingido no período</div>
+            <div class="value">{% if resumo.alvo_no_periodo.pct is not None %}{{ resumo.alvo_no_periodo.pct }}%{% else %}—{% endif %}</div>
+            <div style="color: var(--text-dim); font-size: .8rem;">{{ resumo.alvo_no_periodo.acertos }} de {{ resumo.alvo_no_periodo.total }}</div>
+        </div>
+        <div class="stat-tile">
+            <div class="label">Erro médio vs alvo</div>
+            <div class="value">{{ resumo.erro_medio_abs_pct }}%</div>
+            <div style="color: var(--text-dim); font-size: .8rem;">{{ resumo.com_preco }} de {{ resumo.total }} com preço</div>
+        </div>
+    </div>
+    {% if not definitivo %}
+    <p style="color: var(--text-dim); font-size: .8rem; margin-bottom: 0;">Parcial: usa o preço até hoje, o prazo de 12 meses ainda não acabou.</p>
+    {% endif %}
+    {% elif resumo.total %}
+    <p style="color: var(--text-dim); margin: 0;">{{ resumo.total }} previsão(ões), ainda sem cotação gravada depois do registro - clique em "Atualizar preços das previsões".</p>
+    {% else %}
+    <p style="color: var(--text-dim); margin: 0;">Nenhuma previsão neste grupo ainda.</p>
+    {% endif %}
+</div>

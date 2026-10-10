@@ -35,6 +35,7 @@
         { termos: ["posicoes", "posicao", "carteira"], rota: "posicoes" },
         { termos: ["analise", "mercado"], rota: "analise_mercado" },
         { termos: ["scanner", "escaner"], rota: "scanner_tecnico" },
+        { termos: ["previsao dos analistas", "previsoes dos analistas", "previsao de analista", "previsoes de analista", "preco alvo"], rota: "previsoes_analistas" },
         { termos: ["trading view", "tradingview", "treidingview"], rota: "tradingview" },
         { termos: ["acoes da b3", "acoes b3", "lista de acoes"], rota: "acoes_b3" },
         { termos: ["noticia"], rota: "noticias" },

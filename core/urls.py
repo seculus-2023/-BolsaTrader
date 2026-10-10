@@ -43,6 +43,22 @@ urlpatterns = [
     path("analise-mercado/robo/exportar/pdf/", views.robo_exportar_pdf, name="robo_exportar_pdf"),
     path("analise-mercado/robo/backtest/", views.backtest_robo, name="backtest_robo"),
     path("tradingview/", views.tradingview, name="tradingview"),
+    path("tradingview/previsoes/", views.previsoes_analistas, name="previsoes_analistas"),
+    path(
+        "tradingview/previsoes/consenso/",
+        views.previsoes_analistas_consenso,
+        name="previsoes_analistas_consenso",
+    ),
+    path(
+        "tradingview/previsoes/atualizar/",
+        views.previsoes_analistas_atualizar,
+        name="previsoes_analistas_atualizar",
+    ),
+    path(
+        "tradingview/previsoes/<int:previsao_id>/excluir/",
+        views.previsao_analista_excluir,
+        name="previsao_analista_excluir",
+    ),
     path("historico-graficos/", views.historico_graficos, name="historico_graficos"),
     path("whatsapp/", views.mensagens_whatsapp, name="mensagens_whatsapp"),
     path("cotacoes/detalhes/", views.detalhes_cotacoes, name="detalhes_cotacoes"),

@@ -4,7 +4,9 @@ from django import forms
 from django.conf import settings
 from django.utils import timezone
 
-from .models import Operacao, Ativo, FonteNoticia, ContaCorrente, LancamentoContaCorrente, CriptoAtivo, OperacaoCripto
+from .models import (
+    Operacao, Ativo, FonteNoticia, ContaCorrente, LancamentoContaCorrente, CriptoAtivo, OperacaoCripto, PrevisaoAnalista,
+)
 from .services import ativos_distintos_comprados
 
 
@@ -597,3 +599,71 @@ class TransferenciaContaCorrenteForm(forms.Form):
         for name, field in self.fields.items():
             css = field.widget.attrs.get("class", "")
             field.widget.attrs["class"] = (css + " form-control-futurista").strip()
+
+
+class PrevisaoAnalistaForm(forms.ModelForm):
+    """
+    Registro do consenso dos analistas para um ativo (12 meses), como o
+    TradingView mostra na aba "Previsão" - ver core.models.PrevisaoAnalista.
+    O usuário pode pré-preencher pela API (botão "Buscar na API" da tela) e
+    completar o que faltar.
+    """
+
+    ticker = forms.CharField(
+        label="Ticker do ativo (ex: PETR4)",
+        max_length=12,
+        widget=forms.TextInput(attrs={"placeholder": "PETR4"}),
+    )
+
+    class Meta:
+        model = PrevisaoAnalista
+        fields = [
+            "data_registro",
+            "preco_registro",
+            "alvo_medio",
+            "alvo_minimo",
+            "alvo_maximo",
+            "recomendacao",
+            "numero_analistas",
+            "observacao",
+        ]
+        widgets = {
+            "data_registro": forms.DateInput(attrs={"type": "date"}, format="%Y-%m-%d"),
+        }
+
+    def __init__(self, *args, usuario=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.usuario = usuario
+        self.fields["recomendacao"].choices = [("", "Não informada")] + PrevisaoAnalista.RECOMENDACAO_CHOICES
+        for nome in ("preco_registro", "alvo_medio", "alvo_minimo", "alvo_maximo"):
+            self.fields[nome].min_value = Decimal("0.01")
+            self.fields[nome].widget.attrs.update({"step": "0.01", "min": "0.01"})
+
+    def clean_ticker(self):
+        return self.cleaned_data["ticker"].strip().upper()
+
+    def clean_data_registro(self):
+        valor = self.cleaned_data["data_registro"]
+        if valor > timezone.localdate():
+            raise forms.ValidationError("A data do registro não pode estar no futuro.")
+        return valor
+
+    def clean(self):
+        cleaned_data = super().clean()
+        medio = cleaned_data.get("alvo_medio")
+        minimo = cleaned_data.get("alvo_minimo")
+        maximo = cleaned_data.get("alvo_maximo")
+        if medio is not None and minimo is not None and minimo > medio:
+            self.add_error("alvo_minimo", "O alvo mínimo não pode ser maior que o alvo médio.")
+        if medio is not None and maximo is not None and maximo < medio:
+            self.add_error("alvo_maximo", "O alvo máximo não pode ser menor que o alvo médio.")
+        return cleaned_data
+
+    def save(self, commit=True):
+        previsao = super().save(commit=False)
+        previsao.ativo, _ = Ativo.objects.get_or_create(ticker=self.cleaned_data["ticker"])
+        if self.usuario is not None:
+            previsao.usuario = self.usuario
+        if commit:
+            previsao.save()
+        return previsao

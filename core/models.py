@@ -1,3 +1,4 @@
+from datetime import timedelta
 from decimal import ROUND_HALF_UP, Decimal
 
 from django.conf import settings
@@ -968,3 +969,77 @@ class RegistroAtualizacaoCarteiraCripto(models.Model):
 
     def __str__(self):
         return f"{self.usuario} - {self.criado_em:%d/%m/%Y %H:%M}"
+
+
+class PrevisaoAnalista(models.Model):
+    """
+    Previsão de consenso dos analistas para um ativo num horizonte de 12
+    meses (preço-alvo médio/mínimo/máximo e recomendação, como o TradingView
+    mostra na aba "Previsão"), registrada junto com a cotação do dia. Passado
+    o prazo, o sistema compara com o preço real e mede se os analistas
+    acertaram a direção (alta/baixa) e o alvo - ver
+    core.services.avaliar_previsoes_analistas.
+    """
+
+    PRAZO_DIAS = 365
+
+    COMPRA_FORTE = "COMPRA_FORTE"
+    COMPRA = "COMPRA"
+    NEUTRO = "NEUTRO"
+    VENDA = "VENDA"
+    VENDA_FORTE = "VENDA_FORTE"
+    RECOMENDACAO_CHOICES = [
+        (COMPRA_FORTE, "Compra forte"),
+        (COMPRA, "Compra"),
+        (NEUTRO, "Neutro"),
+        (VENDA, "Venda"),
+        (VENDA_FORTE, "Venda forte"),
+    ]
+
+    MANUAL = "MANUAL"
+    API = "API"
+    ORIGEM_CHOICES = [
+        (MANUAL, "Manual (TradingView)"),
+        (API, "API de cotações"),
+    ]
+
+    usuario = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="previsoes_analistas",
+    )
+    ativo = models.ForeignKey(Ativo, on_delete=models.CASCADE, related_name="previsoes_analistas")
+    data_registro = models.DateField("Data do registro", default=timezone.localdate)
+    preco_registro = models.DecimalField("Cotação na data (R$)", max_digits=12, decimal_places=2)
+    alvo_medio = models.DecimalField("Preço-alvo médio (R$)", max_digits=12, decimal_places=2)
+    alvo_minimo = models.DecimalField("Preço-alvo mínimo (R$)", max_digits=12, decimal_places=2, null=True, blank=True)
+    alvo_maximo = models.DecimalField("Preço-alvo máximo (R$)", max_digits=12, decimal_places=2, null=True, blank=True)
+    recomendacao = models.CharField("Recomendação", max_length=12, choices=RECOMENDACAO_CHOICES, blank=True)
+    numero_analistas = models.PositiveIntegerField("Nº de analistas", null=True, blank=True)
+    origem = models.CharField("Origem", max_length=8, choices=ORIGEM_CHOICES, default=MANUAL)
+    observacao = models.CharField("Observação", max_length=255, blank=True)
+    criado_em = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = "Previsão de analistas"
+        verbose_name_plural = "Previsões de analistas"
+        ordering = ["-data_registro", "-id"]
+        indexes = [models.Index(fields=["usuario", "data_registro"])]
+
+    def __str__(self):
+        return f"{self.ativo.ticker} {self.data_registro:%d/%m/%Y} alvo R$ {self.alvo_medio}"
+
+    @property
+    def data_vencimento(self):
+        return self.data_registro + timedelta(days=self.PRAZO_DIAS)
+
+    @property
+    def direcao_prevista(self) -> str:
+        """"ALTA", "BAIXA" ou "NEUTRA" - pelo alvo médio em relação à cotação do dia do registro."""
+        if self.alvo_medio > self.preco_registro:
+            return "ALTA"
+        if self.alvo_medio < self.preco_registro:
+            return "BAIXA"
+        return "NEUTRA"
+
+    @property
+    def variacao_prevista_pct(self) -> Decimal:
+        return ((self.alvo_medio / self.preco_registro - 1) * 100).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)

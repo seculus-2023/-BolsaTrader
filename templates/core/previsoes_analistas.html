@@ -1,0 +1,207 @@
+{% extends "base.html" %}
+{% block titulo %}Previsões dos Analistas - BolsaTrader{% endblock %}
+{% block conteudo %}
+<h1>Previsões dos Analistas</h1>
+<p style="color: var(--text-dim);">
+    Os analistas acertam a tendência de um ano? Registre aqui o consenso de 12 meses de um ativo (preço-alvo médio,
+    mínimo, máximo e recomendação, como o TradingView mostra na aba <strong>Previsão</strong> do ativo) junto com a
+    cotação do dia. Passados 12 meses, o sistema compara com o preço real e mede, com os seus próprios dados, quantas
+    vezes eles acertaram a direção (alta ou baixa) e o alvo. Antes do vencimento, o resultado aparece como parcial.
+</p>
+
+<div style="display: flex; gap: 1.2rem; flex-wrap: wrap; margin-top: 1rem;">
+    {% include "core/_resumo_previsoes_analistas.html" with titulo="Concluídas (12 meses vencidos)" resumo=concluidas definitivo=True %}
+    {% include "core/_resumo_previsoes_analistas.html" with titulo="Em andamento (parcial, até hoje)" resumo=em_andamento definitivo=False %}
+</div>
+<p style="color: var(--text-dim); font-size: .85rem; margin-top: .6rem;">
+    <strong>Como ler:</strong> a taxa de acerto da direção só diz algo se for maior que a <em>taxa base de alta</em>
+    (a fatia das previsões em que o preço simplesmente subiu) - como quase todo consenso é de alta, "chutar alta
+    para tudo" acertaria essa mesma taxa. Estudos acadêmicos encontram cerca de 38% dos alvos atingidos no fim dos
+    12 meses e 54% a 64% atingidos em algum momento do período.
+</p>
+
+<div class="card-glass" style="margin-top: 1.4rem;">
+    <h2 style="margin-top: 0;">Registrar previsão</h2>
+    <p style="color: var(--text-dim); font-size: .85rem; margin-top: -.4rem;">
+        Informe o ticker e clique em <strong>Buscar na API</strong> para preencher a cotação de hoje (e o consenso,
+        quando a API de cotações tiver o dado). Confira os valores na página de previsão do TradingView e ajuste o
+        que for preciso antes de salvar.
+    </p>
+    <form method="post" class="form-futurista" id="form-previsao-analista">
+        {% csrf_token %}
+        <input type="hidden" name="origem" id="campo-origem-previsao" value="MANUAL">
+        {{ form.non_field_errors }}
+        <div style="display: flex; gap: .8rem; flex-wrap: wrap; align-items: flex-end;">
+            <div>
+                {{ form.ticker.label_tag }}
+                {{ form.ticker }}
+                {{ form.ticker.errors }}
+            </div>
+            <button type="button" class="btn-futurista btn-secundario" id="btn-buscar-consenso">Buscar na API</button>
+            <a href="#" class="btn-futurista btn-secundario" id="link-previsao-tradingview" target="_blank" rel="noopener">Abrir previsão no TradingView</a>
+        </div>
+        <p id="aviso-consenso" style="color: var(--text-dim); font-size: .85rem; min-height: 1.2em;"></p>
+        <div style="display: flex; gap: .8rem; flex-wrap: wrap;">
+            {% for campo in form %}{% if campo.name != "ticker" and campo.name != "observacao" %}
+            <div>
+                {{ campo.label_tag }}
+                {{ campo }}
+                {{ campo.errors }}
+            </div>
+            {% endif %}{% endfor %}
+        </div>
+        <div style="margin-top: .8rem;">
+            {{ form.observacao.label_tag }}
+            {{ form.observacao }}
+            {{ form.observacao.errors }}
+        </div>
+        <button type="submit" class="btn-futurista" style="margin-top: .8rem;">Salvar previsão</button>
+    </form>
+</div>
+
+<div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: .8rem; margin-top: 1.8rem;">
+    <h2 style="margin: 0;">Previsões registradas</h2>
+    <form method="post" action="{% url 'core:previsoes_analistas_atualizar' %}">
+        {% csrf_token %}
+        <button type="submit" class="btn-futurista btn-secundario"
+                title="Busca a cotação de hoje e o histórico recente dos ativos com previsão dentro do prazo">
+            ⟳ Atualizar preços das previsões
+        </button>
+    </form>
+</div>
+<div class="card-glass" style="margin-top: .8rem;">
+    {% if avaliacoes %}
+    <div class="tabela-scroll">
+    <table class="tabela-futurista">
+        <thead>
+            <tr>
+                <th>Ativo</th>
+                <th>Registro</th>
+                <th>Cotação</th>
+                <th>Alvo médio</th>
+                <th>Faixa</th>
+                <th>Recomendação</th>
+                <th>Previsto</th>
+                <th>Vencimento</th>
+                <th>Preço final</th>
+                <th>Real</th>
+                <th>Direção</th>
+                <th>Alvo no fim</th>
+                <th>Alvo no período</th>
+                <th>Erro vs alvo</th>
+                <th></th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for a in avaliacoes %}
+            {% with p=a.previsao %}
+            <tr>
+                <td><strong>{{ p.ativo.ticker }}</strong>{% if p.observacao %}<br><span style="color: var(--text-dim); font-size: .8rem;">{{ p.observacao }}</span>{% endif %}</td>
+                <td>{{ p.data_registro|date:"d/m/Y" }}<br><span style="color: var(--text-dim); font-size: .8rem;">{{ p.get_origem_display }}</span></td>
+                <td>R$ {{ p.preco_registro }}</td>
+                <td>R$ {{ p.alvo_medio }}</td>
+                <td>{% if p.alvo_minimo or p.alvo_maximo %}R$ {{ p.alvo_minimo|default:"—" }} a {{ p.alvo_maximo|default:"—" }}{% else %}—{% endif %}</td>
+                <td>{{ p.get_recomendacao_display|default:"—" }}{% if p.numero_analistas %}<br><span style="color: var(--text-dim); font-size: .8rem;">{{ p.numero_analistas }} analista(s)</span>{% endif %}</td>
+                <td>
+                    <span class="badge-tendencia {% if a.direcao_prevista == 'ALTA' %}badge-alta{% elif a.direcao_prevista == 'BAIXA' %}badge-baixa{% else %}badge-neutro{% endif %}">{{ a.direcao_prevista|title }}</span>
+                    <br><span style="font-size: .8rem;">{{ p.variacao_prevista_pct }}%</span>
+                </td>
+                <td>
+                    {{ p.data_vencimento|date:"d/m/Y" }}
+                    <br><span style="color: var(--text-dim); font-size: .8rem;">{% if a.concluida %}concluída{% else %}faltam {{ a.dias_restantes }} dia(s){% endif %}</span>
+                </td>
+                <td>
+                    {% if a.preco_final is not None %}R$ {{ a.preco_final }}<br><span style="color: var(--text-dim); font-size: .8rem;">{{ a.data_preco_final|date:"d/m/Y" }}</span>{% else %}—{% endif %}
+                    {% if a.dados_incompletos %}<br><span class="valor-negativo" style="font-size: .8rem;" title="Sem cotação gravada perto do vencimento - clique em Atualizar preços das previsões">dados incompletos</span>{% endif %}
+                </td>
+                <td class="{% if a.variacao_real_pct > 0 %}valor-positivo{% elif a.variacao_real_pct < 0 %}valor-negativo{% endif %}">
+                    {% if a.variacao_real_pct is not None %}{{ a.variacao_real_pct }}%{% else %}—{% endif %}
+                </td>
+                {% include "core/_celula_acerto.html" with valor=a.acertou_direcao %}
+                {% include "core/_celula_acerto.html" with valor=a.alvo_no_fim %}
+                {% include "core/_celula_acerto.html" with valor=a.alvo_no_periodo %}
+                <td>{% if a.erro_alvo_pct is not None %}{{ a.erro_alvo_pct }}%{% else %}—{% endif %}</td>
+                <td>
+                    <form method="post" action="{% url 'core:previsao_analista_excluir' p.id %}" onsubmit="return confirm('Excluir a previsão de {{ p.ativo.ticker }}?');">
+                        {% csrf_token %}
+                        <button type="submit" class="link-botao" title="Excluir previsão">🗑</button>
+                    </form>
+                </td>
+            </tr>
+            {% endwith %}
+            {% endfor %}
+        </tbody>
+    </table>
+    </div>
+    {% else %}
+    <p style="color: var(--text-dim); margin: 0;">Nenhuma previsão registrada ainda.</p>
+    {% endif %}
+</div>
+
+<script>
+    (function () {
+        var campoTicker = document.getElementById("id_ticker");
+        var link = document.getElementById("link-previsao-tradingview");
+        var aviso = document.getElementById("aviso-consenso");
+        var origem = document.getElementById("campo-origem-previsao");
+        var botao = document.getElementById("btn-buscar-consenso");
+        if (!campoTicker) return;
+
+        function tickerAtual() {
+            return campoTicker.value.trim().toUpperCase();
+        }
+
+        function atualizarLink() {
+            var ticker = tickerAtual();
+            link.href = ticker
+                ? "https://br.tradingview.com/symbols/BMFBOVESPA-" + encodeURIComponent(ticker) + "/forecast/"
+                : "https://br.tradingview.com/markets/stocks-brazil/market-movers-all-stocks/";
+        }
+        campoTicker.addEventListener("input", atualizarLink);
+        atualizarLink();
+
+        function preencher(id, valor) {
+            var campo = document.getElementById(id);
+            if (campo && valor !== null && valor !== undefined && valor !== "") campo.value = valor;
+        }
+
+        botao.addEventListener("click", function () {
+            var ticker = tickerAtual();
+            if (!ticker) {
+                aviso.textContent = "Informe o ticker antes de buscar.";
+                return;
+            }
+            aviso.textContent = "Buscando " + ticker + "...";
+            botao.disabled = true;
+            fetch("{% url 'core:previsoes_analistas_consenso' %}?ticker=" + encodeURIComponent(ticker))
+                .then(function (r) { return r.json(); })
+                .then(function (dados) {
+                    if (!dados.ok) {
+                        aviso.textContent = dados.erro || "Não foi possível consultar a API.";
+                        return;
+                    }
+                    preencher("id_preco_registro", dados.preco);
+                    if (dados.tem_consenso) {
+                        preencher("id_alvo_medio", dados.alvo_medio);
+                        preencher("id_alvo_minimo", dados.alvo_minimo);
+                        preencher("id_alvo_maximo", dados.alvo_maximo);
+                        preencher("id_recomendacao", dados.recomendacao);
+                        preencher("id_numero_analistas", dados.numero_analistas);
+                        origem.value = "API";
+                        aviso.textContent = "Cotação e consenso preenchidos pela API - confira com o TradingView antes de salvar.";
+                    } else {
+                        aviso.textContent = "Cotação preenchida. A API não trouxe o consenso dos analistas - copie os alvos da página de previsão do TradingView.";
+                    }
+                })
+                .catch(function () { aviso.textContent = "Falha de conexão ao consultar a API."; })
+                .finally(function () { botao.disabled = false; });
+        });
+
+        // editar os alvos à mão depois da busca: o registro passa a ser manual
+        ["id_alvo_medio", "id_alvo_minimo", "id_alvo_maximo", "id_recomendacao"].forEach(function (id) {
+            var campo = document.getElementById(id);
+            if (campo) campo.addEventListener("input", function () { origem.value = "MANUAL"; });
+        });
+    })();
+</script>
+{% endblock %}

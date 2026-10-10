@@ -2,7 +2,7 @@ from django.contrib import admin
 
 from .models import (
     Ativo, Operacao, Cotacao, Alerta, MensagemWhatsapp, FonteNoticia, Noticia, CotacaoIndice,
-    ContaCorrente, LancamentoContaCorrente, RegistroCotacao,
+    ContaCorrente, LancamentoContaCorrente, RegistroCotacao, PrevisaoAnalista,
 )
 
 
@@ -88,3 +88,10 @@ class LancamentoContaCorrenteAdmin(admin.ModelAdmin):
     list_filter = ("tipo", "origem", "data")
     search_fields = ("conta__usuario__username", "descricao")
     autocomplete_fields = ("conta", "operacao")
+
+
+@admin.register(PrevisaoAnalista)
+class PrevisaoAnalistaAdmin(admin.ModelAdmin):
+    list_display = ("usuario", "ativo", "data_registro", "preco_registro", "alvo_medio", "recomendacao", "origem")
+    list_filter = ("origem", "recomendacao")
+    search_fields = ("ativo__ticker", "usuario__username")

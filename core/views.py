@@ -30,10 +30,12 @@ from .forms import (
     VendaLoteCriptoForm,
     ConfirmarCompraCriptoForm,
     EditarOperacaoCriptoForm,
+    PrevisaoAnalistaForm,
 )
 from .models import (
     Operacao, Alerta, Ativo, Cotacao, MensagemWhatsapp, FonteNoticia, AcaoB3, RegistroAtualizacaoCarteira,
     LancamentoContaCorrente, CriptoAtivo, OperacaoCripto, RegistroAtualizacaoCarteiraCripto, RegistroCotacao,
+    PrevisaoAnalista,
 )
 from .services import (
     calcular_posicoes,
@@ -115,6 +117,9 @@ from .services import (
     gerar_pdf_operacoes_cripto,
     registrar_atualizacao_carteira_cripto,
     usuarios_logados_agora,
+    avaliar_previsoes_analistas,
+    buscar_consenso_analistas,
+    atualizar_precos_previsoes,
 )
 
 TICKER_VALIDO = re.compile(r"^[A-Z0-9]{1,15}$")
@@ -1481,6 +1486,97 @@ def tradingview(request):
         "home_broker_url": settings.HOME_BROKER_URL,
     }
     return render(request, "core/tradingview.html", contexto)
+
+
+@login_required
+def previsoes_analistas(request):
+    """
+    Previsões dos Analistas: o usuário registra o consenso de 12 meses
+    (preço-alvo e recomendação, como o TradingView mostra) e a tela mede,
+    com os dados dele, quantas vezes os analistas acertaram a direção e o
+    alvo - ver core.services.avaliar_previsoes_analistas.
+    """
+    if request.method == "POST":
+        form = PrevisaoAnalistaForm(request.POST, usuario=request.user)
+        if form.is_valid():
+            previsao = form.save(commit=False)
+            if request.POST.get("origem") == PrevisaoAnalista.API:
+                previsao.origem = PrevisaoAnalista.API
+            previsao.save()
+            messages.success(
+                request,
+                f"Previsão de {previsao.ativo.ticker} registrada - vence em {previsao.data_vencimento:%d/%m/%Y}.",
+            )
+            return redirect("core:previsoes_analistas")
+    else:
+        form = PrevisaoAnalistaForm(usuario=request.user, initial={"data_registro": timezone.localdate()})
+
+    resultado = avaliar_previsoes_analistas(request.user)
+    return render(request, "core/previsoes_analistas.html", {
+        "form": form,
+        "avaliacoes": resultado["avaliacoes"],
+        "concluidas": resultado["concluidas"],
+        "em_andamento": resultado["em_andamento"],
+    })
+
+
+@login_required
+@require_POST
+def previsao_analista_excluir(request, previsao_id):
+    previsao = get_object_or_404(PrevisaoAnalista, id=previsao_id, usuario=request.user)
+    ticker = previsao.ativo.ticker
+    previsao.delete()
+    messages.success(request, f"Previsão de {ticker} excluída.")
+    return redirect("core:previsoes_analistas")
+
+
+@login_required
+@require_GET
+def previsoes_analistas_consenso(request):
+    """
+    Pré-preenchimento (via AJAX) do formulário de Previsões dos Analistas:
+    cotação atual e, quando a API tiver, o consenso dos analistas do ticker
+    (ver core.services.buscar_consenso_analistas).
+    """
+    ticker = (request.GET.get("ticker") or "").strip().upper()
+    if not ticker or not TICKER_VALIDO.match(ticker):
+        return JsonResponse({"ok": False, "erro": "Informe um ticker válido (ex.: PETR4)."}, status=400)
+    try:
+        consenso = buscar_consenso_analistas(ticker)
+    except BrapiError as exc:
+        return JsonResponse({"ok": False, "erro": str(exc)}, status=502)
+
+    def numero(valor):
+        return str(valor) if valor is not None else None
+
+    return JsonResponse({
+        "ok": True,
+        "ticker": ticker,
+        "preco": numero(consenso["preco"]),
+        "alvo_medio": numero(consenso["alvo_medio"]),
+        "alvo_minimo": numero(consenso["alvo_minimo"]),
+        "alvo_maximo": numero(consenso["alvo_maximo"]),
+        "recomendacao": consenso["recomendacao"],
+        "numero_analistas": consenso["numero_analistas"],
+        "tem_consenso": consenso["alvo_medio"] is not None,
+    })
+
+
+@login_required
+@require_POST
+def previsoes_analistas_atualizar(request):
+    """Busca a cotação de hoje e o histórico recente dos ativos com previsão dentro do prazo."""
+    resumo = atualizar_precos_previsoes(request.user)
+    if not resumo["ativos"]:
+        messages.info(request, "Nenhuma previsão dentro do prazo para atualizar.")
+    elif resumo["falhas"]:
+        messages.warning(
+            request,
+            f"Preços atualizados de {resumo['atualizados']} ativo(s); {resumo['falhas']} falharam na API.",
+        )
+    else:
+        messages.success(request, f"Preços atualizados de {resumo['atualizados']} ativo(s).")
+    return redirect("core:previsoes_analistas")
 
 
 @login_required

@@ -34,13 +34,13 @@ from django.utils.dateparse import parse_datetime
 logger = logging.getLogger(__name__)
 
 from django.db import transaction
-from django.db.models import F, Sum
+from django.db.models import F, Q, Sum
 
 from .models import (
     ConsumoApiBrapi, MensagemWhatsapp,
     Ativo, Cotacao, Operacao, Alerta, FonteNoticia, Noticia, AcaoB3, CotacaoIndice,
     RegistroAtualizacaoCarteira, RegistroCotacao, ContaCorrente, LancamentoContaCorrente, PostIt,
-    CriptoAtivo, OperacaoCripto, CotacaoCripto, RegistroAtualizacaoCarteiraCripto,
+    CriptoAtivo, OperacaoCripto, CotacaoCripto, RegistroAtualizacaoCarteiraCripto, PrevisaoAnalista,
 )
 
 
@@ -531,12 +531,16 @@ def atualizar_cotacao_diaria(ativo: Ativo, dados_api: dict | None = None) -> Cot
 # --------------------------------------------------------------------------
 def executar_ciclo_atualizacao_cotacoes() -> dict:
     """
-    Atualiza a cotação de todos os ativos com alguma operação registrada,
-    depois gera os alertas de lucro/perda/tendência, roda o robô consultor e
-    grava o retrato da carteira (ver registrar_atualizacao_carteira) de
-    cada usuário com operações. Retorna um resumo numérico do que foi feito.
+    Atualiza a cotação de todos os ativos com alguma operação registrada (e
+    dos que têm previsão de analistas ainda dentro do prazo - ver
+    ativos_com_previsao_em_andamento), depois gera os alertas de
+    lucro/perda/tendência, roda o robô consultor e grava o retrato da
+    carteira (ver registrar_atualizacao_carteira) de cada usuário com
+    operações. Retorna um resumo numérico do que foi feito.
     """
-    ativos = Ativo.objects.filter(operacoes__isnull=False).distinct()
+    ativos = Ativo.objects.filter(
+        Q(operacoes__isnull=False) | Q(id__in=ativos_com_previsao_em_andamento())
+    ).distinct()
     atualizados, falhas = atualizar_cotacoes_ativos(ativos)
 
     total_alertas, total_sinais_robo = 0, 0
@@ -5518,6 +5522,7 @@ MODELOS_LIMPOS_NA_LIMPEZA_GERAL = [
     Operacao,
     Cotacao,
     RegistroCotacao,
+    PrevisaoAnalista,
     Ativo,
     RegistroAtualizacaoCarteira,
     CotacaoIndice,
@@ -5542,3 +5547,226 @@ def limpar_dados_sistema() -> int:
         apagados, _ = modelo.objects.all().delete()
         total += apagados
     return total
+
+
+# --------------------------------------------------------------------------
+# Previsões dos analistas (preço-alvo de 12 meses) x preço real
+#
+# Responde "os analistas acertam a tendência de um ano?" com os dados do
+# próprio usuário: ele registra o consenso (o que o TradingView mostra na aba
+# "Previsão", ou o que a API de cotações devolver) e, vencido o prazo, o
+# sistema compara com o preço real.
+# --------------------------------------------------------------------------
+_RECOMENDACAO_API = {
+    "strong_buy": PrevisaoAnalista.COMPRA_FORTE,
+    "buy": PrevisaoAnalista.COMPRA,
+    "hold": PrevisaoAnalista.NEUTRO,
+    "underperform": PrevisaoAnalista.VENDA,
+    "sell": PrevisaoAnalista.VENDA,
+    "strong_sell": PrevisaoAnalista.VENDA_FORTE,
+}
+
+
+def buscar_consenso_analistas(ticker: str) -> dict:
+    """
+    Cotação atual e consenso dos analistas (módulo financialData da
+    brapi.dev: targetMeanPrice, targetLowPrice, targetHighPrice,
+    recommendationKey, numberOfAnalystOpinions) de um ticker - usado para
+    pré-preencher o formulário de Previsões dos Analistas.
+
+    O módulo nem sempre está disponível (depende do plano contratado e da
+    cobertura do ativo): nesse caso tenta de novo só a cotação, e os campos
+    do consenso voltam None para o usuário completar com o que vê no
+    TradingView. Levanta BrapiError só quando nem a cotação vem.
+    """
+    url = f"{settings.BRAPI_BASE_URL}/quote/{ticker.upper()}"
+    params = {"modules": "financialData"}
+    if settings.BRAPI_TOKEN:
+        params["token"] = settings.BRAPI_TOKEN
+
+    try:
+        resposta = _get_brapi(url, params=params, timeout=15)
+        resposta.raise_for_status()
+        resultados = resposta.json().get("results") or []
+        dados = resultados[0] if resultados else {}
+    except (requests.RequestException, ValueError):
+        dados = {}
+
+    if dados.get("regularMarketPrice") is None:
+        dados = buscar_cotacao_atual(ticker)
+
+    financeiro = dados.get("financialData") or {}
+    return {
+        "ticker": ticker.upper(),
+        "preco": _para_decimal(dados.get("regularMarketPrice")),
+        "alvo_medio": _para_decimal(financeiro.get("targetMeanPrice")),
+        "alvo_minimo": _para_decimal(financeiro.get("targetLowPrice")),
+        "alvo_maximo": _para_decimal(financeiro.get("targetHighPrice")),
+        "recomendacao": _RECOMENDACAO_API.get((financeiro.get("recommendationKey") or "").lower(), ""),
+        "numero_analistas": financeiro.get("numberOfAnalystOpinions"),
+    }
+
+
+def ativos_com_previsao_em_andamento() -> set[int]:
+    """IDs dos ativos com previsão de analistas ainda dentro do prazo - entram no ciclo automático de cotações."""
+    inicio = timezone.localdate() - timedelta(days=PrevisaoAnalista.PRAZO_DIAS)
+    return set(
+        PrevisaoAnalista.objects.filter(data_registro__gte=inicio).values_list("ativo_id", flat=True).distinct()
+    )
+
+
+def atualizar_precos_previsoes(usuario) -> dict:
+    """
+    Cotação de hoje e histórico recente (até 90 dias - limite do plano
+    gratuito da brapi.dev, ver _range_brapi) dos ativos com previsão do
+    usuário ainda dentro do prazo, para a avaliação não depender de o ativo
+    estar em carteira. Ativos de previsões já vencidas não são consultados:
+    o preço que conta para elas é o do vencimento.
+    """
+    inicio = timezone.localdate() - timedelta(days=PrevisaoAnalista.PRAZO_DIAS)
+    ativos = list(
+        Ativo.objects.filter(
+            previsoes_analistas__usuario=usuario, previsoes_analistas__data_registro__gte=inicio,
+        ).distinct()
+    )
+    atualizados, falhas = atualizar_cotacoes_ativos(ativos)
+    for ativo in ativos:
+        try:
+            backfill_historico_cotacoes(ativo, dias=90)
+        except BrapiError:
+            pass  # a cotação do dia já foi tentada acima - o histórico é complemento
+    return {"ativos": len(ativos), "atualizados": atualizados, "falhas": falhas}
+
+
+def _pct(valor: Decimal, base: Decimal) -> Decimal:
+    return ((valor / base - 1) * 100).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+
+def _direcao(preco_final: Decimal, preco_inicial: Decimal) -> str:
+    if preco_final > preco_inicial:
+        return "ALTA"
+    if preco_final < preco_inicial:
+        return "BAIXA"
+    return "NEUTRA"
+
+
+def avaliar_previsao_analista(previsao: PrevisaoAnalista, cotacoes: list[Cotacao], hoje: date | None = None) -> dict:
+    """
+    Compara uma previsão com as cotações diárias do ativo (em qualquer
+    ordem) entre o dia seguinte ao registro e o vencimento (12 meses) - ou
+    até hoje, enquanto o prazo não acabou (resultado parcial).
+
+    - acertou_direcao: o preço andou para o lado do alvo (None se o alvo era
+      igual à cotação do registro ou ainda não há cotação no período);
+    - alvo_no_fim: o último preço do período já está no alvo ou além dele;
+    - alvo_no_periodo: em algum dia do período a máxima (alta) ou a mínima
+      (baixa) chegou ao alvo;
+    - erro_alvo_pct: quanto o último preço ficou acima (+) ou abaixo (-) do alvo.
+    """
+    hoje = hoje or timezone.localdate()
+    vencimento = previsao.data_vencimento
+    concluida = hoje >= vencimento
+    fim = min(vencimento, hoje)
+    periodo = sorted(
+        (c for c in cotacoes if previsao.data_registro < c.data <= fim), key=lambda c: c.data,
+    )
+    prevista = previsao.direcao_prevista
+    resultado = {
+        "previsao": previsao,
+        "concluida": concluida,
+        "dias_restantes": max((vencimento - hoje).days, 0),
+        "direcao_prevista": prevista,
+        "data_preco_final": None,
+        "preco_final": None,
+        "variacao_real_pct": None,
+        "direcao_real": None,
+        "acertou_direcao": None,
+        "alvo_no_fim": None,
+        "alvo_no_periodo": None,
+        "erro_alvo_pct": None,
+        "dados_incompletos": False,
+    }
+    if not periodo:
+        resultado["dados_incompletos"] = True
+        return resultado
+
+    ultima = periodo[-1]
+    preco_final = ultima.preco_fechamento
+    alvo = previsao.alvo_medio
+    real = _direcao(preco_final, previsao.preco_registro)
+    resultado.update({
+        "data_preco_final": ultima.data,
+        "preco_final": preco_final,
+        "variacao_real_pct": _pct(preco_final, previsao.preco_registro),
+        "direcao_real": real,
+        "erro_alvo_pct": _pct(preco_final, alvo),
+        # vencida, mas a última cotação gravada ficou bem antes do vencimento
+        "dados_incompletos": concluida and (vencimento - ultima.data).days > 10,
+    })
+    if prevista == "ALTA":
+        resultado["acertou_direcao"] = real == "ALTA"
+        resultado["alvo_no_fim"] = preco_final >= alvo
+        resultado["alvo_no_periodo"] = max(c.maxima or c.preco_fechamento for c in periodo) >= alvo
+    elif prevista == "BAIXA":
+        resultado["acertou_direcao"] = real == "BAIXA"
+        resultado["alvo_no_fim"] = preco_final <= alvo
+        resultado["alvo_no_periodo"] = min(c.minima or c.preco_fechamento for c in periodo) <= alvo
+    return resultado
+
+
+def _taxa(avaliacoes: list[dict], chave: str) -> dict:
+    validas = [a[chave] for a in avaliacoes if a[chave] is not None]
+    acertos = sum(1 for v in validas if v)
+    return {
+        "acertos": acertos,
+        "total": len(validas),
+        "pct": round(acertos / len(validas) * 100, 1) if validas else None,
+    }
+
+
+def resumir_acertos_analistas(avaliacoes: list[dict]) -> dict:
+    """
+    Taxas de acerto de um grupo de avaliações (ver avaliar_previsao_analista).
+    "base_alta_pct" é a fatia das previsões em que o preço simplesmente
+    subiu - a referência de quem "chutasse alta para tudo": se a taxa de
+    acerto da direção não passa dela, a previsão não acrescentou informação.
+    """
+    com_preco = [a for a in avaliacoes if a["preco_final"] is not None]
+    erros = [abs(a["erro_alvo_pct"]) for a in com_preco]
+    altas = sum(1 for a in com_preco if a["direcao_real"] == "ALTA")
+    previstas_alta = sum(1 for a in avaliacoes if a["direcao_prevista"] == "ALTA")
+    return {
+        "total": len(avaliacoes),
+        "com_preco": len(com_preco),
+        "direcao": _taxa(com_preco, "acertou_direcao"),
+        "alvo_no_fim": _taxa(com_preco, "alvo_no_fim"),
+        "alvo_no_periodo": _taxa(com_preco, "alvo_no_periodo"),
+        "erro_medio_abs_pct": round(sum(erros) / len(erros), 2) if erros else None,
+        "base_alta_pct": round(altas / len(com_preco) * 100, 1) if com_preco else None,
+        "previstas_alta_pct": round(previstas_alta / len(avaliacoes) * 100, 1) if avaliacoes else None,
+    }
+
+
+def avaliar_previsoes_analistas(usuario, hoje: date | None = None) -> dict:
+    """
+    Avalia todas as previsões do usuário e resume a taxa de acerto em dois
+    grupos: concluídas (prazo de 12 meses vencido - resultado definitivo) e
+    em andamento (resultado parcial, com o preço até hoje).
+    """
+    hoje = hoje or timezone.localdate()
+    previsoes = list(PrevisaoAnalista.objects.filter(usuario=usuario).select_related("ativo"))
+    cotacoes_por_ativo = defaultdict(list)
+    if previsoes:
+        for cotacao in Cotacao.objects.filter(
+            ativo_id__in={p.ativo_id for p in previsoes},
+            data__gt=min(p.data_registro for p in previsoes),
+            data__lte=hoje,
+        ):
+            cotacoes_por_ativo[cotacao.ativo_id].append(cotacao)
+
+    avaliacoes = [avaliar_previsao_analista(p, cotacoes_por_ativo[p.ativo_id], hoje) for p in previsoes]
+    return {
+        "avaliacoes": avaliacoes,
+        "concluidas": resumir_acertos_analistas([a for a in avaliacoes if a["concluida"]]),
+        "em_andamento": resumir_acertos_analistas([a for a in avaliacoes if not a["concluida"]]),
+    }

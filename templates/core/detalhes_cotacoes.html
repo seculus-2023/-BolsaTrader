@@ -293,6 +293,14 @@
 
         form.addEventListener("submit", pesquisar);
 
+        // ?ticker=PETR4 na URL (ex.: comando de voz "cotação de PETR4"):
+        // preenche o campo e já pesquisa.
+        var tickerDaUrl = new URLSearchParams(window.location.search).get("ticker");
+        if (tickerDaUrl) {
+            campoTicker.value = tickerDaUrl.trim().toUpperCase();
+            form.requestSubmit();
+        }
+
         // Botão "Registros de cotações": grid com ativo, data, hora e valor
         // das cotações registradas dos ativos comprados - do ticker
         // informado no campo, ou de todos quando o campo está vazio.

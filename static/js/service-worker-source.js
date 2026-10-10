@@ -15,12 +15,13 @@
  *     e sempre se manter atualizado.
  */
 
-const VERSAO_CACHE = "bolsatrader-v2";
+const VERSAO_CACHE = "bolsatrader-v3";
 const CACHE_SHELL = `${VERSAO_CACHE}-shell`;
 
 const ARQUIVOS_APP_SHELL = [
   "/static/css/futurista.css",
   "/static/js/pwa.js",
+  "/static/js/comando_voz.js",
   "/static/manifest.webmanifest",
   "/static/icons/icon-192.png",
   "/static/icons/icon-512.png",

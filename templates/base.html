@@ -46,6 +46,8 @@
             <button id="btn-instalar-pwa" class="btn-futurista btn-secundario" style="display:none; padding:.4rem .8rem; font-size:.85rem; margin-right:.6rem;">
                 ⬇ Instalar app
             </button>
+            <button type="button" id="btn-comando-voz" class="btn-comando-voz" hidden aria-pressed="false"
+                    title="Comando de voz (Ctrl+Espaço) - diga &quot;ajuda&quot; para ver os comandos" aria-label="Comando de voz">🎤</button>
             <span class="nav-usuario-logado" title="Usuário logado: {{ user.username }}">👤 {{ user.get_full_name|default:user.username }}</span>
             <form method="post" action="{% url 'accounts:logout' %}" style="display: inline;">
                 {% csrf_token %}
@@ -128,6 +130,36 @@
     </div>
 
     <script src="{% static 'js/pwa.js' %}"></script>
+    {% if user.is_authenticated %}
+    <script type="application/json" id="rotas-comando-voz">{
+        "dashboard": "{% url 'core:dashboard' %}",
+        "menu": "{% url 'core:menu' %}",
+        "operacao_lista": "{% url 'core:operacao_lista' %}",
+        "operacao_nova": "{% url 'core:operacao_nova' %}",
+        "posicoes": "{% url 'core:posicoes' %}",
+        "scanner_tecnico": "{% url 'core:scanner_tecnico' %}",
+        "alertas": "{% url 'core:alertas' %}",
+        "analise_mercado": "{% url 'core:analise_mercado' %}",
+        "tradingview": "{% url 'core:tradingview' %}",
+        "historico_graficos": "{% url 'core:historico_graficos' %}",
+        "historico_atualizacoes": "{% url 'core:historico_atualizacoes' %}",
+        "mensagens_whatsapp": "{% url 'core:mensagens_whatsapp' %}",
+        "detalhes_cotacoes": "{% url 'core:detalhes_cotacoes' %}",
+        "registros_cotacao": "{% url 'core:registros_cotacao' %}",
+        "atualizar_cotacoes": "{% url 'core:atualizar_cotacoes' %}",
+        "noticias": "{% url 'core:noticias' %}",
+        "noticias_atualizar": "{% url 'core:noticias_atualizar' %}",
+        "acoes_b3": "{% url 'core:acoes_b3' %}",
+        "acoes_b3_atualizar": "{% url 'core:acoes_b3_atualizar' %}",
+        "conta_corrente": "{% url 'core:conta_corrente' %}",
+        "criptomoedas": "{% url 'core:criptomoedas' %}",
+        "cripto_atualizar": "{% url 'core:cripto_atualizar_cotacoes' %}",
+        "cripto_operacao_lista": "{% url 'core:cripto_operacao_lista' %}",
+        "cripto_operacao_nova": "{% url 'core:cripto_operacao_nova' %}",
+        "minha_conta": "{% url 'accounts:minha_conta' %}"
+    }</script>
+    <script src="{% static 'js/comando_voz.js' %}"></script>
+    {% endif %}
     <script>
         (function () {
             var overlay = document.getElementById("overlay-atualizando");

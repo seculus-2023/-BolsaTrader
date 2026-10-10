@@ -13,9 +13,11 @@ tanto pelas views quanto pelos comandos de management (cron).
 from __future__ import annotations
 
 import logging
+import re
 import statistics
 import threading
 import time
+import unicodedata
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone as dt_timezone
@@ -4790,6 +4792,35 @@ def atualizar_noticias_fonte(fonte: FonteNoticia, limite: int = 15) -> list[int]
     fonte.noticias.exclude(url__in=urls_atuais).delete()
 
     return novas_ids
+
+
+def _sem_acentos(texto: str) -> str:
+    return "".join(c for c in unicodedata.normalize("NFD", texto) if unicodedata.category(c) != "Mn").upper()
+
+
+def termos_destaque_noticias(texto: str) -> list[str]:
+    """
+    Termos usados pra destacar as manchetes de um ativo na tela de Notícias do
+    Mercado. O usuário digita um ou mais termos separados por vírgula (ex:
+    "PETR4, Petrobras"); para um ticker de ação (ex: PETR4) entra também a raiz
+    de 4 letras (PETR), que costuma aparecer em manchetes sobre PETR3/PETR4.
+    """
+    termos = []
+    for parte in texto.split(","):
+        termo = _sem_acentos(parte.strip())
+        if not termo:
+            continue
+        termos.append(termo)
+        raiz = re.match(r"^([A-Z]{4})\d{1,2}$", termo)
+        if raiz:
+            termos.append(raiz.group(1))
+    return list(dict.fromkeys(termos))
+
+
+def noticia_cita_termos(titulo: str, termos: list[str]) -> bool:
+    """True se o título contém algum dos termos como palavra inteira (sem diferenciar maiúsculas/acentos) - "PETR" casa com "PETR3"/"PETR4"."""
+    titulo_normalizado = _sem_acentos(titulo)
+    return any(re.search(rf"(?<![A-Z0-9]){re.escape(t)}(?![A-Z])", titulo_normalizado) for t in termos)
 
 
 # --------------------------------------------------------------------------

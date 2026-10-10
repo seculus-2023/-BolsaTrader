@@ -540,6 +540,37 @@ table.tabela-futurista tr.linha-robo:hover td {
     white-space: nowrap;
 }
 
+/*
+ * Notícia que cita o ativo digitado ao lado de "Atualizar notícias agora"
+ * (ver core.views.noticias) - amarelo, pra não confundir com o verde de "Nova".
+ */
+.item-noticia-ativo {
+    background: rgba(255, 213, 74, 0.1);
+    box-shadow: inset 4px 0 0 var(--neon-yellow);
+    padding-left: 0.7rem !important;
+    border-radius: 4px;
+}
+
+.item-noticia-ativo > a {
+    color: var(--neon-yellow);
+    font-weight: 600;
+}
+
+.badge-noticia-ativo {
+    display: inline-block;
+    margin-left: 0.5rem;
+    padding: 0.15rem 0.55rem;
+    border-radius: 999px;
+    background: rgba(255, 213, 74, 0.2);
+    color: var(--neon-yellow);
+    border: 1px solid rgba(255, 213, 74, 0.6);
+    font-size: 0.72rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    white-space: nowrap;
+}
+
 /* Abas de navegação genéricas (ver core/noticias.html e core/operacao_lista.html)
    - mostra um grupo de conteúdo por vez em vez de empilhar tudo em sequência
    corrida. */

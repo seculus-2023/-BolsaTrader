@@ -6,7 +6,18 @@
     Manchetes das fontes de notícias e análises configuradas abaixo &mdash; um resumo pra leitura, não um sinal
     automático de compra/venda. As fontes são compartilhadas entre todos os usuários, como o mural de atividade.
 </p>
-<a href="{% url 'core:noticias_atualizar' %}" class="btn-futurista btn-atualizar-noticias" data-overlay-texto="Buscando notícias...">Atualizar notícias agora</a>
+<form method="get" action="{% url 'core:noticias_atualizar' %}" class="form-futurista" style="display: flex; gap: .8rem; align-items: flex-end; flex-wrap: wrap;">
+    <div style="min-width: 220px;">
+        <label for="campo-ativo-destaque" style="margin-top: 0;">Ativo em destaque (opcional)</label>
+        <input type="text" name="ativo" id="campo-ativo-destaque" value="{{ ativo_destaque }}" placeholder="Ex: PETR4, Petrobras" maxlength="100">
+    </div>
+    <button type="submit" class="btn-futurista btn-atualizar-noticias" data-overlay-texto="Buscando notícias...">Atualizar notícias agora</button>
+</form>
+<p style="color: var(--text-dim); font-size: .85rem; margin-top: .5rem;">
+    As notícias são buscadas normalmente; as manchetes que citarem o ativo ficam destacadas em amarelo.
+    Separe mais de um termo por vírgula. Deixe em branco para remover o destaque.
+    {% if ativo_destaque %}<br>Destacando agora: <strong style="color: var(--neon-yellow);">{{ ativo_destaque }}</strong> &mdash; {{ noticias_ativo_ids|length }} notícia(s) encontrada(s).{% endif %}
+</p>
 
 <div class="card-glass" style="margin: 1.5rem 0;">
     <h3 style="margin-top: 0;">Fontes de notícias</h3>
@@ -83,6 +94,7 @@
                 data-alvo="painel-fonte-{{ item.fonte.id }}">
             {{ item.fonte.nome }}
             {% if item.tem_novas %}<span class="badge-noticia-nova" style="margin-left: .35rem;">Nova</span>{% endif %}
+            {% if item.qtd_ativo %}<span class="badge-noticia-ativo" style="margin-left: .35rem;">{{ item.qtd_ativo }} {{ ativo_destaque|upper|truncatechars:12 }}</span>{% endif %}
         </button>
         {% endfor %}
     </div>
@@ -92,8 +104,9 @@
         {% if item.noticias %}
         <ul style="list-style: none; padding: 0; margin: 0;">
             {% for noticia in item.noticias %}
-            <li style="padding: .55rem 0; border-bottom: 1px solid rgba(0,240,255,.1);" class="{% if noticia.id in noticias_novas_ids %}item-noticia-nova{% endif %}">
+            <li style="padding: .55rem 0; border-bottom: 1px solid rgba(0,240,255,.1);" class="{% if noticia.id in noticias_ativo_ids %}item-noticia-ativo{% elif noticia.id in noticias_novas_ids %}item-noticia-nova{% endif %}">
                 <a href="{{ noticia.url }}" target="_blank" rel="noopener">{{ noticia.titulo }}</a>
+                {% if noticia.id in noticias_ativo_ids %}<span class="badge-noticia-ativo">{{ ativo_destaque|upper|truncatechars:12 }}</span>{% endif %}
                 {% if noticia.id in noticias_novas_ids %}<span class="badge-noticia-nova">Nova</span>{% endif %}
                 <br><small style="color: var(--text-dim);">Capturada em {{ noticia.capturada_em|date:"d/m/Y H:i" }}</small>
             </li>

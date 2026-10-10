@@ -67,6 +67,8 @@ from .services import (
     gerar_excel_robo,
     gerar_pdf_robo,
     atualizar_noticias_fonte,
+    termos_destaque_noticias,
+    noticia_cita_termos,
     NoticiaScrapingError,
     BrapiError,
     backfill_historico_cotacoes,
@@ -1368,27 +1370,43 @@ def noticias(request):
     # "Atualizar notícias", não em toda visita seguinte à página.
     noticias_novas_ids = set(request.session.pop("noticias_novas_ids", []))
 
+    # ativo em destaque digitado ao lado de "Atualizar notícias agora" - fica
+    # na sessão (sem "pop") pra continuar destacado nas próximas visitas.
+    ativo_destaque = request.session.get("noticias_ativo_destaque", "")
+    termos = termos_destaque_noticias(ativo_destaque)
+
     fontes = FonteNoticia.objects.all()
     itens = []
+    noticias_ativo_ids = set()
     for fonte in fontes:
         if not fonte.ativa:
             continue  # fonte inativa some do feed abaixo (continua na tabela de gerenciamento acima)
         noticias_fonte = list(fonte.noticias.all()[:15])
+        ids_ativo_fonte = {n.id for n in noticias_fonte if termos and noticia_cita_termos(n.titulo, termos)}
+        noticias_ativo_ids |= ids_ativo_fonte
         itens.append({
             "fonte": fonte,
             "noticias": noticias_fonte,
             "tem_novas": any(n.id in noticias_novas_ids for n in noticias_fonte),
+            "qtd_ativo": len(ids_ativo_fonte),
         })
 
     return render(
         request, "core/noticias.html",
-        {"form": form, "fontes": fontes, "itens": itens, "noticias_novas_ids": noticias_novas_ids},
+        {
+            "form": form, "fontes": fontes, "itens": itens, "noticias_novas_ids": noticias_novas_ids,
+            "ativo_destaque": ativo_destaque, "noticias_ativo_ids": noticias_ativo_ids,
+        },
     )
 
 
 @login_required
 def noticias_atualizar(request):
     """Busca as manchetes atuais de todas as fontes ativas e grava as que ainda não existem."""
+    if "ativo" in request.GET:
+        # campo vazio limpa o destaque
+        request.session["noticias_ativo_destaque"] = request.GET["ativo"].strip()[:100]
+
     fontes_ativas = FonteNoticia.objects.filter(ativa=True)
     novas_ids_total, falhas = [], 0
 

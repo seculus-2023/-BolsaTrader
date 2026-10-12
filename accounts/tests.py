@@ -1,10 +1,11 @@
 from django.contrib.auth.models import User
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.urls import reverse
 
 from .models import PerfilUsuario
 
 
+@override_settings(CADASTRO_PUBLICO=True)
 class CadastroTelefoneTests(TestCase):
     """Telefone informado no cadastro vai para PerfilUsuario.numero_whatsapp."""
 

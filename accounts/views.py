@@ -1,3 +1,4 @@
+from django.conf import settings
 from django.contrib.auth import login
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.views import LoginView, LogoutView
@@ -16,6 +17,11 @@ class LoginFuturistaView(LoginView):
     template_name = "accounts/login.html"
     redirect_authenticated_user = True
 
+    def get_context_data(self, **kwargs):
+        contexto = super().get_context_data(**kwargs)
+        contexto["cadastro_publico"] = settings.CADASTRO_PUBLICO
+        return contexto
+
     def form_invalid(self, form):
         messages.error(self.request, "Usuário ou senha inválidos.")
         return super().form_invalid(form)
@@ -27,10 +33,18 @@ class LogoutFuturistaView(LogoutView):
 
 def cadastro_view(request):
     """
-    Cadastro de novo usuário. Acessível sem login (tela de "criar conta") e
-    também pelo menu quando já logado (para cadastrar outro usuário) - nesse
-    caso a sessão atual não é trocada pela do usuário recém-criado.
+    Cadastro de novo usuário. Sem login, só com CADASTRO_PUBLICO=True (tela
+    de "criar conta"); logado, só staff/superusuário, pelo menu (para
+    cadastrar outro usuário) - nesse caso a sessão atual não é trocada pela
+    do usuário recém-criado.
     """
+    if request.user.is_authenticated and not request.user.is_staff:
+        messages.error(request, "Só administradores podem cadastrar novos usuários.")
+        return redirect("core:dashboard")
+    if not request.user.is_authenticated and not settings.CADASTRO_PUBLICO:
+        messages.error(request, "O cadastro de novos usuários está fechado. Peça acesso ao administrador.")
+        return redirect("accounts:login")
+
     if request.method == "POST":
         form = CadastroForm(request.POST)
         if form.is_valid():
@@ -74,9 +88,14 @@ def limpar_dados_view(request):
     """
     Apaga os dados de TODOS os usuários (operações, alertas, conta corrente,
     cripto, cotações, notícias etc.), mantendo só Ações da B3, os usuários e
-    Minha Conta - ver core.services.limpar_dados_sistema. Qualquer usuário
-    logado pode usar, mas precisa confirmar digitando a própria senha.
+    Minha Conta - ver core.services.limpar_dados_sistema. Como afeta todos
+    os usuários, só superusuário pode usar, e precisa confirmar digitando a
+    própria senha.
     """
+    if not request.user.is_superuser:
+        messages.error(request, "Só o administrador do sistema pode limpar os dados.")
+        return redirect("accounts:minha_conta")
+
     senha = request.POST.get("senha", "")
     if not senha or not request.user.check_password(senha):
         messages.error(request, "Senha incorreta - nenhum dado foi apagado.")

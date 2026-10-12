@@ -201,12 +201,16 @@ LOGIN_URL = "accounts:login"
 LOGIN_REDIRECT_URL = "core:dashboard"
 LOGOUT_REDIRECT_URL = "accounts:login"
 
+# Cadastro aberto ao público na tela de login ("Ainda não tem conta?"). Desligado
+# (padrão), só staff/superusuário cadastra usuários, pelo menu "Cadastrar Usuário".
+CADASTRO_PUBLICO = config("CADASTRO_PUBLICO", default=False, cast=bool)
+
 
 # --------------------------------------------------------------------------
 # Integração com API de cotações (brapi.dev - cotações da B3)
 # --------------------------------------------------------------------------
 BRAPI_BASE_URL = config("BRAPI_BASE_URL", default="https://brapi.dev/api")
-BRAPI_TOKEN = config("BRAPI_TOKEN", default="v2rExiL92yBndDgQxdSUT9")  # opcional, ver manual de instalação
+BRAPI_TOKEN = config("BRAPI_TOKEN", default="")  # opcional, ver manual de instalação
 
 # Quantos tickers no máximo por requisição em lote de cotações (ver
 # core.services.buscar_cotacoes_em_lote) - depende do PLANO contratado na

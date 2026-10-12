@@ -29,6 +29,7 @@
     </form>
 </div>
 
+{% if user.is_superuser %}
 <div class="card-glass" style="max-width: 480px; margin-top: 2rem; border-color: var(--neon-red);">
     <h3 style="margin-top: 0; color: var(--neon-red);">Limpar dados do sistema</h3>
     <p style="color: var(--text-dim);">
@@ -54,6 +55,7 @@
         }
     });
 </script>
+{% endif %}
 
 <script>
     // Botão de olho ao lado dos campos mascarados (senha da corretora, assinatura eletrônica):

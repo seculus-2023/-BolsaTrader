@@ -6,7 +6,7 @@
 <p style="color: var(--text-dim);">
     Histórico de cotações diárias e gráfico de acompanhamento de cada ativo que você já comprou ou vendeu.
 </p>
-<a href="{% url 'core:atualizar_cotacoes' %}" class="btn-futurista btn-atualizar-cotacoes" data-overlay-texto="Atualizando cotações...">Atualizar cotações agora</a>
+<form method="post" action="{% url 'core:atualizar_cotacoes' %}" class="form-acao-inline">{% csrf_token %}<button type="submit" class="btn-futurista btn-atualizar-cotacoes" data-overlay-texto="Atualizando cotações...">Atualizar cotações agora</button></form>
 <a href="{% url 'core:analise_mercado' %}" class="btn-futurista btn-secundario">Ver análise de mercado</a>
 {% if ultima_atualizacao_cotacoes %}
 <p class="badge-atualizacao">⏱ Última atualização das cotações: {{ ultima_atualizacao_cotacoes|date:"d/m/Y H:i" }}</p>

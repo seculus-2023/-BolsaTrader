@@ -6,7 +6,7 @@
     Catálogo com todas as ações negociadas na B3, sincronizado com a API de cotações &mdash; é só uma lista de
     consulta/pesquisa, independente do que você comprou, vendeu ou reservou (isso fica em "Minhas Operações").
 </p>
-<a href="{% url 'core:acoes_b3_atualizar' %}" class="btn-futurista btn-atualizar-acoes-b3" data-overlay-texto="Atualizando lista de ações da B3...">🔄 Atualizar lista</a>
+<form method="post" action="{% url 'core:acoes_b3_atualizar' %}" class="form-acao-inline">{% csrf_token %}<button type="submit" class="btn-futurista btn-atualizar-acoes-b3" data-overlay-texto="Atualizando lista de ações da B3...">🔄 Atualizar lista</button></form>
 <p style="color: var(--text-dim); font-size: .85rem; margin-top: .6rem;">
     "Atualizar lista" apaga o catálogo atual e cadastra de novo a partir do que a API retornar na hora &mdash;
     inclui ações novas, remove as que não constarem mais.

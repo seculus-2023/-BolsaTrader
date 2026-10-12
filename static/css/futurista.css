@@ -797,6 +797,18 @@ table.tabela-futurista tr.linha-robo:hover td {
     transition: all 0.2s ease;
 }
 
+/* Ações que alteram dados (atualizar cotações, marcar alerta como lido...)
+   vão por POST - o botão fica dentro de um <form> que não quebra a linha. */
+.form-acao-inline {
+    display: inline;
+    margin: 0;
+}
+
+button.btn-futurista {
+    font-family: inherit;
+    font-size: inherit;
+}
+
 .btn-futurista:hover {
     box-shadow: 0 0 22px rgba(0, 240, 255, 0.45);
     color: #fff;

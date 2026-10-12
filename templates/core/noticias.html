@@ -6,7 +6,8 @@
     Manchetes das fontes de notícias e análises configuradas abaixo &mdash; um resumo pra leitura, não um sinal
     automático de compra/venda. As fontes são compartilhadas entre todos os usuários, como o mural de atividade.
 </p>
-<form method="get" action="{% url 'core:noticias_atualizar' %}" class="form-futurista" style="display: flex; gap: .8rem; align-items: flex-end; flex-wrap: wrap;">
+<form method="post" action="{% url 'core:noticias_atualizar' %}" class="form-futurista" style="display: flex; gap: .8rem; align-items: flex-end; flex-wrap: wrap;">
+    {% csrf_token %}
     <div style="min-width: 220px;">
         <label for="campo-ativo-destaque" style="margin-top: 0;">Ativo em destaque (opcional)</label>
         <input type="text" name="ativo" id="campo-ativo-destaque" value="{{ ativo_destaque }}" placeholder="Ex: PETR4, Petrobras" maxlength="100">

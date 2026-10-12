@@ -21,10 +21,10 @@
     // e sem acentos).
     var COMANDOS = [
         { termos: ["historico de atualizac", "historico das atualizac"], rota: "historico_atualizacoes" },
-        { termos: ["atualizar cripto", "atualizar as cripto", "atualiza cripto"], rota: "cripto_atualizar", aviso: "Atualizando cripto..." },
-        { termos: ["atualizar noticia", "atualiza noticia", "atualizar as noticia"], rota: "noticias_atualizar", aviso: "Buscando notícias..." },
-        { termos: ["atualizar acoes da b3", "atualizar lista de acoes"], rota: "acoes_b3_atualizar", aviso: "Atualizando ações da B3..." },
-        { termos: ["atualizar", "atualiza"], rota: "atualizar_cotacoes", aviso: "Atualizando cotações..." },
+        { termos: ["atualizar cripto", "atualizar as cripto", "atualiza cripto"], rota: "cripto_atualizar", post: true, aviso: "Atualizando cripto..." },
+        { termos: ["atualizar noticia", "atualiza noticia", "atualizar as noticia"], rota: "noticias_atualizar", post: true, aviso: "Buscando notícias..." },
+        { termos: ["atualizar acoes da b3", "atualizar lista de acoes"], rota: "acoes_b3_atualizar", post: true, aviso: "Atualizando ações da B3..." },
+        { termos: ["atualizar", "atualiza"], rota: "atualizar_cotacoes", post: true, aviso: "Atualizando cotações..." },
         { termos: ["nova operacao cripto", "nova compra cripto", "comprar cripto"], rota: "cripto_operacao_nova" },
         { termos: ["operacoes cripto", "operacoes de cripto", "operacao cripto"], rota: "cripto_operacao_lista" },
         { termos: ["nova operacao", "nova compra", "comprar acao", "registrar compra"], rota: "operacao_nova" },
@@ -94,14 +94,33 @@
         return achado ? achado[0] : null;
     }
 
-    function irPara(url, aviso) {
+    // Comandos que alteram dados (post: true) são enviados por POST, com o
+    // token CSRF da página - as views correspondentes recusam GET.
+    function enviarPost(url) {
+        var form = document.createElement("form");
+        form.method = "post";
+        form.action = url;
+        var token = document.createElement("input");
+        token.type = "hidden";
+        token.name = "csrfmiddlewaretoken";
+        token.value = blocoRotas.dataset.csrf || "";
+        form.appendChild(token);
+        document.body.appendChild(form);
+        form.submit();
+    }
+
+    function irPara(url, aviso, post) {
         var overlay = document.getElementById("overlay-atualizando");
         var textoOverlay = document.getElementById("overlay-atualizando-texto");
         if (aviso && overlay) {
             textoOverlay.textContent = aviso;
             overlay.hidden = false;
         }
-        window.location.href = url;
+        if (post) {
+            enviarPost(url);
+        } else {
+            window.location.href = url;
+        }
     }
 
     function executar(textoFalado) {
@@ -138,7 +157,7 @@
             var casou = comando.termos.some(function (termo) { return texto.indexOf(termo) !== -1; });
             if (casou && rotas[comando.rota]) {
                 mostrarBalao("✔ " + textoFalado);
-                irPara(rotas[comando.rota], comando.aviso);
+                irPara(rotas[comando.rota], comando.aviso, comando.post);
                 return;
             }
         }

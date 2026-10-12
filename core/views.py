@@ -702,6 +702,7 @@ def alertas(request):
 
 
 @login_required
+@require_POST
 def alerta_marcar_lido(request, alerta_id):
     alerta = get_object_or_404(Alerta, id=alerta_id, usuario=request.user)
     alerta.lido = True
@@ -983,6 +984,7 @@ def historico_graficos(request):
 
 
 @login_required
+@require_POST
 def atualizar_cotacoes_agora(request):
     """
     Permite ao usuário forçar a atualização das cotações de sua carteira pelo
@@ -1406,11 +1408,12 @@ def noticias(request):
 
 
 @login_required
+@require_POST
 def noticias_atualizar(request):
     """Busca as manchetes atuais de todas as fontes ativas e grava as que ainda não existem."""
-    if "ativo" in request.GET:
+    if "ativo" in request.POST:
         # campo vazio limpa o destaque
-        request.session["noticias_ativo_destaque"] = request.GET["ativo"].strip()[:100]
+        request.session["noticias_ativo_destaque"] = request.POST["ativo"].strip()[:100]
 
     fontes_ativas = FonteNoticia.objects.filter(ativa=True)
     novas_ids_total, falhas = [], 0
@@ -1461,6 +1464,7 @@ def acoes_b3(request):
 
 
 @login_required
+@require_POST
 def acoes_b3_atualizar(request):
     """Apaga o catálogo de ações da B3 e cadastra de novo a partir da API brapi.dev."""
     try:
@@ -1904,6 +1908,7 @@ def criptomoedas(request):
 
 
 @login_required
+@require_POST
 def cripto_atualizar_cotacoes(request):
     """
     Atualiza a cotação de todas as criptomoedas relevantes (sugeridas + as

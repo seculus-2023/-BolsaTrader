@@ -8,7 +8,7 @@
 <div class="card-glass">
     <h2>Ações rápidas</h2>
     <div style="display: flex; flex-wrap: nowrap; gap: .6rem; overflow-x: auto; padding-bottom: .3rem;">
-        <a href="{% url 'core:atualizar_cotacoes' %}" class="btn-futurista btn-atualizar-cotacoes" data-overlay-texto="Atualizando cotações..." style="white-space: nowrap;">Atualizar cotações agora</a>
+        <form method="post" action="{% url 'core:atualizar_cotacoes' %}" class="form-acao-inline">{% csrf_token %}<button type="submit" class="btn-futurista btn-atualizar-cotacoes" data-overlay-texto="Atualizando cotações..." style="white-space: nowrap;">Atualizar cotações agora</button></form>
         <a href="{% url 'core:operacao_nova' %}" class="btn-futurista btn-secundario" style="white-space: nowrap;">+ Nova compra/venda</a>
         <a href="{% url 'core:historico_atualizacoes' %}" class="btn-futurista btn-secundario" style="white-space: nowrap;">🗂️ Histórico de Atualizações</a>
         <a href="{% url 'core:scanner_tecnico' %}" class="btn-futurista btn-secundario" style="white-space: nowrap;">🔎 Scanner Técnico</a>

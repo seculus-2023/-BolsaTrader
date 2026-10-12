@@ -169,7 +169,7 @@ class OperacaoTipoReservarTests(TestCase):
             mock_get.return_value.json = lambda: {
                 "results": [{"symbol": "CSMG3", "regularMarketPrice": 16.5, "regularMarketChangePercent": 1.1}]
             }
-            self.client.get(reverse("core:atualizar_cotacoes"))
+            self.client.post(reverse("core:atualizar_cotacoes"))
         self.assertTrue(Cotacao.objects.filter(ativo=ativo).exists())
 
 
@@ -460,6 +460,7 @@ class ResumoVendasTests(TestCase):
 
 
 class FluxoAutenticacaoTests(TestCase):
+    @override_settings(CADASTRO_PUBLICO=True)
     def test_cadastro_cria_usuario_e_loga_automaticamente(self):
         resposta = self.client.post(reverse("accounts:cadastro"), {
             "username": "investidor1",
@@ -492,21 +493,21 @@ class FluxoAutenticacaoTests(TestCase):
         resposta = self.client.post(reverse("accounts:logout"))
         self.assertRedirects(resposta, reverse("accounts:login"))
 
-    def test_usuario_logado_ve_link_cadastrar_usuario_no_menu(self):
-        User.objects.create_user(username="investidor7", password="SenhaForte123!")
+    def test_staff_ve_link_cadastrar_usuario_no_menu(self):
+        User.objects.create_user(username="investidor7", password="SenhaForte123!", is_staff=True)
         self.client.login(username="investidor7", password="SenhaForte123!")
         resposta = self.client.get(reverse("core:dashboard"))
         self.assertContains(resposta, reverse("accounts:cadastro"))
         self.assertContains(resposta, "Cadastrar Usuário")
 
-    def test_usuario_logado_acessa_tela_de_cadastro_sem_ser_redirecionado(self):
-        User.objects.create_user(username="investidor8", password="SenhaForte123!")
+    def test_staff_acessa_tela_de_cadastro_sem_ser_redirecionado(self):
+        User.objects.create_user(username="investidor8", password="SenhaForte123!", is_staff=True)
         self.client.login(username="investidor8", password="SenhaForte123!")
         resposta = self.client.get(reverse("accounts:cadastro"))
         self.assertEqual(resposta.status_code, 200)
 
-    def test_usuario_logado_cadastra_outro_usuario_sem_perder_a_propria_sessao(self):
-        admin = User.objects.create_user(username="investidor9", password="SenhaForte123!")
+    def test_staff_cadastra_outro_usuario_sem_perder_a_propria_sessao(self):
+        admin = User.objects.create_user(username="investidor9", password="SenhaForte123!", is_staff=True)
         self.client.login(username="investidor9", password="SenhaForte123!")
 
         resposta = self.client.post(reverse("accounts:cadastro"), {
@@ -522,6 +523,58 @@ class FluxoAutenticacaoTests(TestCase):
         # a sessão continua sendo a de quem estava logado, não a do usuário recém-criado
         resposta_dashboard = self.client.get(reverse("core:dashboard"))
         self.assertEqual(resposta_dashboard.wsgi_request.user, admin)
+
+    def test_usuario_comum_logado_nao_cadastra_outro_usuario(self):
+        User.objects.create_user(username="investidor10", password="SenhaForte123!")
+        self.client.login(username="investidor10", password="SenhaForte123!")
+
+        resposta_menu = self.client.get(reverse("core:dashboard"))
+        self.assertNotContains(resposta_menu, "Cadastrar Usuário")
+
+        resposta = self.client.post(reverse("accounts:cadastro"), {
+            "username": "intruso", "first_name": "X", "email": "x@example.com",
+            "password1": "SenhaForte123!", "password2": "SenhaForte123!",
+        })
+        self.assertRedirects(resposta, reverse("core:dashboard"))
+        self.assertFalse(User.objects.filter(username="intruso").exists())
+
+    @override_settings(CADASTRO_PUBLICO=False)
+    def test_cadastro_publico_desligado_bloqueia_visitante(self):
+        resposta_login = self.client.get(reverse("accounts:login"))
+        self.assertNotContains(resposta_login, reverse("accounts:cadastro"))
+
+        resposta = self.client.post(reverse("accounts:cadastro"), {
+            "username": "visitante", "first_name": "V", "email": "v@example.com",
+            "password1": "SenhaForte123!", "password2": "SenhaForte123!",
+        })
+        self.assertRedirects(resposta, reverse("accounts:login"))
+        self.assertFalse(User.objects.filter(username="visitante").exists())
+
+    @override_settings(CADASTRO_PUBLICO=True)
+    def test_cadastro_publico_ligado_mostra_link_no_login(self):
+        resposta = self.client.get(reverse("accounts:login"))
+        self.assertContains(resposta, reverse("accounts:cadastro"))
+
+
+class AcoesQueAlteramDadosExigemPostTests(TestCase):
+    """Atualizar cotações/notícias/ações da B3/cripto e marcar alerta como lido não aceitam GET (CSRF)."""
+
+    def test_get_recusado_com_405(self):
+        usuario = User.objects.create_user(username="investidor_get", password="SenhaForte123!")
+        alerta = Alerta.objects.create(usuario=usuario, tipo=Alerta.LEMBRETE, mensagem="teste")
+        self.client.login(username="investidor_get", password="SenhaForte123!")
+        urls = [
+            reverse("core:atualizar_cotacoes"),
+            reverse("core:cripto_atualizar_cotacoes"),
+            reverse("core:noticias_atualizar"),
+            reverse("core:acoes_b3_atualizar"),
+            reverse("core:alerta_marcar_lido", args=[alerta.id]),
+        ]
+        for url in urls:
+            with self.subTest(url=url):
+                self.assertEqual(self.client.get(url).status_code, 405)
+        alerta.refresh_from_db()
+        self.assertFalse(alerta.lido)
 
 
 class IsolamentoEntreUsuariosTests(TestCase):
@@ -560,7 +613,7 @@ class IsolamentoEntreUsuariosTests(TestCase):
 
     def test_usuario_nao_acessa_alerta_de_outro_usuario(self):
         self.client.login(username="ana", password="SenhaForte123!")
-        resposta = self.client.get(
+        resposta = self.client.post(
             reverse("core:alerta_marcar_lido", args=[self.alerta_bruno.id])
         )
         self.assertEqual(resposta.status_code, 404)
@@ -3610,7 +3663,7 @@ class HistoricoAtualizacoesTests(TestCase):
         with patch("core.views.mercado_b3_aberto", return_value=True), \
              patch("core.views.atualizar_cotacao_diaria") as mock_atualizar:
             mock_atualizar.return_value = Cotacao.objects.filter(ativo=self.ativo).first()
-            self.client.get(reverse("core:atualizar_cotacoes"))
+            self.client.post(reverse("core:atualizar_cotacoes"))
 
         self.assertEqual(RegistroAtualizacaoCarteira.objects.filter(usuario=self.usuario).count(), 1)
 
@@ -5264,7 +5317,7 @@ class CriptomoedasViewTests(TestCase):
         mock_get.return_value.json = lambda: {"coins": [
             {"coin": coin, "regularMarketPrice": 100.0} for coin in MOEDAS_CRIPTO_SUGERIDAS
         ]}
-        resposta = self.client.get(reverse("core:cripto_atualizar_cotacoes"), follow=True)
+        resposta = self.client.post(reverse("core:cripto_atualizar_cotacoes"), follow=True)
         self.assertEqual(resposta.status_code, 200)
         self.assertEqual(CriptoAtivo.objects.filter(preco_atual__isnull=False).count(), len(MOEDAS_CRIPTO_SUGERIDAS))
 
@@ -5746,7 +5799,7 @@ class HistoricoAtualizacoesCriptoTests(TestCase):
             mock_get.return_value.json = lambda: {"coins": [
                 {"coin": coin, "regularMarketPrice": 100.0} for coin in MOEDAS_CRIPTO_SUGERIDAS
             ]}
-            self.client.get(reverse("core:cripto_atualizar_cotacoes"), follow=True)
+            self.client.post(reverse("core:cripto_atualizar_cotacoes"), follow=True)
 
         self.assertEqual(RegistroAtualizacaoCarteiraCripto.objects.filter(usuario=self.usuario).count(), 1)
 
@@ -5869,7 +5922,7 @@ class LimparDadosSistemaTests(TestCase):
 
     def setUp(self):
         from core.models import AcaoB3, Ativo, FonteNoticia, Operacao
-        self.usuario = User.objects.create_user(username="investidor_limpeza", password="SenhaForte123!")
+        self.usuario = User.objects.create_superuser(username="investidor_limpeza", password="SenhaForte123!")
         self.outro = User.objects.create_user(username="outro_limpeza", password="SenhaForte123!")
         PerfilUsuario.objects.create(usuario=self.usuario, numero_whatsapp="5565999998888")
         ativo = Ativo.objects.create(ticker="PETR4")
@@ -5886,6 +5939,14 @@ class LimparDadosSistemaTests(TestCase):
         from core.models import Operacao
         resposta = self.client.post(reverse("accounts:limpar_dados"), {"senha": "errada"}, follow=True)
         self.assertContains(resposta, "Senha incorreta")
+        self.assertEqual(Operacao.objects.count(), 2)
+
+    def test_usuario_comum_nao_apaga_nem_ve_o_botao(self):
+        from core.models import Operacao
+        self.client.login(username="outro_limpeza", password="SenhaForte123!")
+        self.assertNotContains(self.client.get(reverse("accounts:minha_conta")), "form-limpar-dados")
+        resposta = self.client.post(reverse("accounts:limpar_dados"), {"senha": "SenhaForte123!"}, follow=True)
+        self.assertContains(resposta, "Só o administrador")
         self.assertEqual(Operacao.objects.count(), 2)
 
     def test_get_nao_apaga(self):
@@ -5970,7 +6031,7 @@ class RegistroCotacaoTests(TestCase):
     def test_botao_atualizar_registra_cotacao_como_manual(self, mock_get, _mock_aberto):
         self._mock_cotacao(mock_get, preco=31.5)
 
-        self.client.get(reverse("core:atualizar_cotacoes"))
+        self.client.post(reverse("core:atualizar_cotacoes"))
 
         registro = RegistroCotacao.objects.get(usuario=self.usuario)
         self.assertEqual(registro.origem, RegistroCotacao.MANUAL)

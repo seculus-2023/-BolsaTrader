@@ -1043,3 +1043,59 @@ class PrevisaoAnalista(models.Model):
     @property
     def variacao_prevista_pct(self) -> Decimal:
         return ((self.alvo_medio / self.preco_registro - 1) * 100).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+
+class FundamentosAtivo(models.Model):
+    """
+    Indicadores fundamentalistas de uma ação e a nota de qualidade (0 a 10)
+    calculada a partir deles (ver core.services.calcular_qualidade_fundamentos).
+    Dados públicos da empresa, compartilhados entre usuários e guardados por
+    ticker (sem exigir um Ativo cadastrado) - balanços mudam por trimestre,
+    então só são buscados de novo na API depois de FUNDAMENTOS_VALIDADE_DIAS.
+    """
+
+    ticker = models.CharField("Ticker", max_length=12, unique=True)
+    nome = models.CharField("Nome", max_length=255, blank=True)
+    setor = models.CharField("Setor", max_length=150, blank=True)
+    financeira = models.BooleanField(
+        "Instituição financeira", default=False,
+        help_text="Bancos e seguradoras: endividamento não é avaliado (passivo alto é o próprio negócio).",
+    )
+    preco = models.DecimalField("Preço (R$)", max_digits=12, decimal_places=2, null=True, blank=True)
+    p_l = models.DecimalField("P/L", max_digits=12, decimal_places=2, null=True, blank=True)
+    p_vp = models.DecimalField("P/VP", max_digits=12, decimal_places=2, null=True, blank=True)
+    roe_pct = models.DecimalField("ROE (%)", max_digits=10, decimal_places=2, null=True, blank=True)
+    margem_liquida_pct = models.DecimalField("Margem líquida (%)", max_digits=10, decimal_places=2, null=True, blank=True)
+    cagr_lucro_pct = models.DecimalField(
+        "Crescimento do lucro (% ao ano, 3 anos)", max_digits=10, decimal_places=2, null=True, blank=True,
+    )
+    anos_lucro_positivo = models.PositiveSmallIntegerField("Anos com lucro", null=True, blank=True)
+    anos_avaliados = models.PositiveSmallIntegerField("Anos avaliados", null=True, blank=True)
+    endividamento_pct = models.DecimalField(
+        "Passivo / ativo total (%)", max_digits=10, decimal_places=2, null=True, blank=True,
+    )
+    dividend_yield_pct = models.DecimalField(
+        "Dividend yield 12 meses (%)", max_digits=10, decimal_places=2, null=True, blank=True,
+    )
+    nota = models.DecimalField("Nota de qualidade (0 a 10)", max_digits=4, decimal_places=1, null=True, blank=True)
+    criterios = models.JSONField("Critérios avaliados", default=list, blank=True)
+    atualizado_em = models.DateTimeField("Atualizado em", auto_now=True)
+
+    class Meta:
+        verbose_name = "Fundamentos de ativo"
+        verbose_name_plural = "Fundamentos de ativos"
+        ordering = ["-nota", "ticker"]
+
+    def __str__(self):
+        return f"{self.ticker} nota {self.nota}"
+
+    @property
+    def classificacao(self) -> str:
+        """"ALTA", "MEDIA" ou "BAIXA" qualidade pela nota (ou "SEM_DADOS")."""
+        if self.nota is None:
+            return "SEM_DADOS"
+        if self.nota >= 7:
+            return "ALTA"
+        if self.nota >= 4:
+            return "MEDIA"
+        return "BAIXA"

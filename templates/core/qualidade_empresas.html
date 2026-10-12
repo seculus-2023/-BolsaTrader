@@ -1,0 +1,113 @@
+{% extends "base.html" %}
+{% block titulo %}Qualidade das Empresas - BolsaTrader{% endblock %}
+{% block conteudo %}
+<h1>Qualidade das Empresas</h1>
+<p style="color: var(--text-dim);">
+    Filtro fundamentalista <strong>antes</strong> do gráfico: nota de 0 a 10 para empresas que dão lucro todo ano, com
+    boa rentabilidade (ROE), margem, lucro crescendo, dívida sob controle, preço razoável (P/L) e dividendos.
+    Critério sem dado (ou que não se aplica, como dívida de banco) sai da conta. É um filtro de qualidade &mdash;
+    <strong>não prevê o preço nem constitui recomendação de investimento</strong>.
+    Os dados são atualizados no máximo a cada {{ validade_dias }} dias (balanços mudam por trimestre).
+</p>
+
+<div class="card-glass" style="margin: 1rem 0;">
+    <div style="display: flex; gap: 1rem; flex-wrap: wrap; align-items: flex-end;">
+        <form method="post" class="form-futurista" style="display: flex; gap: .6rem; align-items: flex-end; flex-wrap: wrap; flex: 1;">
+            {% csrf_token %}
+            <input type="hidden" name="acao" value="avaliar">
+            <div style="flex: 1; min-width: 220px;">
+                <label for="campo-tickers" style="margin-top: 0;">Avaliar antes de comprar (até {{ max_tickers }}, separados por vírgula)</label>
+                <input type="text" name="tickers" id="campo-tickers" placeholder="Ex: WEGE3, ITSA4, TAEE11" required>
+            </div>
+            <button type="submit" class="btn-futurista btn-atualizar-cotacoes" data-overlay-texto="Buscando balanços...">🔎 Avaliar</button>
+        </form>
+        <form method="post" class="form-acao-inline">
+            {% csrf_token %}
+            <input type="hidden" name="acao" value="carteira">
+            <button type="submit" class="btn-futurista btn-secundario btn-atualizar-cotacoes" data-overlay-texto="Buscando balanços da carteira...">🔄 Avaliar minha carteira</button>
+        </form>
+        {% if tem_consultados %}
+        <form method="post" class="form-acao-inline">
+            {% csrf_token %}
+            <input type="hidden" name="acao" value="limpar">
+            <button type="submit" class="btn-futurista btn-secundario">Limpar consultas</button>
+        </form>
+        {% endif %}
+    </div>
+    {% if carteira_sem_nota %}
+    <p style="color: var(--neon-yellow); font-size: .9rem; margin-bottom: 0;">
+        Há ações da sua carteira ainda sem nota &mdash; clique em "Avaliar minha carteira" (1 consulta à API por ação).
+    </p>
+    {% endif %}
+</div>
+
+{% if linhas %}
+<div class="tabela-scroll">
+<table class="tabela-futurista">
+    <thead>
+        <tr>
+            <th>Ativo</th><th>Nota</th><th>P/L</th><th>P/VP</th><th>ROE</th><th>Margem</th>
+            <th>Lucro (3 anos)</th><th>Passivo/Ativo</th><th>Div. yield</th><th>Detalhes</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for linha in linhas %}
+        {% with f=linha.fundamentos %}
+        <tr>
+            <td>
+                <strong>{{ linha.ticker }}</strong>
+                {% if linha.na_carteira %}<small class="badge-tendencia badge-neutro" style="margin-left: .3rem;">carteira</small>{% endif %}
+                {% if f %}<br><small style="color: var(--text-dim);">{{ f.nome|truncatechars:30 }}{% if f.setor %} &middot; {{ f.setor }}{% endif %}</small>{% endif %}
+            </td>
+            {% if f %}
+            <td>
+                {% if f.nota is not None %}
+                <span class="badge-tendencia {% if f.classificacao == 'ALTA' %}badge-alta{% elif f.classificacao == 'BAIXA' %}badge-baixa{% else %}badge-neutro{% endif %}" style="font-size: 1rem;">{{ f.nota }}</span>
+                {% else %}<span style="color: var(--text-dim);">dados insuficientes</span>{% endif %}
+            </td>
+            <td>{{ f.p_l|default_if_none:"—" }}</td>
+            <td>{{ f.p_vp|default_if_none:"—" }}</td>
+            <td>{% if f.roe_pct is not None %}{{ f.roe_pct }}%{% else %}—{% endif %}</td>
+            <td>{% if f.margem_liquida_pct is not None %}{{ f.margem_liquida_pct }}%{% else %}—{% endif %}</td>
+            <td class="{% if f.cagr_lucro_pct > 0 %}valor-positivo{% elif f.cagr_lucro_pct is not None %}valor-negativo{% endif %}">
+                {% if f.cagr_lucro_pct is not None %}{{ f.cagr_lucro_pct }}%/ano{% else %}—{% endif %}
+                {% if f.anos_avaliados %}<br><small style="color: var(--text-dim);">lucro em {{ f.anos_lucro_positivo }}/{{ f.anos_avaliados }} anos</small>{% endif %}
+            </td>
+            <td>{% if f.financeira %}<small style="color: var(--text-dim);">banco</small>{% elif f.endividamento_pct is not None %}{{ f.endividamento_pct|floatformat:0 }}%{% else %}—{% endif %}</td>
+            <td>{% if f.dividend_yield_pct is not None %}{{ f.dividend_yield_pct }}%{% else %}—{% endif %}</td>
+            <td>
+                <details>
+                    <summary style="cursor: pointer;">critérios</summary>
+                    <ul style="padding-left: 1rem; margin: .4rem 0; font-size: .85rem; min-width: 260px;">
+                        {% for c in f.criterios %}
+                        <li>
+                            {% if not c.aplicavel %}➖{% elif c.pontos == c.maximo %}✅{% elif c.pontos %}🟡{% else %}❌{% endif %}
+                            <strong>{{ c.nome }}</strong>: {{ c.valor }}
+                            {% if c.aplicavel %}({{ c.pontos }}/{{ c.maximo }}){% endif %}
+                            {% if c.regra %}<br><small style="color: var(--text-dim);">{{ c.regra }}</small>{% endif %}
+                        </li>
+                        {% endfor %}
+                    </ul>
+                    <small style="color: var(--text-dim);">dados de {{ f.atualizado_em|date:"d/m/Y H:i" }}</small>
+                </details>
+            </td>
+            {% else %}
+            <td colspan="9" style="color: var(--text-dim);">ainda não avaliado</td>
+            {% endif %}
+        </tr>
+        {% endwith %}
+        {% endfor %}
+    </tbody>
+</table>
+</div>
+<p style="color: var(--text-dim); font-size: .85rem;">
+    Nota 7 ou mais: alta qualidade &middot; 4 a 7: média &middot; abaixo de 4: baixa.
+    Mesmo uma empresa nota 10 pode cair na bolsa &mdash; combine com a Calculadora de risco (stop e tamanho da posição)
+    na tela de compra.
+</p>
+{% else %}
+<div class="card-glass">
+    <p style="color: var(--text-dim);">Sem ações na carteira nem consultas ainda &mdash; digite um ticker acima para avaliar.</p>
+</div>
+{% endif %}
+{% endblock %}

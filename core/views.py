@@ -36,7 +36,7 @@ from .forms import (
 from .models import (
     Operacao, Alerta, Ativo, Cotacao, MensagemWhatsapp, FonteNoticia, AcaoB3, RegistroAtualizacaoCarteira,
     LancamentoContaCorrente, CriptoAtivo, OperacaoCripto, RegistroAtualizacaoCarteiraCripto, RegistroCotacao,
-    PrevisaoAnalista,
+    PrevisaoAnalista, FundamentosAtivo,
 )
 from .services import (
     calcular_posicoes,
@@ -123,6 +123,10 @@ from .services import (
     atualizar_precos_previsoes,
     resumir_backtests,
     calcular_risco_compra,
+    atualizar_fundamentos,
+    tickers_da_carteira,
+    FUNDAMENTOS_MAX_TICKERS_POR_CONSULTA,
+    FUNDAMENTOS_VALIDADE_DIAS,
     BACKTEST_MINIMO_SINAIS_CONFIAVEL,
 )
 
@@ -444,6 +448,74 @@ def operacao_nova(request):
 
     return render(request, "core/operacao_form.html", {
         "form": form, "risco_pct_padrao": settings.RISCO_POR_OPERACAO_PCT,
+    })
+
+
+_SESSAO_FUNDAMENTOS = "fundamentos_consultados"
+
+
+@login_required
+def qualidade_empresas(request):
+    """
+    Qualidade fundamentalista (nota de 0 a 10 - ver core.services.
+    calcular_qualidade_fundamentos) das ações da carteira e de outras que o
+    usuário quiser avaliar antes de comprar. GET só mostra o que já está
+    salvo (sem chamar a API); os POSTs buscam o que estiver desatualizado.
+    """
+    carteira = tickers_da_carteira(request.user)
+    consultados = request.session.get(_SESSAO_FUNDAMENTOS, [])
+
+    if request.method == "POST":
+        acao = request.POST.get("acao")
+        if acao == "limpar":
+            request.session[_SESSAO_FUNDAMENTOS] = []
+            return redirect("core:qualidade_empresas")
+        if acao == "avaliar":
+            pedidos = [t.strip().upper() for t in re.split(r"[\s,;]+", request.POST.get("tickers", "")) if t.strip()]
+            invalidos = [t for t in pedidos if not TICKER_VALIDO.match(t)]
+            pedidos = list(dict.fromkeys(t for t in pedidos if TICKER_VALIDO.match(t)))
+            if invalidos:
+                messages.warning(request, f"Ticker(s) inválido(s) ignorado(s): {', '.join(invalidos)}.")
+            if len(pedidos) > FUNDAMENTOS_MAX_TICKERS_POR_CONSULTA:
+                messages.warning(
+                    request, f"No máximo {FUNDAMENTOS_MAX_TICKERS_POR_CONSULTA} tickers por vez - avaliados os primeiros.",
+                )
+                pedidos = pedidos[:FUNDAMENTOS_MAX_TICKERS_POR_CONSULTA]
+        else:  # "carteira": atualiza a nota das ações em carteira
+            pedidos = carteira
+
+        avaliados, falhas = [], []
+        for ticker in pedidos:
+            try:
+                atualizar_fundamentos(ticker)
+                avaliados.append(ticker)
+            except BrapiError as exc:
+                falhas.append(f"{ticker}: {exc}")
+        if acao == "avaliar":
+            request.session[_SESSAO_FUNDAMENTOS] = list(dict.fromkeys(consultados + avaliados))[-30:]
+        if avaliados:
+            messages.success(request, f"{len(avaliados)} ação(ões) avaliada(s).")
+        for falha in falhas:
+            messages.warning(request, falha)
+        return redirect("core:qualidade_empresas")
+
+    salvos = {f.ticker: f for f in FundamentosAtivo.objects.filter(ticker__in=set(carteira) | set(consultados))}
+    linhas = [
+        {"ticker": ticker, "na_carteira": ticker in carteira, "fundamentos": salvos.get(ticker)}
+        for ticker in dict.fromkeys(carteira + consultados)
+    ]
+    # melhores primeiro; sem nota no fim
+    linhas.sort(key=lambda l: (
+        l["fundamentos"] is None or l["fundamentos"].nota is None,
+        -(l["fundamentos"].nota if l["fundamentos"] and l["fundamentos"].nota is not None else 0),
+        l["ticker"],
+    ))
+    return render(request, "core/qualidade_empresas.html", {
+        "linhas": linhas,
+        "tem_consultados": bool(consultados),
+        "carteira_sem_nota": any(l["na_carteira"] and not l["fundamentos"] for l in linhas),
+        "validade_dias": FUNDAMENTOS_VALIDADE_DIAS,
+        "max_tickers": FUNDAMENTOS_MAX_TICKERS_POR_CONSULTA,
     })
 
 

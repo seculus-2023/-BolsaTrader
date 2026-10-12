@@ -2776,6 +2776,152 @@ class CalculadoraRiscoTests(TestCase):
         self.assertContains(resposta, reverse("core:risco_compra"))
 
 
+def _dados_fundamentos(lucros=(100, 90, 80, 70, 60), preco=20.0, lpa=2.0, vpa=10.0, margem=0.15,
+                       ativo_total=1000, passivo_total=500, setor="Bens Industriais", proventos=()):
+    """Resposta da brapi.dev (results[0]) com os módulos de fundamentos, para os testes."""
+    return {
+        "longName": "Empresa Teste SA",
+        "regularMarketPrice": preco,
+        "priceEarnings": preco / lpa if lpa and lpa > 0 else None,
+        "summaryProfile": {"sector": setor, "industry": ""},
+        "defaultKeyStatistics": {
+            "trailingEps": lpa, "bookValue": vpa, "profitMargins": margem, "priceToBook": preco / vpa if vpa else None,
+        },
+        "incomeStatementHistory": [
+            {"type": "yearly", "endDate": f"{2025 - i}-12-31", "netIncome": lucro} for i, lucro in enumerate(lucros)
+        ],
+        "balanceSheetHistory": [
+            {"type": "yearly", "endDate": "2025-12-31", "totalAssets": ativo_total, "totalLiab": passivo_total},
+        ],
+        "dividendsData": {"cashDividends": list(proventos)},
+    }
+
+
+class QualidadeFundamentosTests(TestCase):
+    """core.services.calcular_qualidade_fundamentos (núcleo puro da nota de qualidade)."""
+
+    def _criterio(self, resultado, nome):
+        return next(c for c in resultado["criterios"] if c["nome"] == nome)
+
+    def test_empresa_solida_e_barata_tira_nota_maxima(self):
+        from core.services import calcular_qualidade_fundamentos
+        ex = (timezone.now() - timedelta(days=30)).isoformat()
+        r = calcular_qualidade_fundamentos(_dados_fundamentos(
+            proventos=[{"rate": 1.0, "exDate": ex}],  # 1,00 / 20,00 = 5% de dividend yield
+        ))
+        self.assertEqual(r["roe_pct"], 20.0)
+        self.assertAlmostEqual(r["cagr_lucro_pct"], ((100 / 70) ** (1 / 3) - 1) * 100)
+        self.assertAlmostEqual(r["dividend_yield_pct"], 5.0)
+        self.assertEqual(r["nota"], 10.0)
+
+    def test_empresa_com_prejuizos_e_patrimonio_negativo_tira_zero(self):
+        from core.services import calcular_qualidade_fundamentos
+        r = calcular_qualidade_fundamentos(_dados_fundamentos(
+            lucros=(-50, -40, -30, -20, -10), lpa=-1.0, vpa=-5.0, margem=-0.3, passivo_total=950,
+        ))
+        self.assertEqual(r["nota"], 0.0)
+        self.assertEqual(self._criterio(r, "Rentabilidade (ROE)")["valor"], "patrimônio líquido negativo")
+
+    def test_banco_nao_e_avaliado_por_endividamento(self):
+        from core.services import calcular_qualidade_fundamentos
+        r = calcular_qualidade_fundamentos(_dados_fundamentos(setor="Serviços Financeiros", passivo_total=930))
+        self.assertTrue(r["financeira"])
+        criterio = self._criterio(r, "Endividamento")
+        self.assertFalse(criterio["aplicavel"])
+        self.assertGreater(r["nota"], 8)  # o passivo alto não derruba a nota de um banco
+
+    def test_setor_da_brapi_vale_mais_que_o_cadastrado(self):
+        # construtora: a classificação do cadastro diz "Finance", mas não é banco
+        from core.services import calcular_qualidade_fundamentos
+        r = calcular_qualidade_fundamentos(_dados_fundamentos(setor="Construção e Imobiliário"), "Finance")
+        self.assertFalse(r["financeira"])
+        r = calcular_qualidade_fundamentos({**_dados_fundamentos(), "summaryProfile": {}}, "Finance")
+        self.assertTrue(r["financeira"])
+
+    def test_divida_alta_em_empresa_comum_perde_o_ponto(self):
+        from core.services import calcular_qualidade_fundamentos
+        r = calcular_qualidade_fundamentos(_dados_fundamentos(passivo_total=930))
+        self.assertEqual(self._criterio(r, "Endividamento")["pontos"], 0)
+
+    def test_um_ano_de_prejuizo_vale_metade_da_consistencia(self):
+        from core.services import calcular_qualidade_fundamentos
+        r = calcular_qualidade_fundamentos(_dados_fundamentos(lucros=(100, 90, -10, 70, 60)))
+        self.assertEqual(self._criterio(r, "Lucro consistente")["pontos"], 1)
+
+    def test_sem_demonstrativos_nao_da_nota(self):
+        from core.services import calcular_qualidade_fundamentos
+        r = calcular_qualidade_fundamentos({"regularMarketPrice": 10.0})
+        self.assertIsNone(r["nota"])
+
+    def test_dividend_yield_ignora_proventos_antigos_e_repetidos_por_classe(self):
+        from core.services import _dividend_yield_12m
+        recente = (timezone.now() - timedelta(days=10)).isoformat()
+        antigo = (timezone.now() - timedelta(days=400)).isoformat()
+        proventos = [
+            {"rate": 0.5, "exDate": recente, "assetIssued": "ON"},
+            {"rate": 0.5, "exDate": recente, "assetIssued": "PN"},  # mesmo evento, outra classe
+            {"rate": 3.0, "exDate": antigo},
+        ]
+        self.assertAlmostEqual(_dividend_yield_12m(proventos, 10.0), 5.0)
+
+
+class AtualizarFundamentosTests(TestCase):
+    """core.services.atualizar_fundamentos: cache de FUNDAMENTOS_VALIDADE_DIAS e a tela Qualidade das Empresas."""
+
+    @patch("core.services.buscar_fundamentos", return_value=_dados_fundamentos())
+    def test_usa_o_dado_salvo_enquanto_valido(self, mock_buscar):
+        from core.models import FundamentosAtivo
+        from core.services import atualizar_fundamentos
+        atualizar_fundamentos("wege3")
+        atualizar_fundamentos("WEGE3")
+        self.assertEqual(mock_buscar.call_count, 1)
+        FundamentosAtivo.objects.filter(ticker="WEGE3").update(atualizado_em=timezone.now() - timedelta(days=8))
+        atualizar_fundamentos("WEGE3")
+        self.assertEqual(mock_buscar.call_count, 2)
+        self.assertEqual(FundamentosAtivo.objects.get(ticker="WEGE3").classificacao, "ALTA")
+
+    @patch("core.services.buscar_fundamentos", return_value=_dados_fundamentos())
+    def test_tela_avalia_tickers_e_mostra_a_nota(self, mock_buscar):
+        User.objects.create_user(username="investidor_fund", password="SenhaForte123!")
+        self.client.login(username="investidor_fund", password="SenhaForte123!")
+        resposta = self.client.post(
+            reverse("core:qualidade_empresas"), {"acao": "avaliar", "tickers": "wege3, itsa4; x!"}, follow=True,
+        )
+        self.assertEqual(mock_buscar.call_count, 2)
+        self.assertContains(resposta, "WEGE3")
+        self.assertContains(resposta, "ITSA4")
+        self.assertContains(resposta, "inválido")
+        self.assertContains(resposta, "Lucro consistente")
+
+    def test_get_nao_chama_a_api(self):
+        User.objects.create_user(username="investidor_fund2", password="SenhaForte123!")
+        self.client.login(username="investidor_fund2", password="SenhaForte123!")
+        with patch("core.services.buscar_fundamentos") as mock_buscar:
+            resposta = self.client.get(reverse("core:qualidade_empresas"))
+        self.assertEqual(resposta.status_code, 200)
+        mock_buscar.assert_not_called()
+
+    @patch("core.services.buscar_fundamentos", side_effect=BrapiError("XPTO3 não encontrado na B3."))
+    def test_falha_da_api_vira_aviso(self, _mock):
+        User.objects.create_user(username="investidor_fund3", password="SenhaForte123!")
+        self.client.login(username="investidor_fund3", password="SenhaForte123!")
+        resposta = self.client.post(
+            reverse("core:qualidade_empresas"), {"acao": "avaliar", "tickers": "XPTO3"}, follow=True,
+        )
+        self.assertContains(resposta, "não encontrado")
+
+    def test_calculadora_de_risco_avisa_qualidade_baixa(self):
+        from core.models import FundamentosAtivo
+        from core.services import calcular_risco_compra
+        usuario = User.objects.create_user(username="investidor_fund4", password="SenhaForte123!")
+        ativo = Ativo.objects.create(ticker="BHIA3")
+        Cotacao.objects.create(ativo=ativo, data=date.today(), preco_fechamento=Decimal("2.00"))
+        FundamentosAtivo.objects.create(ticker="BHIA3", nota=Decimal("1.0"))
+        r = calcular_risco_compra(usuario, "BHIA3")
+        self.assertEqual(r["nota_qualidade"], 1.0)
+        self.assertTrue(any("Qualidade fundamentalista BAIXA" in aviso for aviso in r["avisos"]))
+
+
 class BenchmarkTests(TestCase):
     """core.services: buscar_historico_cdi, atualizar_benchmarks, calcular_comparativo_benchmark"""
 

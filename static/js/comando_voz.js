@@ -33,6 +33,7 @@
         { termos: ["detalhes de cotac", "detalhe de cotac", "detalhes da cotac", "detalhes das cotac"], rota: "detalhes_cotacoes" },
         { termos: ["operacoes", "operacao"], rota: "operacao_lista" },
         { termos: ["posicoes", "posicao", "carteira"], rota: "posicoes" },
+        { termos: ["qualidade", "fundamento", "fundamentalista"], rota: "qualidade_empresas" },
         { termos: ["analise", "mercado"], rota: "analise_mercado" },
         { termos: ["scanner", "escaner"], rota: "scanner_tecnico" },
         { termos: ["previsao dos analistas", "previsoes dos analistas", "previsao de analista", "previsoes de analista", "preco alvo"], rota: "previsoes_analistas" },

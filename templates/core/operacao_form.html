@@ -121,6 +121,7 @@
             texto("risco-perda", reais(dados.perda_no_stop));
             texto("risco-patrimonio", "limite " + reais(dados.risco_maximo) + " = " + dados.risco_pct + "% de " + reais(dados.patrimonio));
             var contexto = [];
+            if (dados.nota_qualidade !== null) contexto.push("Qualidade: nota " + dados.nota_qualidade + "/10");
             if (dados.veredito_scanner) contexto.push("Scanner: " + dados.veredito_scanner);
             if (dados.backtest_veredito) contexto.push("Backtest: " + VEREDITOS[dados.backtest_veredito]);
             if (dados.exposicao_setor_apos_pct !== null) {

@@ -41,6 +41,7 @@ from .models import (
     Ativo, Cotacao, Operacao, Alerta, FonteNoticia, Noticia, AcaoB3, CotacaoIndice,
     RegistroAtualizacaoCarteira, RegistroCotacao, ContaCorrente, LancamentoContaCorrente, PostIt,
     CriptoAtivo, OperacaoCripto, CotacaoCripto, RegistroAtualizacaoCarteiraCripto, PrevisaoAnalista,
+    FundamentosAtivo,
 )
 
 
@@ -4272,6 +4273,11 @@ def calcular_risco_compra(
 
     backtest = backtest_sinais_robo(ativo) if ativo else None
     alvo = preco_entrada + ALVO_MULTIPLO_RISCO * risco_por_acao
+    fundamentos = FundamentosAtivo.objects.filter(ticker=ticker).first()
+    if fundamentos and fundamentos.classificacao == "BAIXA":
+        avisos.append(
+            f"Qualidade fundamentalista BAIXA (nota {fundamentos.nota}) - veja Qualidade das Empresas."
+        )
 
     return {
         "erro": None,
@@ -4297,6 +4303,7 @@ def calcular_risco_compra(
         "exposicao_setor_pct": exposicao_setor_pct,
         "exposicao_setor_apos_pct": exposicao_setor_apos_pct,
         "veredito_scanner": scanner["veredito_label"] if scanner else None,
+        "nota_qualidade": float(fundamentos.nota) if fundamentos and fundamentos.nota is not None else None,
         "backtest_veredito": backtest["veredito"] if backtest else None,
         "backtest_sinais_compra": backtest["sinais_compra"] if backtest else 0,
         "avisos": avisos,
@@ -5776,7 +5783,8 @@ MODELOS_LIMPOS_NA_LIMPEZA_GERAL = [
     MensagemWhatsapp,
     PostIt,
 ]
-MODELOS_PRESERVADOS_NA_LIMPEZA_GERAL = [AcaoB3, ConsumoApiBrapi]
+# FundamentosAtivo: dado público das empresas (como o catálogo Ações da B3), não do usuário
+MODELOS_PRESERVADOS_NA_LIMPEZA_GERAL = [AcaoB3, ConsumoApiBrapi, FundamentosAtivo]
 
 
 @transaction.atomic
@@ -6015,3 +6023,259 @@ def avaliar_previsoes_analistas(usuario, hoje: date | None = None) -> dict:
         "concluidas": resumir_acertos_analistas([a for a in avaliacoes if a["concluida"]]),
         "em_andamento": resumir_acertos_analistas([a for a in avaliacoes if not a["concluida"]]),
     }
+
+
+# --------------------------------------------------------------------------
+# Qualidade fundamentalista (tela Qualidade das Empresas)
+#
+# Filtro de qualidade ANTES do gráfico: empresas que dão lucro todo ano, com
+# boa rentabilidade, crescendo, sem dívida excessiva e sem preço exagerado
+# tendem a decepcionar menos no longo prazo do que sinais técnicos de curto
+# prazo (ver o Backtesting do Robô). Usa os módulos que o plano Startup da
+# brapi.dev libera (defaultKeyStatistics, balanço, DRE e proventos) - o
+# financialData, com ROE/dívida prontos, só existe no plano Pro, então os
+# indicadores são calculados a partir dos demonstrativos.
+#
+# Cada critério vale pontos; critério sem dado (ou que não se aplica, como
+# endividamento de banco) sai da conta, e a nota é proporcional ao máximo
+# possível. É um filtro de qualidade, não uma previsão de preço.
+# --------------------------------------------------------------------------
+FUNDAMENTOS_MODULOS = "defaultKeyStatistics,balanceSheetHistory,incomeStatementHistory,summaryProfile"
+# balanço muda por trimestre - mais que isso é desperdício de requisição
+FUNDAMENTOS_VALIDADE_DIAS = 7
+FUNDAMENTOS_MAX_TICKERS_POR_CONSULTA = 10
+_SETORES_FINANCEIROS = ("finance", "financial", "bank", "banco", "insurance", "seguro")
+
+
+def _numero(valor) -> float | None:
+    if valor is None or isinstance(valor, bool):
+        return None
+    try:
+        return float(valor)
+    except (TypeError, ValueError):
+        return None
+
+
+def _lucro_do_ano(demonstrativo: dict) -> float | None:
+    # bancos às vezes não trazem netIncome, só os campos "para os acionistas"
+    for campo in ("netIncome", "netIncomeApplicableToCommonShares", "netIncomeFromContinuingOps"):
+        valor = _numero(demonstrativo.get(campo))
+        if valor is not None:
+            return valor
+    return None
+
+
+def _dividend_yield_12m(dividendos: list, preco: float | None) -> float | None:
+    """Soma os proventos por ação com data-ex nos últimos 12 meses (sem repetir o mesmo evento) / preço."""
+    if not preco or preco <= 0:
+        return None
+    limite = timezone.now() - timedelta(days=365)
+    eventos = set()
+    for provento in dividendos or []:
+        valor = _numero(provento.get("rate"))
+        data_ex = provento.get("exDate")
+        if not valor or not data_ex:
+            continue
+        try:
+            data = datetime.fromisoformat(str(data_ex).replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        if data.tzinfo is None:
+            data = data.replace(tzinfo=dt_timezone.utc)
+        if data >= limite:
+            # a mesma distribuição aparece uma vez por classe de ação (ON/PN)
+            eventos.add((data.date(), round(valor, 6)))
+    return sum(valor for _, valor in eventos) / preco * 100
+
+
+def calcular_qualidade_fundamentos(dados: dict, setor_cadastrado: str = "") -> dict:
+    """
+    Núcleo puro (sem banco nem rede): recebe o "results[0]" da brapi.dev com
+    os módulos de FUNDAMENTOS_MODULOS (+ dividendsData) e devolve os
+    indicadores, a lista de critérios avaliados e a nota de 0 a 10.
+    """
+    estatisticas = dados.get("defaultKeyStatistics") or {}
+    perfil = dados.get("summaryProfile") or {}
+    preco = _numero(dados.get("regularMarketPrice"))
+
+    # o setor da própria brapi tem prioridade: o cadastrado no Ativo vem de
+    # outra classificação, que põe até construtoras/imobiliárias em "Finance"
+    if perfil.get("sector"):
+        setor = perfil["sector"]
+        texto_setor = f"{setor} {perfil.get('industry') or ''}".lower()
+    else:
+        setor = setor_cadastrado or ""
+        texto_setor = setor.lower()
+    financeira = any(chave in texto_setor for chave in _SETORES_FINANCEIROS)
+
+    p_l = _numero(dados.get("priceEarnings")) or _numero(estatisticas.get("trailingPE"))
+    p_vp = _numero(estatisticas.get("priceToBook"))
+    lpa = _numero(estatisticas.get("trailingEps"))
+    vpa = _numero(estatisticas.get("bookValue"))
+    # ROE pelo lucro e patrimônio POR AÇÃO: funciona igual para bancos, cujo
+    # balanço/DRE vêm em outro formato
+    roe = lpa / vpa * 100 if lpa is not None and vpa and vpa > 0 else None
+    patrimonio_negativo = vpa is not None and vpa <= 0
+    margem = _numero(estatisticas.get("profitMargins"))
+    margem = margem * 100 if margem is not None else None
+
+    anuais = sorted(
+        (d for d in dados.get("incomeStatementHistory") or [] if d.get("type", "yearly") == "yearly"),
+        key=lambda d: d.get("endDate") or "", reverse=True,
+    )
+    lucros = [lucro for lucro in (_lucro_do_ano(d) for d in anuais[:5]) if lucro is not None]
+    anos_lucro_positivo = sum(1 for lucro in lucros if lucro > 0) if lucros else None
+    lucros_4 = [_lucro_do_ano(d) for d in anuais[:4]]
+    cagr = None
+    if len(lucros_4) == 4 and None not in lucros_4 and lucros_4[0] > 0 and lucros_4[3] > 0:
+        cagr = ((lucros_4[0] / lucros_4[3]) ** (1 / 3) - 1) * 100
+
+    balancos = sorted(
+        (b for b in dados.get("balanceSheetHistory") or [] if b.get("type", "yearly") == "yearly"),
+        key=lambda b: b.get("endDate") or "", reverse=True,
+    )
+    endividamento = None
+    if balancos:
+        ativo_total = _numero(balancos[0].get("totalAssets"))
+        passivo_total = _numero(balancos[0].get("totalLiab"))
+        if ativo_total and passivo_total is not None:
+            endividamento = passivo_total / ativo_total * 100
+
+    dividend_yield = _dividend_yield_12m((dados.get("dividendsData") or {}).get("cashDividends"), preco)
+
+    criterios = []
+
+    def avaliar(nome, maximo, pontos, valor_texto, regra, aplicavel=True):
+        criterios.append({
+            "nome": nome, "maximo": maximo, "pontos": pontos if aplicavel else None,
+            "valor": valor_texto, "regra": regra, "aplicavel": aplicavel,
+        })
+
+    if anos_lucro_positivo is not None and len(lucros) >= 3:
+        pontos = 2 if anos_lucro_positivo == len(lucros) else 1 if anos_lucro_positivo >= len(lucros) - 1 else 0
+        avaliar("Lucro consistente", 2, pontos, f"lucro em {anos_lucro_positivo} de {len(lucros)} anos",
+                "2 pts: lucro todo ano; 1 pt: no máximo 1 ano de prejuízo")
+    else:
+        avaliar("Lucro consistente", 2, 0, "sem DRE anual suficiente", "", aplicavel=False)
+
+    if patrimonio_negativo:
+        avaliar("Rentabilidade (ROE)", 2, 0, "patrimônio líquido negativo", "2 pts: ROE ≥ 15%; 1 pt: ≥ 10%")
+    elif roe is not None:
+        avaliar("Rentabilidade (ROE)", 2, 2 if roe >= 15 else 1 if roe >= 10 else 0, f"{roe:.1f}%",
+                "2 pts: ROE ≥ 15%; 1 pt: ≥ 10%")
+    else:
+        avaliar("Rentabilidade (ROE)", 2, 0, "sem dado", "", aplicavel=False)
+
+    if margem is not None:
+        avaliar("Margem líquida", 1, 1 if margem >= 10 else 0, f"{margem:.1f}%", "1 pt: margem ≥ 10%")
+    else:
+        avaliar("Margem líquida", 1, 0, "sem dado", "", aplicavel=False)
+
+    if cagr is not None:
+        avaliar("Crescimento do lucro", 2, 2 if cagr >= 10 else 1 if cagr > 0 else 0, f"{cagr:+.1f}% ao ano (3 anos)",
+                "2 pts: ≥ 10% ao ano; 1 pt: crescendo")
+    elif len(lucros_4) == 4 and None not in lucros_4:
+        avaliar("Crescimento do lucro", 2, 0, "prejuízo no início ou no fim do período",
+                "2 pts: ≥ 10% ao ano; 1 pt: crescendo")
+    else:
+        avaliar("Crescimento do lucro", 2, 0, "sem 4 anos de DRE", "", aplicavel=False)
+
+    if financeira:
+        avaliar("Endividamento", 1, 0, "não se aplica a banco/seguradora", "", aplicavel=False)
+    elif endividamento is not None:
+        avaliar("Endividamento", 1, 1 if endividamento <= 60 else 0, f"passivo = {endividamento:.0f}% do ativo",
+                "1 pt: passivo ≤ 60% do ativo total")
+    else:
+        avaliar("Endividamento", 1, 0, "sem balanço", "", aplicavel=False)
+
+    if p_l is not None:
+        barato = 0 < p_l <= 20
+        avaliar("Preço (P/L)", 1, 1 if barato else 0,
+                f"P/L {p_l:.1f}" + (" (prejuízo)" if p_l <= 0 else ""), "1 pt: P/L entre 0 e 20")
+    else:
+        avaliar("Preço (P/L)", 1, 0, "sem dado (empresa com prejuízo?)", "1 pt: P/L entre 0 e 20")
+
+    if dividend_yield is not None:
+        avaliar("Dividendos", 1, 1 if dividend_yield >= 4 else 0, f"{dividend_yield:.1f}% em 12 meses",
+                "1 pt: dividend yield ≥ 4%")
+    else:
+        avaliar("Dividendos", 1, 0, "sem dado", "", aplicavel=False)
+
+    maximo = sum(c["maximo"] for c in criterios if c["aplicavel"])
+    pontos = sum(c["pontos"] for c in criterios if c["aplicavel"])
+    # com menos da metade dos pontos avaliáveis, a nota diria pouco
+    nota = round(pontos / maximo * 10, 1) if maximo >= 5 else None
+
+    return {
+        "nome": dados.get("longName") or dados.get("shortName") or "",
+        "setor": setor,
+        "financeira": financeira,
+        "preco": preco,
+        "p_l": p_l,
+        "p_vp": p_vp,
+        "roe_pct": roe,
+        "margem_liquida_pct": margem,
+        "cagr_lucro_pct": cagr,
+        "anos_lucro_positivo": anos_lucro_positivo,
+        "anos_avaliados": len(lucros) or None,
+        "endividamento_pct": endividamento,
+        "dividend_yield_pct": dividend_yield,
+        "nota": nota,
+        "criterios": criterios,
+    }
+
+
+def buscar_fundamentos(ticker: str) -> dict:
+    """Uma requisição à brapi.dev com balanço, DRE, estatísticas, perfil e proventos do ticker."""
+    url = f"{settings.BRAPI_BASE_URL}/quote/{ticker.upper()}"
+    params = {"modules": FUNDAMENTOS_MODULOS, "fundamental": "true", "dividends": "true"}
+    if settings.BRAPI_TOKEN:
+        params["token"] = settings.BRAPI_TOKEN
+    try:
+        resposta = _get_brapi(url, params=params, timeout=30)
+    except requests.RequestException as exc:
+        raise BrapiError(f"Falha ao consultar os fundamentos de {ticker}. Tente novamente em instantes.") from exc
+    if resposta.status_code == 404:
+        raise BrapiError(f"{ticker} não encontrado na B3.")
+    try:
+        corpo = resposta.json()
+    except ValueError:
+        corpo = {}
+    if resposta.status_code != 200:
+        mensagem = corpo.get("message") if isinstance(corpo, dict) else None
+        raise BrapiError(mensagem or f"Falha ao consultar os fundamentos de {ticker} (HTTP {resposta.status_code}).")
+    resultados = corpo.get("results") or []
+    if not resultados:
+        raise BrapiError(f"{ticker} não encontrado na B3.")
+    return resultados[0]
+
+
+def atualizar_fundamentos(ticker: str, forcar: bool = False) -> FundamentosAtivo:
+    """
+    Fundamentos e nota de `ticker`, buscando na API só se não houver dado
+    salvo há menos de FUNDAMENTOS_VALIDADE_DIAS (ou com `forcar`). Levanta
+    BrapiError se precisar buscar e a API falhar.
+    """
+    ticker = ticker.strip().upper()
+    existente = FundamentosAtivo.objects.filter(ticker=ticker).first()
+    validade = timezone.now() - timedelta(days=FUNDAMENTOS_VALIDADE_DIAS)
+    if existente and not forcar and existente.atualizado_em >= validade:
+        return existente
+
+    ativo = Ativo.objects.filter(ticker=ticker).first()
+    calculado = calcular_qualidade_fundamentos(buscar_fundamentos(ticker), ativo.setor if ativo else "")
+    criterios = calculado.pop("criterios")
+    valores = {
+        campo: (_para_decimal(valor) if isinstance(valor, float) else valor)
+        for campo, valor in calculado.items()
+    }
+    valores["nome"] = (valores["nome"] or "")[:255]
+    valores["setor"] = (valores["setor"] or "")[:150]
+    valores["criterios"] = criterios
+    fundamentos, _ = FundamentosAtivo.objects.update_or_create(ticker=ticker, defaults=valores)
+    return fundamentos
+
+
+def tickers_da_carteira(usuario) -> list[str]:
+    """Tickers que o usuário tem comprados ou reservados agora."""
+    return sorted({p.ativo.ticker for p in calcular_posicoes(usuario) if p.quantidade > 0 or p.quantidade_reservada > 0})

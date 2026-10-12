@@ -1,0 +1,5 @@
+# Scripts que rodam dentro do container Linux precisam de quebra de linha LF
+# (com CRLF do Windows o container nao sobe: "./entrypoint.sh: not found").
+*.sh text eol=lf
+# Scripts do Windows ficam com CRLF.
+*.bat text eol=crlf

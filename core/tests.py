@@ -32,7 +32,7 @@ from accounts.models import PerfilUsuario
 from . import services as core_services
 from .forms import OperacaoForm, VendaLoteForm, PrevisaoAnalistaForm
 from .models import (
-    Ativo, Cotacao, Operacao, Alerta, MensagemWhatsapp, CotacaoIndice, RegistroAtualizacaoCarteira,
+    Ativo, Cotacao, Operacao, Alerta, MensagemWhatsapp, FonteNoticia, CotacaoIndice, RegistroAtualizacaoCarteira,
     ContaCorrente, LancamentoContaCorrente, PostIt,
     CriptoAtivo, OperacaoCripto, CotacaoCripto, RegistroAtualizacaoCarteiraCripto, RegistroCotacao,
     PrevisaoAnalista,
@@ -554,6 +554,34 @@ class FluxoAutenticacaoTests(TestCase):
     def test_cadastro_publico_ligado_mostra_link_no_login(self):
         resposta = self.client.get(reverse("accounts:login"))
         self.assertContains(resposta, reverse("accounts:cadastro"))
+
+
+class FontesNoticiasSoStaffTests(TestCase):
+    """Fontes de notícias são compartilhadas: só staff cadastra, ativa/desativa e exclui."""
+
+    def setUp(self):
+        self.fonte = FonteNoticia.objects.create(nome="Fonte Teste", url="https://exemplo.com/")
+        User.objects.create_user(username="leitor", password="SenhaForte123!")
+        User.objects.create_user(username="admin_noticias", password="SenhaForte123!", is_staff=True)
+
+    def test_usuario_comum_nao_altera_fontes(self):
+        self.client.login(username="leitor", password="SenhaForte123!")
+        self.assertNotContains(self.client.get(reverse("core:noticias")), "Adicionar fonte")
+        self.client.post(reverse("core:noticias"), {"nome": "Nova", "url": "https://nova.com/"})
+        self.client.post(reverse("core:noticia_fonte_alternar", args=[self.fonte.id]))
+        self.client.post(reverse("core:noticia_fonte_excluir", args=[self.fonte.id]))
+        self.assertFalse(FonteNoticia.objects.filter(nome="Nova").exists())
+        self.fonte.refresh_from_db()
+        self.assertTrue(self.fonte.ativa)
+
+    def test_staff_altera_fontes(self):
+        self.client.login(username="admin_noticias", password="SenhaForte123!")
+        self.assertContains(self.client.get(reverse("core:noticias")), "Adicionar fonte")
+        self.client.post(reverse("core:noticia_fonte_alternar", args=[self.fonte.id]))
+        self.fonte.refresh_from_db()
+        self.assertFalse(self.fonte.ativa)
+        self.client.post(reverse("core:noticia_fonte_excluir", args=[self.fonte.id]))
+        self.assertFalse(FonteNoticia.objects.filter(id=self.fonte.id).exists())
 
 
 class AcoesQueAlteramDadosExigemPostTests(TestCase):
@@ -2070,7 +2098,7 @@ class GraficoCotacoesTests(TestCase):
 
 class PaginasPrincipaisTests(TestCase):
     def setUp(self):
-        self.usuario = User.objects.create_user(username="investidor5", password="SenhaForte123!")
+        self.usuario = User.objects.create_user(username="investidor5", password="SenhaForte123!", is_staff=True)
         self.client.login(username="investidor5", password="SenhaForte123!")
 
     def test_paginas_respondem_200(self):
@@ -2122,7 +2150,7 @@ class PwaTests(TestCase):
 
 class WhatsappTests(TestCase):
     def setUp(self):
-        self.usuario = User.objects.create_user(username="investidor7", password="SenhaForte123!")
+        self.usuario = User.objects.create_user(username="investidor7", password="SenhaForte123!", is_staff=True)
         self.client.login(username="investidor7", password="SenhaForte123!")
 
     def test_icone_flutuante_aparece_no_painel_com_link_correto(self):
@@ -2136,6 +2164,14 @@ class WhatsappTests(TestCase):
         self.assertEqual(resposta.status_code, 200)
         self.assertContains(resposta, "Cliente Teste")
         self.assertContains(resposta, "Mensagem de teste")
+
+    def test_usuario_comum_nao_ve_mensagens(self):
+        MensagemWhatsapp.objects.create(remetente="Cliente Teste", texto="Mensagem de teste")
+        User.objects.create_user(username="investidor_comum_wpp", password="SenhaForte123!")
+        self.client.login(username="investidor_comum_wpp", password="SenhaForte123!")
+        resposta = self.client.get(reverse("core:mensagens_whatsapp"))
+        self.assertRedirects(resposta, reverse("core:dashboard"))
+        self.assertNotContains(self.client.get(reverse("core:menu")), reverse("core:mensagens_whatsapp"))
 
     def test_webhook_get_verifica_token_correto(self):
         with override_settings(WHATSAPP_VERIFY_TOKEN="token-secreto"):

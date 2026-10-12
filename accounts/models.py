@@ -1,6 +1,8 @@
 from django.conf import settings
 from django.db import models
 
+from .criptografia import CampoTextoCriptografado
+
 
 class PerfilUsuario(models.Model):
     """
@@ -26,7 +28,7 @@ class PerfilUsuario(models.Model):
     )
     # Cada usuário usa o seu próprio bot (criado no @BotFather) - sem os dois
     # campos preenchidos, nada é enviado pelo Telegram para este usuário.
-    telegram_bot_token = models.CharField(
+    telegram_bot_token = CampoTextoCriptografado(
         "Token do bot do Telegram", max_length=100, blank=True,
         help_text="Token do seu bot, criado no @BotFather (ex: 123456789:AAF...). Opcional.",
     )
@@ -34,18 +36,20 @@ class PerfilUsuario(models.Model):
         "Chat ID do Telegram", max_length=32, blank=True,
         help_text="ID do chat que recebe os avisos (ex: 2065125150). Opcional.",
     )
+    # Token, login/senha da corretora e assinatura eletrônica ficam cifrados no
+    # banco (ver accounts.criptografia).
     # Login da corretora e assinatura eletrônica que ela (ex: Clear) pede para
     # confirmar o envio de ordens no Home Broker - só guardados aqui para
     # consulta do próprio usuário; o BolsaTrader não acessa a corretora.
-    corretora_usuario = models.CharField(
+    corretora_usuario = CampoTextoCriptografado(
         "Usuário da corretora", max_length=100, blank=True,
         help_text="Login (CPF, e-mail ou código) usado para entrar no Home Broker. Opcional.",
     )
-    corretora_senha = models.CharField(
+    corretora_senha = CampoTextoCriptografado(
         "Senha da corretora", max_length=128, blank=True,
         help_text="Senha de acesso ao Home Broker. Opcional.",
     )
-    assinatura_eletronica = models.CharField(
+    assinatura_eletronica = CampoTextoCriptografado(
         "Assinatura eletrônica da corretora", max_length=32, blank=True,
         help_text="Assinatura que a corretora pede para confirmar ordens no Home Broker. Opcional.",
     )

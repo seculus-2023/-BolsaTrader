@@ -2,6 +2,7 @@ from django.conf import settings
 from django.contrib.auth import login
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.views import LoginView, LogoutView
+from django.core.cache import cache
 from django.shortcuts import render, redirect
 from django.urls import reverse_lazy
 from django.contrib import messages
@@ -13,9 +14,35 @@ from .forms import CadastroForm, PerfilUsuarioForm
 from .models import PerfilUsuario
 
 
+def _chave_tentativas_login(request) -> str:
+    usuario = request.POST.get("username", "").strip().lower()
+    ip = request.META.get("REMOTE_ADDR", "")
+    return f"login_falhas:{usuario}:{ip}"
+
+
 class LoginFuturistaView(LoginView):
+    """
+    Login com limite de tentativas: depois de LOGIN_MAX_TENTATIVAS senhas
+    erradas seguidas para o mesmo usuário a partir do mesmo IP, novas
+    tentativas são recusadas por LOGIN_BLOQUEIO_MINUTOS (contra força bruta).
+    """
+
     template_name = "accounts/login.html"
     redirect_authenticated_user = True
+
+    def post(self, request, *args, **kwargs):
+        if cache.get(_chave_tentativas_login(request), 0) >= settings.LOGIN_MAX_TENTATIVAS:
+            messages.error(
+                request,
+                f"Muitas tentativas de login sem sucesso. Aguarde {settings.LOGIN_BLOQUEIO_MINUTOS} "
+                "minuto(s) e tente de novo.",
+            )
+            return redirect("accounts:login")
+        return super().post(request, *args, **kwargs)
+
+    def form_valid(self, form):
+        cache.delete(_chave_tentativas_login(self.request))
+        return super().form_valid(form)
 
     def get_context_data(self, **kwargs):
         contexto = super().get_context_data(**kwargs)
@@ -23,6 +50,8 @@ class LoginFuturistaView(LoginView):
         return contexto
 
     def form_invalid(self, form):
+        chave = _chave_tentativas_login(self.request)
+        cache.set(chave, cache.get(chave, 0) + 1, settings.LOGIN_BLOQUEIO_MINUTOS * 60)
         messages.error(self.request, "Usuário ou senha inválidos.")
         return super().form_invalid(form)
 

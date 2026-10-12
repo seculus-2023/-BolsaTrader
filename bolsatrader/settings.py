@@ -205,6 +205,15 @@ LOGOUT_REDIRECT_URL = "accounts:login"
 # (padrão), só staff/superusuário cadastra usuários, pelo menu "Cadastrar Usuário".
 CADASTRO_PUBLICO = config("CADASTRO_PUBLICO", default=False, cast=bool)
 
+# Proteção contra força bruta no login: após LOGIN_MAX_TENTATIVAS senhas erradas
+# (mesmo usuário + mesmo IP), o login fica bloqueado por LOGIN_BLOQUEIO_MINUTOS.
+LOGIN_MAX_TENTATIVAS = config("LOGIN_MAX_TENTATIVAS", default=5, cast=int)
+LOGIN_BLOQUEIO_MINUTOS = config("LOGIN_BLOQUEIO_MINUTOS", default=15, cast=int)
+
+# Chave (Fernet) que cifra no banco a senha/assinatura da corretora e o token
+# do Telegram (ver accounts.criptografia). Vazia: derivada da SECRET_KEY.
+CHAVE_CRIPTOGRAFIA_CAMPOS = config("CHAVE_CRIPTOGRAFIA_CAMPOS", default="")
+
 
 # --------------------------------------------------------------------------
 # Integração com API de cotações (brapi.dev - cotações da B3)

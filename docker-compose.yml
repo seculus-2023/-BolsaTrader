@@ -34,6 +34,10 @@ services:
       # nome do serviço ("db"), não por localhost/127.0.0.1.
       DB_HOST: db
       DB_PORT: 5432
+      # O gunicorn sobe 3 workers - com o agendador embutido ligado, cada um
+      # buscaria as cotações (3x o consumo da brapi e alertas duplicados). A
+      # atualização automática fica no serviço "cotacoes" abaixo, um só processo.
+      AGENDADOR_COTACOES_EMBUTIDO: "False"
     depends_on:
       db:
         condition: service_healthy
@@ -41,6 +45,37 @@ services:
       - "8000:8000"
     volumes:
       - staticfiles_data:/app/staticfiles
+
+  # Atualização automática de cotações/alertas/robô a cada
+  # COTACOES_INTERVALO_MINUTOS - processo único, separado dos workers web.
+  cotacoes:
+    build: .
+    restart: unless-stopped
+    command: ["python", "manage.py", "atualizar_cotacoes", "--loop"]
+    env_file:
+      - .env
+    environment:
+      DB_HOST: db
+      DB_PORT: 5432
+      AGENDADOR_COTACOES_EMBUTIDO: "False"
+    depends_on:
+      web:
+        condition: service_started
+
+  # Busca as manchetes das fontes de notícias a cada NOTICIAS_INTERVALO_MINUTOS.
+  noticias:
+    build: .
+    restart: unless-stopped
+    command: ["python", "manage.py", "atualizar_noticias", "--loop"]
+    env_file:
+      - .env
+    environment:
+      DB_HOST: db
+      DB_PORT: 5432
+      AGENDADOR_COTACOES_EMBUTIDO: "False"
+    depends_on:
+      web:
+        condition: service_started
 
 volumes:
   postgres_data:

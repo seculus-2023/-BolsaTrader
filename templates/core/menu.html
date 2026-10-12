@@ -45,11 +45,13 @@
         <h3>Avisos e Lembretes</h3>
         <p>Notificações de metas de lucro/perda atingidas e tendências.</p>
     </a>
+    {% if user.is_staff %}
     <a class="menu-card" href="{% url 'core:mensagens_whatsapp' %}">
         <div class="icone">💬</div>
         <h3>Mensagens do WhatsApp</h3>
         <p>Mensagens recebidas pelo número de contato do BolsaTrader no WhatsApp.</p>
     </a>
+    {% endif %}
     <a class="menu-card" href="{% url 'core:detalhes_cotacoes' %}">
         <div class="icone">🧮</div>
         <h3>Detalhes de Cotações</h3>

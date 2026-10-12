@@ -20,6 +20,7 @@
     {% if ativo_destaque %}<br>Destacando agora: <strong style="color: var(--neon-yellow);">{{ ativo_destaque }}</strong> &mdash; {{ noticias_ativo_ids|length }} notícia(s) encontrada(s).{% endif %}
 </p>
 
+{% if user.is_staff %}
 <div class="card-glass" style="margin: 1.5rem 0;">
     <h3 style="margin-top: 0;">Fontes de notícias</h3>
     <p style="color: var(--text-dim); font-size: .9rem;">
@@ -85,6 +86,7 @@
     <p style="color: var(--text-dim);">Nenhuma fonte cadastrada ainda.</p>
     {% endif %}
 </div>
+{% endif %}
 
 {% if itens %}
 <div class="card-glass">

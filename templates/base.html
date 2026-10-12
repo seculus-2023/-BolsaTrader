@@ -144,7 +144,7 @@
         "previsoes_analistas": "{% url 'core:previsoes_analistas' %}",
         "historico_graficos": "{% url 'core:historico_graficos' %}",
         "historico_atualizacoes": "{% url 'core:historico_atualizacoes' %}",
-        "mensagens_whatsapp": "{% url 'core:mensagens_whatsapp' %}",
+        {% if user.is_staff %}"mensagens_whatsapp": "{% url 'core:mensagens_whatsapp' %}",{% endif %}
         "detalhes_cotacoes": "{% url 'core:detalhes_cotacoes' %}",
         "registros_cotacao": "{% url 'core:registros_cotacao' %}",
         "atualizar_cotacoes": "{% url 'core:atualizar_cotacoes' %}",

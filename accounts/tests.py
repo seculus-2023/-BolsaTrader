@@ -123,3 +123,72 @@ class MinhaContaTests(TestCase):
         self.assertEqual(perfil_outro.numero_whatsapp, "5565911112222")  # não foi alterado
         perfil_proprio = PerfilUsuario.objects.get(usuario=self.usuario)
         self.assertEqual(perfil_proprio.numero_whatsapp, "5565999998888")
+
+
+class CamposCriptografadosTests(TestCase):
+    """Senha/assinatura da corretora e token do Telegram ficam cifrados no banco (accounts.criptografia)."""
+
+    def test_valor_gravado_cifrado_e_lido_decifrado(self):
+        from django.db import connection
+
+        usuario = User.objects.create_user(username="investidor_cifra", password="SenhaForte123!")
+        PerfilUsuario.objects.create(
+            usuario=usuario, corretora_senha="Senha da Corretora1", assinatura_eletronica="12345678",
+            telegram_bot_token="123456789:AAF-abc_DEF", corretora_usuario="12345678900",
+        )
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT corretora_senha, assinatura_eletronica, telegram_bot_token, corretora_usuario "
+                "FROM accounts_perfilusuario WHERE usuario_id = %s", [usuario.id],
+            )
+            brutos = cursor.fetchone()
+        for bruto, original in zip(brutos, ["Senha da Corretora1", "12345678", "123456789:AAF-abc_DEF", "12345678900"]):
+            self.assertTrue(bruto.startswith("enc1:"))
+            self.assertNotIn(original, bruto)
+
+        perfil = PerfilUsuario.objects.get(usuario=usuario)
+        self.assertEqual(perfil.corretora_senha, "Senha da Corretora1")
+        self.assertEqual(perfil.telegram_bot_token, "123456789:AAF-abc_DEF")
+
+    def test_texto_puro_antigo_continua_legivel(self):
+        from .criptografia import descriptografar
+        self.assertEqual(descriptografar("valor antigo"), "valor antigo")
+        self.assertEqual(descriptografar(""), "")
+
+    def test_chave_trocada_devolve_vazio(self):
+        from django.test import override_settings as sobrescrever
+        from .criptografia import criptografar, descriptografar
+        cifrado = criptografar("segredo")
+        with sobrescrever(CHAVE_CRIPTOGRAFIA_CAMPOS="", SECRET_KEY="outra-chave-qualquer"):
+            self.assertEqual(descriptografar(cifrado), "")
+
+
+class LimiteTentativasLoginTests(TestCase):
+    """Login bloqueado após LOGIN_MAX_TENTATIVAS senhas erradas (accounts.views.LoginFuturistaView)."""
+
+    def setUp(self):
+        from django.core.cache import cache
+        cache.clear()
+        User.objects.create_user(username="alvo", password="SenhaForte123!")
+
+    @override_settings(LOGIN_MAX_TENTATIVAS=3, LOGIN_BLOQUEIO_MINUTOS=15)
+    def test_bloqueia_apos_tentativas_erradas_mesmo_com_senha_certa(self):
+        for _ in range(3):
+            self.client.post(reverse("accounts:login"), {"username": "alvo", "password": "errada"})
+        resposta = self.client.post(
+            reverse("accounts:login"), {"username": "alvo", "password": "SenhaForte123!"}, follow=True
+        )
+        self.assertContains(resposta, "Muitas tentativas")
+        self.assertFalse(resposta.wsgi_request.user.is_authenticated)
+
+    @override_settings(LOGIN_MAX_TENTATIVAS=3, LOGIN_BLOQUEIO_MINUTOS=15)
+    def test_login_certo_zera_o_contador(self):
+        for _ in range(2):
+            self.client.post(reverse("accounts:login"), {"username": "alvo", "password": "errada"})
+        self.client.post(reverse("accounts:login"), {"username": "alvo", "password": "SenhaForte123!"})
+        self.client.logout()
+        for _ in range(2):
+            self.client.post(reverse("accounts:login"), {"username": "alvo", "password": "errada"})
+        resposta = self.client.post(reverse("accounts:login"), {"username": "alvo", "password": "SenhaForte123!"})
+        self.assertEqual(resposta.status_code, 302)
+        self.assertNotEqual(resposta.url, reverse("accounts:login"))

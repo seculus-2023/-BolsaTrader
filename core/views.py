@@ -1348,9 +1348,23 @@ def service_worker_view(request):
     return resposta
 
 
+def _recusa_se_nao_for_staff(request):
+    """
+    Dados compartilhados entre todos os usuários (fontes de notícias, mensagens
+    recebidas no WhatsApp do BolsaTrader) só são vistos/alterados por
+    staff/superusuário - devolve o redirect de recusa, ou None se pode seguir.
+    """
+    if request.user.is_staff:
+        return None
+    messages.error(request, "Só administradores podem acessar essa função.")
+    return redirect("core:dashboard")
+
+
 @login_required
 def mensagens_whatsapp(request):
-    """Mural com as mensagens recebidas via WhatsApp (webhook) ou lançadas pelo administrador."""
+    """Mural com as mensagens recebidas via WhatsApp (webhook) ou lançadas pelo administrador - só staff."""
+    if recusa := _recusa_se_nao_for_staff(request):
+        return recusa
     mensagens = MensagemWhatsapp.objects.all()[:50]
     return render(request, "core/mensagens_whatsapp.html", {"mensagens": mensagens})
 
@@ -1364,6 +1378,8 @@ def noticias(request):
     totalmente configurável, não fixa no código.
     """
     if request.method == "POST":
+        if recusa := _recusa_se_nao_for_staff(request):
+            return recusa
         form = FonteNoticiaForm(request.POST)
         if form.is_valid():
             fonte = form.save()
@@ -1438,7 +1454,9 @@ def noticias_atualizar(request):
 @login_required
 @require_POST
 def noticia_fonte_alternar(request, fonte_id):
-    """Ativa/desativa uma fonte de notícias (sem excluí-la nem seu histórico)."""
+    """Ativa/desativa uma fonte de notícias (sem excluí-la nem seu histórico) - só staff."""
+    if recusa := _recusa_se_nao_for_staff(request):
+        return recusa
     fonte = get_object_or_404(FonteNoticia, id=fonte_id)
     fonte.ativa = not fonte.ativa
     fonte.save(update_fields=["ativa"])
@@ -1448,7 +1466,9 @@ def noticia_fonte_alternar(request, fonte_id):
 @login_required
 @require_POST
 def noticia_fonte_excluir(request, fonte_id):
-    """Exclui uma fonte de notícias e as manchetes já capturadas dela."""
+    """Exclui uma fonte de notícias e as manchetes já capturadas dela - só staff."""
+    if recusa := _recusa_se_nao_for_staff(request):
+        return recusa
     fonte = get_object_or_404(FonteNoticia, id=fonte_id)
     nome = fonte.nome
     fonte.delete()

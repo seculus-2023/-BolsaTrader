@@ -1,7 +1,9 @@
 #!/bin/sh
 # Ponto de entrada do container da aplicação (Dockerfile).
 # Espera o banco de dados responder, aplica as migrações, coleta os
-# arquivos estáticos e sobe o servidor de produção (Gunicorn).
+# arquivos estáticos e sobe o servidor de produção (Gunicorn). Com um
+# comando como argumento (ex: serviços "cotacoes"/"noticias" do
+# docker-compose.yml), só espera o banco e executa esse comando.
 set -e
 
 echo "Aguardando o banco de dados (${DB_HOST:-db}:${DB_PORT:-5432}) ficar disponível..."
@@ -22,6 +24,10 @@ for _ in range(60):
 else:
     raise SystemExit(f"Banco de dados {host}:{port} não respondeu a tempo.")
 PYEOF
+
+if [ "$#" -gt 0 ]; then
+    exec "$@"
+fi
 
 echo "Aplicando migrações..."
 python manage.py migrate --noinput

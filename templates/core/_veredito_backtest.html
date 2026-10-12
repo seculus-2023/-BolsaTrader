@@ -1,0 +1,4 @@
+{% if veredito == "SUPERA" %}<span class="badge-tendencia badge-alta">✅ Supera a referência</span>
+{% elif veredito == "ABAIXO" %}<span class="badge-tendencia badge-baixa">❌ Pior que comprar em qualquer dia</span>
+{% elif veredito == "EMPATA" %}<span class="badge-tendencia badge-neutro">➖ Igual à referência (sem vantagem)</span>
+{% else %}<span class="badge-tendencia badge-neutro">⏳ Poucos sinais para concluir</span>{% endif %}

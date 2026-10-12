@@ -659,22 +659,24 @@ def _ciclo_agendador_embutido() -> None:
 # atualizar_benchmarks, em core.services).
 # --------------------------------------------------------------------------
 _FAIXAS_RANGE_BRAPI = [
-    (30, "1mo"), (90, "3mo"),
+    (30, "1mo"), (90, "3mo"), (180, "6mo"), (365, "1y"), (730, "2y"), (1825, "5y"),
 ]
 
 
 def _range_brapi(dias: int) -> str:
     """
     Converte uma quantidade de dias no parâmetro `range` aceito pela
-    brapi.dev. Limitado a "3mo" - ranges maiores ("6mo", "1y", ...) exigem
-    um plano pago da brapi.dev e retornam 400 Bad Request no plano
-    gratuito, então qualquer pedido de mais de 90 dias é limitado a essa
-    janela em vez de estourar a requisição.
+    brapi.dev - o menor range que cobre os dias pedidos, limitado ao
+    BRAPI_HISTORICO_MAXIMO do .env: o plano gratuito só aceita até "3mo"
+    (mais que isso dá 400 Bad Request), os pagos aceitam "1y", "2y"... Um
+    pedido acima do máximo é cortado no máximo em vez de estourar a requisição.
     """
+    maximo = settings.BRAPI_HISTORICO_MAXIMO
+    limite_maximo = next((limite for limite, faixa in _FAIXAS_RANGE_BRAPI if faixa == maximo), 90)
     for limite, range_str in _FAIXAS_RANGE_BRAPI:
-        if dias <= limite:
+        if dias <= limite or limite >= limite_maximo:
             return range_str
-    return "3mo"
+    return maximo
 
 
 def _converter_data_historico(valor) -> date | None:
@@ -3979,9 +3981,37 @@ def gerar_pdf_scanner_e_analise_ia(
 # `dias_retorno` pregões à frente. É só uma estatística sobre o passado, não
 # garante desempenho futuro - a mesma ressalva do robô ao vivo.
 # --------------------------------------------------------------------------
+# Abaixo disso, a taxa de acerto é mais sorte que estatística.
+BACKTEST_MINIMO_SINAIS_CONFIAVEL = 20
+# Diferença mínima (pontos percentuais) de taxa de acerto sobre a referência
+# para dizer que o robô "supera" (ou "fica abaixo de") comprar em qualquer dia.
+BACKTEST_MARGEM_VANTAGEM_PP = 5
+# Retorno médio por operação (pontos percentuais) abaixo da referência a
+# partir do qual o robô "fica abaixo" mesmo acertando mais vezes - acertar
+# muito e ganhar pouco, com perdas grandes nos erros, não compensa.
+BACKTEST_MARGEM_RETORNO_PP = 0.5
+
+
+def _veredito_backtest(sinais_compra: int, vantagem_pp, retorno_compra, retorno_base) -> str:
+    """
+    Compara os sinais de COMPRA do robô com a referência (comprar em qualquer
+    pregão do mesmo período): POUCOS_DADOS, SUPERA (acerta bem mais e ganha
+    pelo menos o mesmo), ABAIXO (acerta bem menos, ou ganha bem menos por
+    operação) ou EMPATA (diferença pequena demais para separar do acaso).
+    """
+    if sinais_compra < BACKTEST_MINIMO_SINAIS_CONFIAVEL or vantagem_pp is None:
+        return "POUCOS_DADOS"
+    diferenca_retorno = retorno_compra - retorno_base
+    if vantagem_pp <= -BACKTEST_MARGEM_VANTAGEM_PP or diferenca_retorno <= -BACKTEST_MARGEM_RETORNO_PP:
+        return "ABAIXO"
+    if vantagem_pp >= BACKTEST_MARGEM_VANTAGEM_PP and diferenca_retorno >= 0:
+        return "SUPERA"
+    return "EMPATA"
+
+
 def backtest_sinais_robo(
     ativo: Ativo, dias_retorno: int = 5, janela_curta: int = 3, janela_longa: int = 10,
-    minimo_precos: int = 15,
+    minimo_precos: int = 15, custo_pct: float | None = None,
 ) -> dict:
     """
     Simula, dia a dia, os sinais que o robô consultor teria dado para
@@ -3990,6 +4020,12 @@ def backtest_sinais_robo(
     pregões depois está mais alto; um sinal de VENDA "acerta" quando está mais
     baixo. Sinais NEUTRO não entram na contagem (não haveria ação a avaliar).
 
+    Os retornos já descontam `custo_pct` (compra + venda: corretagem e
+    emolumentos; padrão BACKTEST_CUSTO_PCT do .env). E a taxa de acerto da
+    COMPRA é comparada com a REFERÊNCIA: comprar em qualquer pregão do mesmo
+    período, sem sinal nenhum. Em mercado de alta quase toda compra "acerta" -
+    o robô só tem valor se acertar mais que isso (ver _veredito_backtest).
+
     `minimo_precos` é o menor histórico a partir do qual já vale a pena
     simular um sinal (por padrão, o mínimo do RSI - com menos que isso o
     sinal geral tende a ficar sempre neutro por falta de dados); o MACD
@@ -3997,37 +4033,72 @@ def backtest_sinais_robo(
     tratado automaticamente por analisar_indicadores_tecnicos_precos (fica
     "aguardando histórico" e simplesmente não vota até lá).
     """
+    if custo_pct is None:
+        custo_pct = settings.BACKTEST_CUSTO_PCT
     cotacoes = list(ativo.cotacoes.order_by("data"))
     precos = [float(c.preco_fechamento) for c in cotacoes]
     datas = [c.data for c in cotacoes]
     total_pregoes = len(precos)
 
     sinais = []
+    retornos_referencia = []
     for i in range(minimo_precos - 1, total_pregoes):
         if i + dias_retorno >= total_pregoes:
             break  # não há pregões suficientes à frente pra conferir o resultado deste sinal ainda
+
+        preco_no_sinal = precos[i]
+        if not preco_no_sinal:
+            continue
+        retorno_bruto = (precos[i + dias_retorno] - preco_no_sinal) / preco_no_sinal * 100
+        # referência: comprar neste pregão sem olhar sinal nenhum
+        retornos_referencia.append(retorno_bruto - custo_pct)
 
         indicadores = analisar_indicadores_tecnicos_precos(precos[: i + 1], janela_curta, janela_longa)
         sinal = indicadores["sinal_geral"]
         if sinal not in ("COMPRA", "VENDA"):
             continue
 
-        preco_no_sinal = precos[i]
-        if not preco_no_sinal:
-            continue
-        retorno_pct = (precos[i + dias_retorno] - preco_no_sinal) / preco_no_sinal * 100
+        # o custo pesa contra nos dois sentidos: a compra precisa subir mais
+        # que o custo, a venda (zerar/evitar posição) precisa cair mais que ele
+        retorno_pct = retorno_bruto - custo_pct if sinal == "COMPRA" else retorno_bruto + custo_pct
         acerto = (sinal == "COMPRA" and retorno_pct > 0) or (sinal == "VENDA" and retorno_pct < 0)
         sinais.append({
             "data": datas[i], "sinal": sinal, "preco": round(preco_no_sinal, 2),
             "retorno_pct": round(retorno_pct, 2), "acerto": acerto,
         })
 
+    referencia_taxa_acerto = (
+        round(sum(1 for r in retornos_referencia if r > 0) / len(retornos_referencia) * 100, 1)
+        if retornos_referencia else None
+    )
+    referencia_retorno_medio = (
+        round(sum(retornos_referencia) / len(retornos_referencia), 2) if retornos_referencia else None
+    )
+    comum = {
+        "ativo": ativo,
+        "dias_retorno": dias_retorno,
+        "custo_pct": custo_pct,
+        "total_pregoes": total_pregoes,
+        "data_inicial": datas[0] if datas else None,
+        "data_final": datas[-1] if datas else None,
+        "referencia_taxa_acerto_pct": referencia_taxa_acerto,
+        "referencia_retorno_medio_pct": referencia_retorno_medio,
+        "referencia_total": len(retornos_referencia),
+        # somas usadas pelo resumo geral de todos os ativos (resumir_backtests)
+        "acertos_compra": sum(1 for s in sinais if s["sinal"] == "COMPRA" and s["acerto"]),
+        "soma_retorno_compra": sum(s["retorno_pct"] for s in sinais if s["sinal"] == "COMPRA"),
+        "acertos_referencia": sum(1 for r in retornos_referencia if r > 0),
+        "soma_retorno_referencia": sum(retornos_referencia),
+    }
+
     if not sinais:
         return {
-            "ativo": ativo, "dias_retorno": dias_retorno, "total_sinais": 0,
+            **comum,
+            "total_sinais": 0,
             "sinais_compra": 0, "sinais_venda": 0, "taxa_acerto_pct": None,
             "taxa_acerto_compra_pct": None, "taxa_acerto_venda_pct": None,
             "retorno_medio_compra_pct": None, "retorno_medio_venda_pct": None,
+            "vantagem_compra_pp": None, "veredito": "POUCOS_DADOS",
             "sinais": [], "dados_insuficientes": total_pregoes < minimo_precos + dias_retorno,
         }
 
@@ -4040,21 +4111,195 @@ def backtest_sinais_robo(
 
     sinais_compra = [s for s in sinais if s["sinal"] == "COMPRA"]
     sinais_venda = [s for s in sinais if s["sinal"] == "VENDA"]
+    taxa_compra = _taxa_acerto(sinais_compra)
+    retorno_compra = _media_pct(sinais_compra)
+    vantagem = (
+        round(taxa_compra - referencia_taxa_acerto, 1)
+        if taxa_compra is not None and referencia_taxa_acerto is not None else None
+    )
 
     return {
-        "ativo": ativo,
-        "dias_retorno": dias_retorno,
+        **comum,
         "total_sinais": len(sinais),
         "sinais_compra": len(sinais_compra),
         "sinais_venda": len(sinais_venda),
         "taxa_acerto_pct": _taxa_acerto(sinais),
-        "taxa_acerto_compra_pct": _taxa_acerto(sinais_compra),
+        "taxa_acerto_compra_pct": taxa_compra,
         "taxa_acerto_venda_pct": _taxa_acerto(sinais_venda),
-        "retorno_medio_compra_pct": _media_pct(sinais_compra),
+        "retorno_medio_compra_pct": retorno_compra,
         "retorno_medio_venda_pct": _media_pct(sinais_venda),
+        "vantagem_compra_pp": vantagem,
+        "veredito": _veredito_backtest(len(sinais_compra), vantagem, retorno_compra, referencia_retorno_medio),
         # mais recentes primeiro, limitado pra não pesar a página com anos de sinais
         "sinais": list(reversed(sinais))[:30],
         "dados_insuficientes": False,
+    }
+
+
+def resumir_backtests(resultados: list[dict]) -> dict | None:
+    """
+    Junta os backtests de todos os ativos num resultado só: todos os sinais
+    de COMPRA do robô contra todos os pregões de referência. Responde "no
+    geral, seguir o robô é melhor que comprar em qualquer dia?" com bem mais
+    amostras que cada ativo sozinho. None se nenhum pregão foi avaliado.
+    """
+    total_referencia = sum(r["referencia_total"] for r in resultados)
+    if not total_referencia:
+        return None
+    total_compra = sum(r["sinais_compra"] for r in resultados)
+    taxa_compra = (
+        round(sum(r["acertos_compra"] for r in resultados) / total_compra * 100, 1) if total_compra else None
+    )
+    retorno_compra = (
+        round(sum(r["soma_retorno_compra"] for r in resultados) / total_compra, 2) if total_compra else None
+    )
+    taxa_referencia = round(sum(r["acertos_referencia"] for r in resultados) / total_referencia * 100, 1)
+    retorno_referencia = round(sum(r["soma_retorno_referencia"] for r in resultados) / total_referencia, 2)
+    vantagem = round(taxa_compra - taxa_referencia, 1) if taxa_compra is not None else None
+    return {
+        "ativos": sum(1 for r in resultados if r["referencia_total"]),
+        "sinais_compra": total_compra,
+        "taxa_acerto_compra_pct": taxa_compra,
+        "retorno_medio_compra_pct": retorno_compra,
+        "referencia_total": total_referencia,
+        "referencia_taxa_acerto_pct": taxa_referencia,
+        "referencia_retorno_medio_pct": retorno_referencia,
+        "vantagem_compra_pp": vantagem,
+        "veredito": _veredito_backtest(total_compra, vantagem, retorno_compra, retorno_referencia),
+    }
+
+
+# --------------------------------------------------------------------------
+# Calculadora de risco da compra (tela Nova operação)
+#
+# Gestão de risco pesa mais no resultado que acertar a direção: com perdas
+# pequenas e controladas, dá para ganhar dinheiro acertando menos da metade
+# das vezes. A calculadora responde, ANTES de comprar: onde fica o stop,
+# quanto posso perder nele, quantas ações comprar para não arriscar mais que
+# RISCO_POR_OPERACAO_PCT do patrimônio, e se a compra concentra demais a
+# carteira num setor. Usa só dados já salvos - não consome a API.
+# --------------------------------------------------------------------------
+# múltiplo do ATR para o stop sugerido: 2x a oscilação média diária fica
+# fora do "ruído" normal do papel
+STOP_MULTIPLO_ATR = 2
+# sem ATR (histórico curto ou sem máxima/mínima), stop a 5% da entrada
+STOP_PCT_SEM_ATR = 5
+# alvo sugerido: ganho de 2x o risco (relação risco-retorno 1:2)
+ALVO_MULTIPLO_RISCO = 2
+
+
+def calcular_risco_compra(
+    usuario, ticker: str, preco_entrada: float | None = None, stop: float | None = None,
+    risco_pct: float | None = None,
+) -> dict:
+    """
+    Calculadora de risco de uma compra de `ticker` para `usuario`. Sem
+    `preco_entrada`, usa o último fechamento salvo; sem `stop`, sugere
+    entrada - 2x ATR (ou -5% sem ATR), nunca abaixo do suporte se o suporte
+    estiver mais perto. Devolve {"erro": ...} quando não dá para calcular.
+    """
+    ticker = (ticker or "").strip().upper()
+    risco_pct = float(risco_pct if risco_pct is not None else settings.RISCO_POR_OPERACAO_PCT)
+    ativo = Ativo.objects.filter(ticker=ticker).first()
+
+    scanner = escanear_ativo(ativo) if ativo else None
+    if preco_entrada is None:
+        ultima = ativo.ultima_cotacao() if ativo else None
+        preco_entrada = float(ultima.preco_fechamento) if ultima else None
+    if not preco_entrada or preco_entrada <= 0:
+        return {"erro": f"Sem preço para {ticker or 'o ativo'} - informe o preço unitário."}
+
+    atr = scanner["atr"] if scanner else None
+    suporte = (scanner["suporte_resistencia"] or {}).get("suporte") if scanner else None
+
+    stop_sugerido = preco_entrada - STOP_MULTIPLO_ATR * atr if atr else preco_entrada * (1 - STOP_PCT_SEM_ATR / 100)
+    base_stop = "ATR" if atr else "PERCENTUAL"
+    if suporte and stop_sugerido < suporte < preco_entrada:
+        # um pouco abaixo do suporte: rompido o suporte, a tese da compra caiu
+        stop_sugerido = suporte * 0.99
+        base_stop = "SUPORTE"
+    stop_sugerido = round(max(stop_sugerido, 0.01), 2)
+
+    stop_usado = stop if stop is not None else stop_sugerido
+    if stop_usado >= preco_entrada:
+        return {"erro": "O stop precisa ficar abaixo do preço de entrada."}
+    risco_por_acao = preco_entrada - stop_usado
+
+    # patrimônio = dinheiro em conta + valor de mercado do que já está comprado
+    posicoes = [p for p in calcular_posicoes(usuario) if p.quantidade > 0]
+    saldo = float(saldo_conta_corrente(obter_ou_criar_conta_corrente(usuario)))
+    valor_posicoes = sum(float(p.valor_atual or p.valor_investido) for p in posicoes)
+    patrimonio = max(saldo, 0) + valor_posicoes
+
+    risco_maximo = patrimonio * risco_pct / 100
+    qtd_por_risco = int(risco_maximo // risco_por_acao) if risco_maximo > 0 else 0
+    # sem saldo registrado na conta corrente, a quantidade sai só pelo risco
+    # (muita gente não lança o caixa no sistema) - com saldo, também não passa dele
+    qtd_por_saldo = int(saldo // preco_entrada) if saldo > 0 else None
+    quantidade = qtd_por_risco if qtd_por_saldo is None else min(qtd_por_risco, qtd_por_saldo)
+    limitada_pelo_saldo = qtd_por_saldo is not None and qtd_por_saldo < qtd_por_risco
+
+    setor = ativo.setor if ativo else ""
+    exposicao_setor_pct = None
+    exposicao_setor_apos_pct = None
+    if setor and patrimonio > 0:
+        valor_setor = sum(float(p.valor_atual or p.valor_investido) for p in posicoes if p.ativo.setor == setor)
+        exposicao_setor_pct = round(valor_setor / patrimonio * 100, 1)
+        exposicao_setor_apos_pct = round((valor_setor + quantidade * preco_entrada) / patrimonio * 100, 1)
+
+    avisos = []
+    if patrimonio <= 0:
+        avisos.append("Sem patrimônio registrado: informe o saldo inicial em Conta Corrente para calcular a quantidade.")
+    elif qtd_por_saldo is None:
+        avisos.append(
+            "Conta corrente sem saldo registrado: a quantidade considera só o risco - confira se você tem "
+            "dinheiro disponível (e lance o saldo em Conta Corrente para um cálculo mais preciso)."
+        )
+    elif qtd_por_saldo == 0:
+        avisos.append("Saldo da conta corrente insuficiente para comprar 1 ação a esse preço.")
+    if patrimonio > 0 and qtd_por_risco == 0:
+        avisos.append(
+            f"Nem 1 ação cabe no risco de {risco_pct:g}% do patrimônio com esse stop - "
+            "o stop está longe demais para o tamanho da carteira."
+        )
+    if exposicao_setor_apos_pct is not None and exposicao_setor_apos_pct > settings.LIMITE_SETOR_PCT:
+        avisos.append(
+            f"Concentração: com esta compra, {exposicao_setor_apos_pct}% do patrimônio fica no setor "
+            f"{setor} (limite recomendado: {settings.LIMITE_SETOR_PCT:g}%)."
+        )
+    if scanner and scanner["veredito"] == "PREDOMINIO_BAIXA":
+        avisos.append("O Scanner Técnico aponta predomínio de BAIXA neste ativo agora.")
+
+    backtest = backtest_sinais_robo(ativo) if ativo else None
+    alvo = preco_entrada + ALVO_MULTIPLO_RISCO * risco_por_acao
+
+    return {
+        "erro": None,
+        "ticker": ticker,
+        "preco_entrada": round(preco_entrada, 2),
+        "atr": round(atr, 2) if atr else None,
+        "suporte": round(suporte, 2) if suporte else None,
+        "stop_sugerido": stop_sugerido,
+        "base_stop": base_stop,
+        "stop": round(stop_usado, 2),
+        "queda_ate_stop_pct": round(risco_por_acao / preco_entrada * 100, 2),
+        "alvo": round(alvo, 2),
+        "risco_pct": risco_pct,
+        "patrimonio": round(patrimonio, 2),
+        "saldo": round(saldo, 2),
+        "risco_maximo": round(risco_maximo, 2),
+        "quantidade": quantidade,
+        "limitada_pelo_saldo": limitada_pelo_saldo,
+        "valor_compra": round(quantidade * preco_entrada, 2),
+        "perda_no_stop": round(quantidade * risco_por_acao, 2),
+        "ganho_no_alvo": round(quantidade * (alvo - preco_entrada), 2),
+        "setor": setor,
+        "exposicao_setor_pct": exposicao_setor_pct,
+        "exposicao_setor_apos_pct": exposicao_setor_apos_pct,
+        "veredito_scanner": scanner["veredito_label"] if scanner else None,
+        "backtest_veredito": backtest["veredito"] if backtest else None,
+        "backtest_sinais_compra": backtest["sinais_compra"] if backtest else 0,
+        "avisos": avisos,
     }
 
 

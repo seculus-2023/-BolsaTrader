@@ -2625,6 +2625,157 @@ class BacktestRoboTests(TestCase):
         self.assertEqual(resposta.status_code, 302)
 
 
+class BacktestReferenciaTests(TestCase):
+    """Backtest honesto: referência (comprar em qualquer dia), custo e veredito (core.services)."""
+
+    def setUp(self):
+        self.ativo = Ativo.objects.create(ticker="ITSA4")
+
+    def _serie(self, passos, inicio=Decimal("10.00"), n=60):
+        hoje = date.today()
+        preco = inicio
+        for i in range(n):
+            Cotacao.objects.create(ativo=self.ativo, data=hoje - timedelta(days=n - i), preco_fechamento=preco)
+            preco += passos[i % len(passos)]
+
+    @override_settings(BACKTEST_CUSTO_PCT=0)
+    def test_referencia_conta_todos_os_pregoes_avaliaveis(self):
+        self._serie([Decimal("0.10")])  # sobe todo dia
+        r = backtest_sinais_robo(self.ativo, dias_retorno=5)
+        self.assertEqual(r["referencia_total"], 60 - 15 + 1 - 5)  # do 15º pregão até faltar 5 à frente
+        self.assertEqual(r["referencia_taxa_acerto_pct"], 100.0)
+        self.assertEqual(r["total_pregoes"], 60)
+
+    def test_custo_alto_transforma_alta_pequena_em_erro(self):
+        self._serie([Decimal("0.01")])  # +0,1%/dia: em 5 pregões, menos que 1% de custo
+        r = backtest_sinais_robo(self.ativo, dias_retorno=5, custo_pct=1.0)
+        self.assertEqual(r["referencia_taxa_acerto_pct"], 0.0)
+        self.assertLess(r["referencia_retorno_medio_pct"], 0)
+
+    def test_veredito(self):
+        from core.services import _veredito_backtest
+        self.assertEqual(_veredito_backtest(5, 30.0, 5.0, 1.0), "POUCOS_DADOS")
+        self.assertEqual(_veredito_backtest(25, 10.0, 2.0, 1.0), "SUPERA")
+        self.assertEqual(_veredito_backtest(25, -10.0, 0.5, 1.0), "ABAIXO")
+        self.assertEqual(_veredito_backtest(25, 10.0, 0.5, 1.0), "ABAIXO")  # acerta mais, mas ganha bem menos
+        self.assertEqual(_veredito_backtest(25, 7.0, 4.51, 4.53), "EMPATA")  # retorno praticamente igual
+        self.assertEqual(_veredito_backtest(25, 2.0, 1.2, 1.0), "EMPATA")
+
+    def test_resumo_soma_os_ativos(self):
+        from core.services import resumir_backtests
+        resultados = [
+            {"referencia_total": 10, "acertos_referencia": 5, "soma_retorno_referencia": 10.0,
+             "sinais_compra": 4, "acertos_compra": 3, "soma_retorno_compra": 8.0},
+            {"referencia_total": 30, "acertos_referencia": 25, "soma_retorno_referencia": 30.0,
+             "sinais_compra": 6, "acertos_compra": 2, "soma_retorno_compra": -2.0},
+        ]
+        resumo = resumir_backtests(resultados)
+        self.assertEqual(resumo["sinais_compra"], 10)
+        self.assertEqual(resumo["taxa_acerto_compra_pct"], 50.0)
+        self.assertEqual(resumo["referencia_taxa_acerto_pct"], 75.0)
+        self.assertEqual(resumo["vantagem_compra_pp"], -25.0)
+        self.assertEqual(resumo["veredito"], "POUCOS_DADOS")
+        self.assertIsNone(resumir_backtests([]))
+
+    def test_tela_mostra_resultado_geral_e_referencia(self):
+        self._serie([Decimal("0.35"), Decimal("0.30"), Decimal("-0.10"), Decimal("0.25")])
+        usuario = User.objects.create_user(username="investidor_ref", password="SenhaForte123!")
+        Operacao.objects.create(
+            usuario=usuario, ativo=self.ativo, tipo=Operacao.COMPRA,
+            quantidade=10, preco_unitario=Decimal("10.00"), data_operacao=date.today(),
+        )
+        self.client.login(username="investidor_ref", password="SenhaForte123!")
+        resposta = self.client.get(reverse("core:backtest_robo"))
+        self.assertContains(resposta, "Resultado geral")
+        self.assertContains(resposta, "Acerto da referência")
+        self.assertIsNotNone(resposta.context["resumo"])
+
+
+class RangeBrapiTests(TestCase):
+    """_range_brapi respeita o maior histórico que o plano aceita (BRAPI_HISTORICO_MAXIMO)."""
+
+    def test_plano_gratuito_corta_em_3_meses(self):
+        from core.services import _range_brapi
+        with override_settings(BRAPI_HISTORICO_MAXIMO="3mo"):
+            self.assertEqual(_range_brapi(20), "1mo")
+            self.assertEqual(_range_brapi(90), "3mo")
+            self.assertEqual(_range_brapi(730), "3mo")
+
+    def test_plano_pago_busca_ate_o_maximo(self):
+        from core.services import _range_brapi
+        with override_settings(BRAPI_HISTORICO_MAXIMO="2y"):
+            self.assertEqual(_range_brapi(180), "6mo")
+            self.assertEqual(_range_brapi(365), "1y")
+            self.assertEqual(_range_brapi(730), "2y")
+            self.assertEqual(_range_brapi(5000), "2y")
+
+
+@override_settings(RISCO_POR_OPERACAO_PCT=1.0, LIMITE_SETOR_PCT=30.0)
+class CalculadoraRiscoTests(TestCase):
+    """core.services.calcular_risco_compra e a view core:risco_compra."""
+
+    def setUp(self):
+        from core.services import obter_ou_criar_conta_corrente
+        self.usuario = User.objects.create_user(username="investidor_risco", password="SenhaForte123!")
+        conta = obter_ou_criar_conta_corrente(self.usuario)
+        conta.saldo_inicial = Decimal("10000.00")
+        conta.save()
+        self.ativo = Ativo.objects.create(ticker="WEGE3", setor="Industria")
+        Cotacao.objects.create(ativo=self.ativo, data=date.today(), preco_fechamento=Decimal("40.00"))
+
+    def test_quantidade_pelo_risco_do_patrimonio(self):
+        from core.services import calcular_risco_compra
+        # patrimônio 10.000 x 1% = 100 de risco; stop 2 abaixo -> 50 ações (R$ 2.000)
+        r = calcular_risco_compra(self.usuario, "WEGE3", preco_entrada=40.0, stop=38.0)
+        self.assertIsNone(r["erro"])
+        self.assertEqual(r["risco_maximo"], 100.0)
+        self.assertEqual(r["quantidade"], 50)
+        self.assertEqual(r["perda_no_stop"], 100.0)
+        self.assertEqual(r["alvo"], 44.0)  # risco x2
+        self.assertFalse(r["limitada_pelo_saldo"])
+
+    def test_stop_sugerido_sem_atr_fica_5_por_cento_abaixo(self):
+        from core.services import calcular_risco_compra
+        r = calcular_risco_compra(self.usuario, "WEGE3")  # sem preço: usa o último fechamento
+        self.assertEqual(r["preco_entrada"], 40.0)
+        self.assertEqual(r["stop_sugerido"], 38.0)
+        self.assertEqual(r["base_stop"], "PERCENTUAL")
+
+    def test_quantidade_limitada_pelo_saldo(self):
+        from core.services import calcular_risco_compra
+        # stop muito perto (0,10) -> 1.000 ações pelo risco, mas o saldo só paga 250
+        r = calcular_risco_compra(self.usuario, "WEGE3", preco_entrada=40.0, stop=39.9)
+        self.assertEqual(r["quantidade"], 250)
+        self.assertTrue(r["limitada_pelo_saldo"])
+        # e 250 ações = 100% do patrimônio num setor só
+        self.assertTrue(any("Concentração" in aviso for aviso in r["avisos"]))
+
+    def test_stop_acima_da_entrada_e_erro(self):
+        from core.services import calcular_risco_compra
+        r = calcular_risco_compra(self.usuario, "WEGE3", preco_entrada=40.0, stop=41.0)
+        self.assertIn("abaixo do preço", r["erro"])
+
+    def test_ativo_desconhecido_sem_preco_pede_o_preco(self):
+        from core.services import calcular_risco_compra
+        r = calcular_risco_compra(self.usuario, "XPTO3")
+        self.assertIn("informe o preço", r["erro"])
+
+    def test_view_json_aceita_virgula_e_exige_login(self):
+        url = reverse("core:risco_compra")
+        self.assertEqual(self.client.get(url, {"ticker": "WEGE3"}).status_code, 302)
+        self.client.login(username="investidor_risco", password="SenhaForte123!")
+        dados = self.client.get(url, {"ticker": "wege3", "preco": "40,00", "stop": "38,00"}).json()
+        self.assertEqual(dados["quantidade"], 50)
+        dados = self.client.get(url, {"ticker": "WEGE3", "risco_pct": "50"}).json()
+        self.assertIn("entre 0 e 10%", dados["erro"])
+
+    def test_tela_nova_operacao_tem_a_calculadora(self):
+        self.client.login(username="investidor_risco", password="SenhaForte123!")
+        resposta = self.client.get(reverse("core:operacao_nova"))
+        self.assertContains(resposta, "Calculadora de risco")
+        self.assertContains(resposta, reverse("core:risco_compra"))
+
+
 class BenchmarkTests(TestCase):
     """core.services: buscar_historico_cdi, atualizar_benchmarks, calcular_comparativo_benchmark"""
 

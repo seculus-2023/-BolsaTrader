@@ -20,6 +20,171 @@
     </form>
 </div>
 
+<div class="card-glass" id="calculadora-risco" style="max-width: 640px; margin-top: 1.5rem;"
+     data-url="{% url 'core:risco_compra' %}">
+    <h2 style="margin-top: 0;">🛡️ Calculadora de risco</h2>
+    <p style="color: var(--text-dim); font-size: .9rem;">
+        Antes de comprar, defina onde sai se der errado (stop) e quanto aceita perder nele. A quantidade é calculada
+        para que, se o stop for atingido, a perda não passe do risco escolhido sobre o seu patrimônio.
+        Não é recomendação de investimento.
+    </p>
+    <div class="form-futurista" style="display: flex; gap: .8rem; flex-wrap: wrap;">
+        <div style="flex: 1; min-width: 160px;">
+            <label for="risco-stop" style="margin-top: 0;">Stop (R$) &mdash; vazio = sugerido</label>
+            <input type="text" id="risco-stop" inputmode="decimal" placeholder="automático">
+        </div>
+        <div style="flex: 1; min-width: 160px;">
+            <label for="risco-pct" style="margin-top: 0;">Risco por operação (% do patrimônio)</label>
+            <input type="text" id="risco-pct" inputmode="decimal" value="{{ risco_pct_padrao|default:1 }}">
+        </div>
+    </div>
+
+    <p id="risco-mensagem" style="color: var(--text-dim); margin-top: 1rem;">Informe o ticker para calcular.</p>
+
+    <div id="risco-resultado" hidden>
+        <div class="grid-stats" style="margin-top: 1rem;">
+            <div class="stat-tile">
+                <div class="label">Quantidade sugerida</div>
+                <div class="value" id="risco-quantidade"></div>
+                <small style="color: var(--text-dim);" id="risco-valor-compra"></small>
+            </div>
+            <div class="stat-tile">
+                <div class="label">Stop</div>
+                <div class="value valor-negativo" id="risco-stop-valor"></div>
+                <small style="color: var(--text-dim);" id="risco-stop-base"></small>
+            </div>
+            <div class="stat-tile">
+                <div class="label">Alvo (risco x2)</div>
+                <div class="value valor-positivo" id="risco-alvo"></div>
+                <small style="color: var(--text-dim);" id="risco-ganho"></small>
+            </div>
+            <div class="stat-tile">
+                <div class="label">Perda máxima no stop</div>
+                <div class="value" id="risco-perda"></div>
+                <small style="color: var(--text-dim);" id="risco-patrimonio"></small>
+            </div>
+        </div>
+        <p style="color: var(--text-dim); font-size: .9rem; margin-top: .8rem;" id="risco-contexto"></p>
+        <ul id="risco-avisos" style="color: var(--neon-yellow); padding-left: 1.2rem;"></ul>
+        <button type="button" class="btn-futurista btn-secundario" id="risco-aplicar">
+            Usar no formulário (quantidade e metas de lucro/perda)
+        </button>
+    </div>
+</div>
+
+<script>
+    // Calculadora de risco: recalcula (com um pequeno atraso) quando muda o
+    // ticker, o preço, o stop ou o risco; "Usar no formulário" copia a
+    // quantidade e transforma stop/alvo nas metas de perda/lucro (%), que
+    // geram os alertas automáticos do sistema.
+    (function () {
+        var painel = document.getElementById("calculadora-risco");
+        var campoTicker = document.getElementById("id_ticker");
+        var campoPreco = document.getElementById("id_preco_unitario");
+        var campoStop = document.getElementById("risco-stop");
+        var campoRisco = document.getElementById("risco-pct");
+        var mensagem = document.getElementById("risco-mensagem");
+        var resultado = document.getElementById("risco-resultado");
+        if (!painel || !campoTicker) return;
+
+        var VEREDITOS = {
+            SUPERA: "o robô superou a referência neste ativo",
+            EMPATA: "o robô não teve vantagem sobre a referência neste ativo",
+            ABAIXO: "o robô foi PIOR que comprar em qualquer dia neste ativo",
+            POUCOS_DADOS: "histórico curto demais para avaliar o robô neste ativo",
+        };
+        var ultimo = null;
+        var temporizador = null;
+
+        function reais(valor) {
+            return "R$ " + Number(valor).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        }
+        function texto(id, valor) { document.getElementById(id).textContent = valor; }
+
+        function mostrar(dados) {
+            ultimo = dados;
+            if (dados.erro) {
+                resultado.hidden = true;
+                mensagem.hidden = false;
+                mensagem.textContent = dados.erro;
+                return;
+            }
+            mensagem.hidden = true;
+            resultado.hidden = false;
+            texto("risco-quantidade", dados.quantidade + " ações");
+            texto("risco-valor-compra", reais(dados.valor_compra) + (dados.limitada_pelo_saldo ? " (limitada pelo saldo)" : ""));
+            texto("risco-stop-valor", reais(dados.stop));
+            var bases = { ATR: "2x ATR", SUPORTE: "abaixo do suporte", PERCENTUAL: "5% (sem ATR)" };
+            texto("risco-stop-base", "-" + dados.queda_ate_stop_pct + "% · sugerido: " + reais(dados.stop_sugerido) + " (" + bases[dados.base_stop] + ")");
+            texto("risco-alvo", reais(dados.alvo));
+            texto("risco-ganho", "ganho de " + reais(dados.ganho_no_alvo));
+            texto("risco-perda", reais(dados.perda_no_stop));
+            texto("risco-patrimonio", "limite " + reais(dados.risco_maximo) + " = " + dados.risco_pct + "% de " + reais(dados.patrimonio));
+            var contexto = [];
+            if (dados.veredito_scanner) contexto.push("Scanner: " + dados.veredito_scanner);
+            if (dados.backtest_veredito) contexto.push("Backtest: " + VEREDITOS[dados.backtest_veredito]);
+            if (dados.exposicao_setor_apos_pct !== null) {
+                contexto.push("Setor " + dados.setor + ": " + dados.exposicao_setor_pct + "% → " + dados.exposicao_setor_apos_pct + "% do patrimônio");
+            }
+            texto("risco-contexto", contexto.join(" · "));
+            var lista = document.getElementById("risco-avisos");
+            lista.textContent = "";
+            dados.avisos.forEach(function (aviso) {
+                var item = document.createElement("li");
+                item.textContent = "⚠️ " + aviso;
+                lista.appendChild(item);
+            });
+        }
+
+        function calcular() {
+            var ticker = campoTicker.value.trim().toUpperCase();
+            if (!ticker) {
+                resultado.hidden = true;
+                mensagem.hidden = false;
+                mensagem.textContent = "Informe o ticker para calcular.";
+                return;
+            }
+            var params = new URLSearchParams({
+                ticker: ticker,
+                preco: campoPreco ? campoPreco.value : "",
+                stop: campoStop.value,
+                risco_pct: campoRisco.value,
+            });
+            fetch(painel.dataset.url + "?" + params.toString(), { headers: { "Accept": "application/json" } })
+                .then(function (resp) { return resp.json(); })
+                .then(mostrar)
+                .catch(function () {
+                    resultado.hidden = true;
+                    mensagem.hidden = false;
+                    mensagem.textContent = "Não foi possível calcular agora.";
+                });
+        }
+
+        function agendar() {
+            clearTimeout(temporizador);
+            temporizador = setTimeout(calcular, 500);
+        }
+
+        [campoTicker, campoPreco, campoStop, campoRisco].forEach(function (campo) {
+            if (campo) campo.addEventListener("input", agendar);
+        });
+
+        document.getElementById("risco-aplicar").addEventListener("click", function () {
+            if (!ultimo || ultimo.erro) return;
+            var quantidade = document.getElementById("id_quantidade");
+            var metaPerda = document.getElementById("id_meta_perda_pct");
+            var metaLucro = document.getElementById("id_meta_lucro_pct");
+            var tipo = document.getElementById("id_tipo");
+            if (quantidade && !(tipo && tipo.value === "RESERVAR")) quantidade.value = ultimo.quantidade;
+            if (campoPreco && !campoPreco.value) campoPreco.value = String(ultimo.preco_entrada);
+            if (metaPerda) metaPerda.value = (-ultimo.queda_ate_stop_pct).toFixed(2);
+            if (metaLucro) metaLucro.value = ((ultimo.alvo - ultimo.preco_entrada) / ultimo.preco_entrada * 100).toFixed(2);
+        });
+
+        if (campoTicker.value) calcular();
+    })();
+</script>
+
 <script>
     // No tipo "Reservar", a quantidade não pode passar de 1 (mesma regra validada no servidor).
     (function () {

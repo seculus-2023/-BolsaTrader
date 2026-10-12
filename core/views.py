@@ -121,6 +121,9 @@ from .services import (
     avaliar_previsoes_analistas,
     buscar_consenso_analistas,
     atualizar_precos_previsoes,
+    resumir_backtests,
+    calcular_risco_compra,
+    BACKTEST_MINIMO_SINAIS_CONFIAVEL,
 )
 
 logger = logging.getLogger(__name__)
@@ -439,7 +442,41 @@ def operacao_nova(request):
             initial["tipo"] = tipo
         form = OperacaoForm(usuario=request.user, initial=initial)
 
-    return render(request, "core/operacao_form.html", {"form": form})
+    return render(request, "core/operacao_form.html", {
+        "form": form, "risco_pct_padrao": settings.RISCO_POR_OPERACAO_PCT,
+    })
+
+
+def _float_do_get(request, nome: str) -> float | None:
+    """Número opcional da querystring, aceitando vírgula decimal ("12,50"); None se vazio/inválido."""
+    valor = request.GET.get(nome, "").strip().replace(",", ".")
+    try:
+        return float(valor) if valor else None
+    except ValueError:
+        return None
+
+
+@login_required
+@require_GET
+def risco_compra(request):
+    """
+    Calculadora de risco da tela Nova operação (JSON): stop sugerido,
+    quantidade pelo risco do patrimônio e concentração por setor - ver
+    core.services.calcular_risco_compra.
+    """
+    ticker = request.GET.get("ticker", "").strip().upper()
+    if not TICKER_VALIDO.match(ticker):
+        return JsonResponse({"erro": "Informe um ticker válido."})
+    risco_pct = _float_do_get(request, "risco_pct")
+    if risco_pct is not None and not 0 < risco_pct <= 10:
+        return JsonResponse({"erro": "O risco por operação deve ficar entre 0 e 10% do patrimônio."})
+    resultado = calcular_risco_compra(
+        request.user, ticker,
+        preco_entrada=_float_do_get(request, "preco"),
+        stop=_float_do_get(request, "stop"),
+        risco_pct=risco_pct,
+    )
+    return JsonResponse(resultado)
 
 
 @login_required
@@ -921,7 +958,13 @@ def backtest_robo(request):
 
     return render(
         request, "core/backtest_robo.html",
-        {"resultados": resultados, "dias_retorno": dias_retorno},
+        {
+            "resultados": resultados,
+            "resumo": resumir_backtests(resultados),
+            "dias_retorno": dias_retorno,
+            "custo_pct": settings.BACKTEST_CUSTO_PCT,
+            "minimo_sinais": BACKTEST_MINIMO_SINAIS_CONFIAVEL,
+        },
     )
 
 

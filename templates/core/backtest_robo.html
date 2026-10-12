@@ -18,6 +18,44 @@
     <button type="submit" class="btn-futurista btn-secundario">Recalcular</button>
 </form>
 
+<p style="color: var(--text-dim); font-size: .9rem;">
+    <strong>Referência</strong> = comprar em <em>qualquer</em> pregão do mesmo período, sem sinal nenhum. Em mercado de
+    alta quase toda compra "acerta" &mdash; o robô só tem valor se acertar <strong>mais</strong> que a referência.
+    Os retornos já descontam {{ custo_pct }}% de custo (compra + venda). Com menos de {{ minimo_sinais }} sinais de
+    compra, o resultado é mais sorte que estatística &mdash; e mesmo com uma centena de sinais num ativo só,
+    diferenças de poucos pontos podem ser acaso. Confie mais no <strong>resultado geral</strong>, que junta todos os
+    ativos, e num histórico longo (ajuste <code>BRAPI_HISTORICO_MAXIMO</code> conforme o seu plano da brapi).
+</p>
+
+{% if resumo %}
+<div class="card-glass" style="margin-top: 1rem; border-color: var(--neon-cyan);">
+    <h2 style="margin-top: 0;">Resultado geral &mdash; {{ resumo.ativos }} ativo{{ resumo.ativos|pluralize }}</h2>
+    <p>{% include "core/_veredito_backtest.html" with veredito=resumo.veredito %}</p>
+    <div class="grid-stats">
+        <div class="stat-tile">
+            <div class="label">Sinais de compra do robô</div>
+            <div class="value">{{ resumo.sinais_compra }}</div>
+        </div>
+        <div class="stat-tile">
+            <div class="label">Acerto do robô (compra)</div>
+            <div class="value">{% if resumo.taxa_acerto_compra_pct is not None %}{{ resumo.taxa_acerto_compra_pct }}%{% else %}&mdash;{% endif %}</div>
+            {% if resumo.retorno_medio_compra_pct is not None %}<small style="color: var(--text-dim);">retorno médio {{ resumo.retorno_medio_compra_pct }}%</small>{% endif %}
+        </div>
+        <div class="stat-tile">
+            <div class="label">Acerto da referência</div>
+            <div class="value">{{ resumo.referencia_taxa_acerto_pct }}%</div>
+            <small style="color: var(--text-dim);">retorno médio {{ resumo.referencia_retorno_medio_pct }}% &middot; {{ resumo.referencia_total }} pregões</small>
+        </div>
+        <div class="stat-tile">
+            <div class="label">Vantagem do robô</div>
+            <div class="value {% if resumo.vantagem_compra_pp is not None and resumo.vantagem_compra_pp > 0 %}valor-positivo{% elif resumo.vantagem_compra_pp is not None and resumo.vantagem_compra_pp < 0 %}valor-negativo{% endif %}">
+                {% if resumo.vantagem_compra_pp is not None %}{% if resumo.vantagem_compra_pp > 0 %}+{% endif %}{{ resumo.vantagem_compra_pp }} p.p.{% else %}&mdash;{% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+{% endif %}
+
 {% if resultados %}
     {% for r in resultados %}
     <div class="card-glass" style="margin-top: 1rem;">
@@ -25,11 +63,25 @@
             {{ r.ativo.ticker }}
             {% if r.ativo.nome %}<small style="color: var(--text-dim); font-family: 'Rajdhani', sans-serif;">— {{ r.ativo.nome }}</small>{% endif %}
         </h3>
+        {% if r.total_pregoes %}
+        <p style="color: var(--text-dim); font-size: .85rem; margin-top: -.4rem;">
+            Histórico: {{ r.total_pregoes }} pregões ({{ r.data_inicial|date:"d/m/Y" }} a {{ r.data_final|date:"d/m/Y" }})
+        </p>
+        {% endif %}
         {% if r.dados_insuficientes %}
         <p style="color: var(--text-dim);">Histórico de cotações ainda insuficiente para simular sinais deste ativo.</p>
         {% elif r.total_sinais == 0 %}
         <p style="color: var(--text-dim);">O robô não teria emitido nenhum sinal de compra/venda (só neutro) para este ativo no histórico disponível.</p>
         {% else %}
+        <p>
+            {% include "core/_veredito_backtest.html" with veredito=r.veredito %}
+            {% if r.vantagem_compra_pp is not None %}
+            <small style="color: var(--text-dim); margin-left: .5rem;">
+                compra do robô {{ r.taxa_acerto_compra_pct }}% x referência {{ r.referencia_taxa_acerto_pct }}%
+                ({% if r.vantagem_compra_pp > 0 %}+{% endif %}{{ r.vantagem_compra_pp }} p.p.)
+            </small>
+            {% endif %}
+        </p>
         <div class="grid-stats">
             <div class="stat-tile">
                 <div class="label">Sinais simulados</div>

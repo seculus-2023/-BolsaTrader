@@ -232,6 +232,24 @@ BRAPI_TOKEN = config("BRAPI_TOKEN", default="")  # opcional, ver manual de insta
 # se fizer upgrade (ou downgrade) de plano na brapi.dev.
 BRAPI_TICKERS_POR_LOTE = config("BRAPI_TICKERS_POR_LOTE", default=10, cast=int)
 
+# Maior histórico diário que o plano da brapi.dev aceita buscar de uma vez
+# (1mo, 3mo, 6mo, 1y, 2y, 5y): gratuito = 3mo; planos pagos aceitam mais.
+# Usado pelo backfill de cotações - quanto mais histórico, mais confiável o
+# Backtesting do Robô e os indicadores técnicos.
+BRAPI_HISTORICO_MAXIMO = config("BRAPI_HISTORICO_MAXIMO", default="3mo")
+
+# Custo de uma operação completa (compra + venda), em % do valor: corretagem,
+# emolumentos e liquidação da B3 (~0,03% por ponta). Descontado dos retornos
+# no Backtesting do Robô - um sinal que "acerta" por menos que o custo, na
+# prática, dá prejuízo.
+BACKTEST_CUSTO_PCT = config("BACKTEST_CUSTO_PCT", default=0.1, cast=float)
+
+# Calculadora de risco da compra (tela Nova operação - ver core.services.
+# calcular_risco_compra): quanto do patrimônio (%) aceitar perder se o stop
+# for atingido, e o máximo do patrimônio (%) recomendado num mesmo setor.
+RISCO_POR_OPERACAO_PCT = config("RISCO_POR_OPERACAO_PCT", default=1.0, cast=float)
+LIMITE_SETOR_PCT = config("LIMITE_SETOR_PCT", default=30.0, cast=float)
+
 # Orçamento de requisições à brapi.dev (ver core.services.consumo_api_*): o
 # plano tem um limite por ciclo de 30 dias (Startup = 150.000) e estourar
 # deixa o sistema sem cotações até a renovação. O sistema conta cada

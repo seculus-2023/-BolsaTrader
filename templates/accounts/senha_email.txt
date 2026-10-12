@@ -1,0 +1,12 @@
+{% autoescape off %}Olá{% if user.first_name %}, {{ user.first_name }}{% endif %}!
+
+Recebemos um pedido para redefinir a senha da sua conta no BolsaTrader (usuário: {{ user.get_username }}).
+
+Para criar uma senha nova, abra o link abaixo (vale por 2 horas e só pode ser usado uma vez):
+
+{{ protocol }}://{{ domain }}{% url 'accounts:senha_redefinir' uidb64=uid token=token %}
+
+Se não foi você quem pediu, ignore este e-mail - sua senha continua a mesma.
+
+BolsaTrader
+{% endautoescape %}

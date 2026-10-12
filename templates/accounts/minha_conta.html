@@ -26,6 +26,7 @@
             {% if field.help_text %}<small style="color: var(--text-dim);">{{ field.help_text }}</small>{% endif %}
         {% endfor %}
         <button type="submit" class="btn-futurista" style="margin-top: 1.4rem;">Salvar</button>
+        <a class="btn-futurista btn-secundario" style="margin-top: 1.4rem;" href="{% url 'accounts:senha_alterar' %}">🔑 Alterar senha</a>
     </form>
 </div>
 

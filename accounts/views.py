@@ -1,3 +1,5 @@
+import logging
+
 from django.conf import settings
 from django.contrib.auth import login
 from django.contrib.auth.decorators import login_required
@@ -12,6 +14,8 @@ from core.services import limpar_dados_sistema
 
 from .forms import CadastroForm, PerfilUsuarioForm
 from .models import PerfilUsuario
+
+logger = logging.getLogger(__name__)
 
 
 def _chave_tentativas_login(request) -> str:
@@ -51,7 +55,14 @@ class LoginFuturistaView(LoginView):
 
     def form_invalid(self, form):
         chave = _chave_tentativas_login(self.request)
-        cache.set(chave, cache.get(chave, 0) + 1, settings.LOGIN_BLOQUEIO_MINUTOS * 60)
+        falhas = cache.get(chave, 0) + 1
+        cache.set(chave, falhas, settings.LOGIN_BLOQUEIO_MINUTOS * 60)
+        if falhas == settings.LOGIN_MAX_TENTATIVAS:
+            logger.warning(
+                "Login bloqueado por %s min após %s senhas erradas: usuário %r, IP %s.",
+                settings.LOGIN_BLOQUEIO_MINUTOS, falhas,
+                self.request.POST.get("username", ""), self.request.META.get("REMOTE_ADDR", ""),
+            )
         messages.error(self.request, "Usuário ou senha inválidos.")
         return super().form_invalid(form)
 

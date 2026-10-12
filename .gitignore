@@ -8,3 +8,5 @@ staticfiles/
 .DS_Store
 *.pyo
 *.log
+logs/
+backups/

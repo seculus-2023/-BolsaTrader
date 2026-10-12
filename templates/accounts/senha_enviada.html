@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block titulo %}Link enviado - BolsaTrader{% endblock %}
+{% block conteudo %}
+<div class="tela-auth">
+    <div class="auth-box card-glass">
+        <div class="logo">⚡ BOLSATRADER</div>
+        <p class="subtitulo">
+            Se existir uma conta com esse e-mail, o link para criar uma senha nova chega em alguns minutos
+            (confira também a caixa de spam). O link vale por 2 horas.
+        </p>
+        <a class="link-secundario" href="{% url 'accounts:login' %}">Voltar para o login</a>
+    </div>
+</div>
+{% endblock %}

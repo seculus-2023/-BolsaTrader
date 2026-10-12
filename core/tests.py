@@ -13,7 +13,8 @@ import threading
 from datetime import date, datetime, timedelta, timezone as dt_timezone
 from decimal import Decimal
 from io import StringIO
-from unittest.mock import Mock, patch
+from pathlib import Path
+from unittest.mock import MagicMock, Mock, patch
 
 import requests
 from django.apps import apps as django_apps
@@ -582,6 +583,65 @@ class FontesNoticiasSoStaffTests(TestCase):
         self.assertFalse(self.fonte.ativa)
         self.client.post(reverse("core:noticia_fonte_excluir", args=[self.fonte.id]))
         self.assertFalse(FonteNoticia.objects.filter(id=self.fonte.id).exists())
+
+
+class SaudeTests(TestCase):
+    """/saude/ (monitoramento e healthcheck do Docker): sem login, 200 com o banco de pé."""
+
+    def test_responde_ok_sem_login(self):
+        resposta = self.client.get(reverse("saude"))
+        self.assertEqual(resposta.status_code, 200)
+        self.assertEqual(resposta.json(), {"status": "ok"})
+
+    def test_banco_fora_responde_503(self):
+        from django.db import connection
+        with patch.object(connection, "cursor", side_effect=Exception("banco fora")):
+            resposta = self.client.get(reverse("saude"))
+        self.assertEqual(resposta.status_code, 503)
+
+
+class BackupBancoCommandTests(TestCase):
+    """Comando backup_banco: grava o .sql.gz, apaga os antigos e acusa pg_dump ausente."""
+
+    def setUp(self):
+        import tempfile
+        self.pasta = Path(tempfile.mkdtemp())
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.pasta, ignore_errors=True)
+
+    def _pg_dump_falso(self, conteudo=b"-- dump", codigo=0):
+        import io
+        processo = MagicMock()
+        processo.stdout = io.BytesIO(conteudo)
+        processo.wait.return_value = codigo
+        return processo
+
+    def test_gera_backup_compactado_e_mantem_so_os_mais_recentes(self):
+        import gzip
+        for antigo in ["bolsatrader_20200101_000000.sql.gz", "bolsatrader_20200102_000000.sql.gz"]:
+            (self.pasta / antigo).write_bytes(b"")
+        with patch("core.management.commands.backup_banco.subprocess.Popen", return_value=self._pg_dump_falso()):
+            call_command("backup_banco", "--pasta", str(self.pasta), "--manter", "2", stdout=StringIO())
+
+        arquivos = sorted(p.name for p in self.pasta.iterdir())
+        self.assertEqual(len(arquivos), 2)
+        self.assertNotIn("bolsatrader_20200101_000000.sql.gz", arquivos)
+        with gzip.open(self.pasta / arquivos[-1]) as arquivo:
+            self.assertEqual(arquivo.read(), b"-- dump")
+
+    def test_falha_do_pg_dump_nao_deixa_arquivo(self):
+        with patch("core.management.commands.backup_banco.subprocess.Popen",
+                   return_value=self._pg_dump_falso(codigo=1)):
+            with self.assertRaises(CommandError):
+                call_command("backup_banco", "--pasta", str(self.pasta), stdout=StringIO())
+        self.assertEqual(list(self.pasta.iterdir()), [])
+
+    def test_pg_dump_ausente_explica_como_resolver(self):
+        with patch("core.management.commands.backup_banco.subprocess.Popen", side_effect=FileNotFoundError):
+            with self.assertRaisesMessage(CommandError, "PG_DUMP"):
+                call_command("backup_banco", "--pasta", str(self.pasta), stdout=StringIO())
 
 
 class AcoesQueAlteramDadosExigemPostTests(TestCase):

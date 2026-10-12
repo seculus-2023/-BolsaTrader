@@ -2,6 +2,7 @@ import calendar
 import hashlib
 import hmac
 import json
+import logging
 import re
 from decimal import Decimal
 
@@ -121,6 +122,8 @@ from .services import (
     buscar_consenso_analistas,
     atualizar_precos_previsoes,
 )
+
+logger = logging.getLogger(__name__)
 
 TICKER_VALIDO = re.compile(r"^[A-Z0-9]{1,15}$")
 
@@ -1323,6 +1326,24 @@ def conta_corrente_exportar_pdf(request):
     nome_arquivo = f"extrato_conta_corrente_{timezone.localdate().isoformat()}.pdf"
     resposta["Content-Disposition"] = f'attachment; filename="{nome_arquivo}"'
     return resposta
+
+
+def saude_view(request):
+    """
+    Verificação de saúde para monitoramento: 200 {"status": "ok"} se o banco
+    responde, 503 se não. Sem login e sem dado nenhum do sistema - liberada do
+    redirecionamento para HTTPS (SECURE_REDIRECT_EXEMPT) pro healthcheck
+    interno do Docker funcionar via HTTP.
+    """
+    from django.db import connection
+
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT 1")
+    except Exception:
+        logger.exception("Verificação de saúde: banco de dados não respondeu.")
+        return JsonResponse({"status": "erro", "banco": "indisponivel"}, status=503)
+    return JsonResponse({"status": "ok"})
 
 
 def offline_view(request):

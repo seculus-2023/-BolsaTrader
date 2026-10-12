@@ -7,6 +7,7 @@ de mercado (alta/baixa).
 """
 
 import os
+import sys
 from pathlib import Path
 from dotenv import load_dotenv
 from decouple import config, Csv
@@ -69,6 +70,8 @@ CSRF_COOKIE_NAME = "bolsatrader_csrftoken"
 # --------------------------------------------------------------------------
 if not DEBUG:
     SECURE_SSL_REDIRECT = config("SECURE_SSL_REDIRECT", default=True, cast=bool)
+    # healthcheck interno do Docker chama /saude/ por HTTP, dentro do container
+    SECURE_REDIRECT_EXEMPT = [r"^saude/$"]
     SESSION_COOKIE_SECURE = True
     CSRF_COOKIE_SECURE = True
     SECURE_HSTS_SECONDS = config("SECURE_HSTS_SECONDS", default=31536000, cast=int)
@@ -341,3 +344,78 @@ WHATSAPP_APP_SECRET = config("WHATSAPP_APP_SECRET", default="")
 OPENAI_API_KEY = config("OPENAI_API_KEY", default="")
 OPENAI_BASE_URL = config("OPENAI_BASE_URL", default="https://api.openai.com/v1")
 OPENAI_MODEL = config("OPENAI_MODEL", default="gpt-4o-mini")
+
+
+# --------------------------------------------------------------------------
+# Logs: sempre no console (aparece no terminal do runserver/Waitress e no
+# "docker compose logs") e, com LOG_ARQUIVO preenchido, também num arquivo
+# com rotação (5 arquivos de 5 MB) - é onde ficam os erros do agendador de
+# cotações, das APIs externas (brapi, Telegram, IA) e os bloqueios de login.
+# --------------------------------------------------------------------------
+LOG_NIVEL = config("LOG_NIVEL", default="INFO").upper()
+LOG_ARQUIVO = config("LOG_ARQUIVO", default=str(BASE_DIR / "logs" / "bolsatrader.log"))
+# a suíte de testes provoca erros de propósito - não mistura isso no log real
+if "test" in sys.argv[1:2]:
+    LOG_ARQUIVO = ""
+
+_handlers_log = ["console"]
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {
+        "padrao": {"format": "{asctime} {levelname} {name}: {message}", "style": "{"},
+    },
+    "handlers": {
+        "console": {"class": "logging.StreamHandler", "formatter": "padrao"},
+    },
+    "loggers": {
+        "core": {"handlers": _handlers_log, "level": LOG_NIVEL, "propagate": False},
+        "accounts": {"handlers": _handlers_log, "level": LOG_NIVEL, "propagate": False},
+        "django": {"handlers": _handlers_log, "level": "WARNING", "propagate": False},
+    },
+}
+if LOG_ARQUIVO:
+    Path(LOG_ARQUIVO).parent.mkdir(parents=True, exist_ok=True)
+    LOGGING["handlers"]["arquivo"] = {
+        "class": "logging.handlers.RotatingFileHandler",
+        "filename": LOG_ARQUIVO,
+        "maxBytes": 5 * 1024 * 1024,
+        "backupCount": 5,
+        "encoding": "utf-8",
+        "delay": True,
+        "formatter": "padrao",
+    }
+    _handlers_log.append("arquivo")
+
+
+# --------------------------------------------------------------------------
+# E-mail (recuperação de senha - "Esqueci minha senha" na tela de login).
+# Sem EMAIL_HOST, os e-mails são só impressos no console do servidor (útil
+# em desenvolvimento); em produção, preencha com o SMTP do seu provedor
+# (ex: Gmail com senha de app, SendGrid, Amazon SES, Brevo).
+# --------------------------------------------------------------------------
+EMAIL_HOST = config("EMAIL_HOST", default="")
+EMAIL_PORT = config("EMAIL_PORT", default=587, cast=int)
+EMAIL_HOST_USER = config("EMAIL_HOST_USER", default="")
+EMAIL_HOST_PASSWORD = config("EMAIL_HOST_PASSWORD", default="")
+EMAIL_USE_TLS = config("EMAIL_USE_TLS", default=True, cast=bool)
+EMAIL_BACKEND = (
+    "django.core.mail.backends.smtp.EmailBackend"
+    if EMAIL_HOST
+    else "django.core.mail.backends.console.EmailBackend"
+)
+DEFAULT_FROM_EMAIL = config("DEFAULT_FROM_EMAIL", default="BolsaTrader <nao-responda@bolsatrader.com.br>")
+# validade do link de redefinição de senha enviado por e-mail
+PASSWORD_RESET_TIMEOUT = 60 * 60 * 2
+
+
+# --------------------------------------------------------------------------
+# Backup do banco (comando "python manage.py backup_banco" - ver core/
+# management/commands/backup_banco.py): gera um .sql.gz com pg_dump na pasta
+# BACKUP_PASTA e apaga os mais antigos, mantendo os BACKUP_MANTER mais recentes.
+# --------------------------------------------------------------------------
+BACKUP_PASTA = config("BACKUP_PASTA", default="") or str(BASE_DIR / "backups")
+BACKUP_MANTER = config("BACKUP_MANTER", default=14, cast=int)
+# caminho do pg_dump, se não estiver no PATH (ex. Windows:
+# C:\Program Files\PostgreSQL\17\bin\pg_dump.exe)
+PG_DUMP = config("PG_DUMP", default="pg_dump")

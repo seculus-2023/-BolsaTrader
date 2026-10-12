@@ -192,3 +192,51 @@ class LimiteTentativasLoginTests(TestCase):
         resposta = self.client.post(reverse("accounts:login"), {"username": "alvo", "password": "SenhaForte123!"})
         self.assertEqual(resposta.status_code, 302)
         self.assertNotEqual(resposta.url, reverse("accounts:login"))
+
+
+class RecuperacaoSenhaTests(TestCase):
+    """'Esqueci minha senha': e-mail com link, link troca a senha (accounts/urls.py)."""
+
+    def setUp(self):
+        self.usuario = User.objects.create_user(
+            username="esquecido", email="esquecido@example.com", password="SenhaAntiga123!"
+        )
+
+    def test_login_tem_link_esqueci_minha_senha(self):
+        self.assertContains(self.client.get(reverse("accounts:login")), reverse("accounts:senha_esqueci"))
+
+    def test_fluxo_completo_redefine_a_senha(self):
+        import re
+        from django.core import mail
+
+        resposta = self.client.post(reverse("accounts:senha_esqueci"), {"email": "esquecido@example.com"})
+        self.assertRedirects(resposta, reverse("accounts:senha_enviada"))
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertIn("redefinição de senha", mail.outbox[0].subject)
+
+        link = re.search(r"https?://[^/]+(/contas/senha/redefinir/\S+)", mail.outbox[0].body).group(1)
+        resposta = self.client.get(link, follow=True)  # o Django troca o token da URL pela sessão
+        self.assertTrue(resposta.context["validlink"])
+        resposta = self.client.post(
+            resposta.wsgi_request.path, {"new_password1": "SenhaNova456!", "new_password2": "SenhaNova456!"}
+        )
+        self.assertRedirects(resposta, reverse("accounts:senha_redefinida"))
+        self.usuario.refresh_from_db()
+        self.assertTrue(self.usuario.check_password("SenhaNova456!"))
+
+    def test_email_desconhecido_nao_envia_nada_mas_nao_revela(self):
+        from django.core import mail
+
+        resposta = self.client.post(reverse("accounts:senha_esqueci"), {"email": "ninguem@example.com"})
+        self.assertRedirects(resposta, reverse("accounts:senha_enviada"))
+        self.assertEqual(len(mail.outbox), 0)
+
+    def test_usuario_logado_altera_a_propria_senha(self):
+        self.client.login(username="esquecido", password="SenhaAntiga123!")
+        self.assertContains(self.client.get(reverse("accounts:minha_conta")), reverse("accounts:senha_alterar"))
+        resposta = self.client.post(reverse("accounts:senha_alterar"), {
+            "old_password": "SenhaAntiga123!", "new_password1": "SenhaNova456!", "new_password2": "SenhaNova456!",
+        })
+        self.assertRedirects(resposta, reverse("accounts:senha_alterada"))
+        self.usuario.refresh_from_db()
+        self.assertTrue(self.usuario.check_password("SenhaNova456!"))

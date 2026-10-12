@@ -1,0 +1,57 @@
+# Roda a suíte de testes a cada push e pull request, num PostgreSQL de verdade
+# (o mesmo banco da produção). Resultado na aba "Actions" do GitHub.
+name: Testes
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  testes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: bolsatrader
+          POSTGRES_USER: bolsatrader
+          POSTGRES_PASSWORD: bolsatrader
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U bolsatrader"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      SECRET_KEY: chave-somente-para-testes-no-ci
+      DEBUG: "True"
+      DB_NAME: bolsatrader
+      DB_USER: bolsatrader
+      DB_PASSWORD: bolsatrader
+      DB_HOST: localhost
+      DB_PORT: "5432"
+      BRAPI_TOKEN: ""
+      OPENAI_API_KEY: ""
+      LOG_ARQUIVO: ""
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Instalar dependências
+        run: pip install -r requirements.txt
+
+      - name: Verificar migrações pendentes
+        run: python manage.py makemigrations --check --dry-run
+
+      - name: Rodar os testes
+        run: python manage.py test --noinput

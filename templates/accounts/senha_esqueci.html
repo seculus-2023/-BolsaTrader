@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block titulo %}Esqueci minha senha - BolsaTrader{% endblock %}
+{% block conteudo %}
+<div class="tela-auth">
+    <div class="auth-box card-glass">
+        <div class="logo">⚡ BOLSATRADER</div>
+        <p class="subtitulo">Informe o e-mail da sua conta: enviaremos um link para criar uma senha nova.</p>
+        <form method="post" class="form-futurista">
+            {% csrf_token %}
+            {% include "accounts/_form_campos.html" %}
+            <button type="submit" class="btn-futurista" style="margin-top: 1.4rem; width: 100%;">Enviar link</button>
+        </form>
+        <a class="link-secundario" href="{% url 'accounts:login' %}">Voltar para o login</a>
+    </div>
+</div>
+{% endblock %}

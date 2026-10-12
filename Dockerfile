@@ -11,9 +11,17 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip \
     && pip install --no-cache-dir -r requirements.txt
 
+# Usuário sem privilégios: se alguém explorar uma falha na aplicação, não
+# ganha root dentro do container.
+RUN useradd --create-home --uid 1000 bolsatrader
+
 # Código-fonte da aplicação
-COPY . .
-RUN chmod +x entrypoint.sh
+COPY --chown=bolsatrader:bolsatrader . .
+RUN chmod +x entrypoint.sh \
+    && mkdir -p staticfiles logs backups \
+    && chown bolsatrader:bolsatrader staticfiles logs backups
+
+USER bolsatrader
 
 EXPOSE 8000
 

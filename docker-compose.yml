@@ -5,6 +5,9 @@
 #   2) docker compose up --build
 #   3) acesse http://localhost:8000
 #
+# Serviços: db (PostgreSQL), web (site), cotacoes e noticias (atualização
+# automática) e backup (cópia diária do banco em ./backups).
+#
 # As variáveis abaixo (${DB_NAME}, ${DB_USER}, ...) são lidas automaticamente
 # do arquivo ".env" na mesma pasta deste arquivo.
 
@@ -38,13 +41,24 @@ services:
       # buscaria as cotações (3x o consumo da brapi e alertas duplicados). A
       # atualização automática fica no serviço "cotacoes" abaixo, um só processo.
       AGENDADOR_COTACOES_EMBUTIDO: "False"
+      LOG_ARQUIVO: ""
     depends_on:
       db:
         condition: service_healthy
     ports:
       - "8000:8000"
-    volumes:
-      - staticfiles_data:/app/staticfiles
+    # /saude/ responde 200 se o Django e o banco estão de pé. O Host enviado é
+    # o primeiro de ALLOWED_HOSTS (senão o Django recusaria a requisição).
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import os,urllib.request as u;h=os.environ.get('ALLOWED_HOSTS','localhost').split(',')[0].strip();h='localhost' if not h or h[0] in '.*' else h;u.urlopen(u.Request('http://127.0.0.1:8000/saude/',headers={'Host':h}),timeout=5)"
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
 
   # Atualização automática de cotações/alertas/robô a cada
   # COTACOES_INTERVALO_MINUTOS - processo único, separado dos workers web.
@@ -58,6 +72,7 @@ services:
       DB_HOST: db
       DB_PORT: 5432
       AGENDADOR_COTACOES_EMBUTIDO: "False"
+      LOG_ARQUIVO: ""
     depends_on:
       web:
         condition: service_started
@@ -73,10 +88,44 @@ services:
       DB_HOST: db
       DB_PORT: 5432
       AGENDADOR_COTACOES_EMBUTIDO: "False"
+      LOG_ARQUIVO: ""
     depends_on:
       web:
         condition: service_started
 
+  # Backup diário do banco (pg_dump compactado) na pasta ./backups do
+  # servidor, mantendo os BACKUP_MANTER mais recentes (padrão 14). Horário
+  # do nome do arquivo em UTC. Para restaurar, ver README.
+  backup:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      PGHOST: db
+      PGUSER: ${DB_USER:-bolsatrader_user}
+      PGPASSWORD: ${DB_PASSWORD:-troque_esta_senha}
+      PGDATABASE: ${DB_NAME:-bolsatrader}
+      BACKUP_MANTER: ${BACKUP_MANTER:-14}
+    volumes:
+      - ./backups:/backups
+    depends_on:
+      db:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -o pipefail
+        while true; do
+          arquivo="/backups/bolsatrader_$$(date +%Y%m%d_%H%M%S).sql.gz"
+          if pg_dump --no-owner --no-privileges | gzip > "$$arquivo.parcial"; then
+            mv "$$arquivo.parcial" "$$arquivo"
+            echo "Backup gerado: $$arquivo"
+          else
+            rm -f "$$arquivo.parcial"
+            echo "FALHA no backup do banco"
+          fi
+          ls -1t /backups/bolsatrader_*.sql.gz 2>/dev/null | tail -n +$$((BACKUP_MANTER + 1)) | xargs -r rm -f
+          sleep 86400
+        done
+
 volumes:
   postgres_data:
-  staticfiles_data:

@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block titulo %}Senha alterada - BolsaTrader{% endblock %}
+{% block conteudo %}
+<h1>Senha alterada</h1>
+<div class="card-glass" style="max-width: 480px;">
+    <p>Sua senha foi alterada com sucesso.</p>
+    <a class="btn-futurista" href="{% url 'accounts:minha_conta' %}">Voltar para Minha Conta</a>
+</div>
+{% endblock %}

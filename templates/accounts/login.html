@@ -23,6 +23,7 @@
             <button type="submit" class="btn-futurista" style="margin-top: 1.4rem; width: 100%;">Entrar</button>
         </form>
 
+        <a class="link-secundario" href="{% url 'accounts:senha_esqueci' %}">Esqueci minha senha</a>
         {% if cadastro_publico %}<a class="link-secundario" href="{% url 'accounts:cadastro' %}">Ainda não tem conta? Cadastre-se</a>{% endif %}
     </div>
 </div>

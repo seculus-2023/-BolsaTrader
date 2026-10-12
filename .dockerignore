@@ -27,3 +27,7 @@ README.md
 .idea/
 .DS_Store
 Thumbs.db
+
+# Logs e backups locais
+logs/
+backups/

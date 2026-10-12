@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block titulo %}Alterar senha - BolsaTrader{% endblock %}
+{% block conteudo %}
+<h1>Alterar senha</h1>
+<div class="card-glass" style="max-width: 480px;">
+    <form method="post" class="form-futurista">
+        {% csrf_token %}
+        {% include "accounts/_form_campos.html" %}
+        <button type="submit" class="btn-futurista" style="margin-top: 1.4rem;">Salvar senha nova</button>
+        <a class="btn-futurista btn-secundario" style="margin-top: 1.4rem;" href="{% url 'accounts:minha_conta' %}">Cancelar</a>
+    </form>
+</div>
+{% endblock %}

@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block titulo %}Nova senha - BolsaTrader{% endblock %}
+{% block conteudo %}
+<div class="tela-auth">
+    <div class="auth-box card-glass">
+        <div class="logo">⚡ BOLSATRADER</div>
+        {% if validlink %}
+        <p class="subtitulo">Escolha a sua senha nova.</p>
+        <form method="post" class="form-futurista">
+            {% csrf_token %}
+            {% include "accounts/_form_campos.html" %}
+            <button type="submit" class="btn-futurista" style="margin-top: 1.4rem; width: 100%;">Salvar senha nova</button>
+        </form>
+        {% else %}
+        <p class="subtitulo">Este link é inválido ou já expirou (vale por 2 horas e só pode ser usado uma vez).</p>
+        <a class="link-secundario" href="{% url 'accounts:senha_esqueci' %}">Pedir um link novo</a>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

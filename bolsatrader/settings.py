@@ -42,7 +42,7 @@ SECRET_KEY = config(
     default="django-insecure-troque-esta-chave-em-producao-0000000000",
 )
 
-DEBUG = False
+DEBUG = config("DEBUG", default=False, cast=bool)
 
 # "manage.py test" usa HTTP simples e não roda collectstatic - fica de fora do
 # redirecionamento HTTPS e do manifest de estáticos abaixo

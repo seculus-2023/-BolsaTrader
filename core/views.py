@@ -124,7 +124,6 @@ from .services import (
     resumir_backtests,
     calcular_risco_compra,
     atualizar_fundamentos,
-    tickers_da_carteira,
     FUNDAMENTOS_MAX_TICKERS_POR_CONSULTA,
     FUNDAMENTOS_VALIDADE_DIAS,
     BACKTEST_MINIMO_SINAIS_CONFIAVEL,
@@ -462,7 +461,14 @@ def qualidade_empresas(request):
     usuário quiser avaliar antes de comprar. GET só mostra o que já está
     salvo (sem chamar a API); os POSTs buscam o que estiver desatualizado.
     """
-    carteira = tickers_da_carteira(request.user)
+    # situação de cada ativo em carteira: comprado de fato, reservado à mão ou reservado pelo robô
+    situacoes = {}
+    for p in calcular_posicoes(request.user):
+        if p.quantidade > 0:
+            situacoes[p.ativo.ticker] = "Comprada"
+        elif p.quantidade_reservada > 0:
+            situacoes[p.ativo.ticker] = "Reservada pelo robô" if p.reserva_do_robo else "Reservada"
+    carteira = sorted(situacoes)
     consultados = request.session.get(_SESSAO_FUNDAMENTOS, [])
 
     if request.method == "POST":
@@ -501,7 +507,10 @@ def qualidade_empresas(request):
 
     salvos = {f.ticker: f for f in FundamentosAtivo.objects.filter(ticker__in=set(carteira) | set(consultados))}
     linhas = [
-        {"ticker": ticker, "na_carteira": ticker in carteira, "fundamentos": salvos.get(ticker)}
+        {
+            "ticker": ticker, "na_carteira": ticker in situacoes, "situacao": situacoes.get(ticker),
+            "fundamentos": salvos.get(ticker),
+        }
         for ticker in dict.fromkeys(carteira + consultados)
     ]
     # melhores primeiro; sem nota no fim

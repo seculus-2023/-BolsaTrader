@@ -13,7 +13,7 @@ informe o caminho em PG_DUMP no .env.
 No Windows, agende com o Agendador de Tarefas (uma vez por dia); no Docker,
 o serviço "backup" do docker-compose.yml já faz isso sozinho.
 
-Para restaurar (num banco vazio):
+Para restaurar: restore.bat (ou "python manage.py restaurar_banco"), ou num banco vazio:
     gunzip -c bolsatrader_AAAAMMDD_HHMMSS.sql.gz | psql -U postgres -d bolsatrader
 """
 

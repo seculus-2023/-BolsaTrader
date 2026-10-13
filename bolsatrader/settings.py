@@ -437,3 +437,5 @@ BACKUP_MANTER = config("BACKUP_MANTER", default=14, cast=int)
 # caminho do pg_dump, se não estiver no PATH (ex. Windows:
 # C:\Program Files\PostgreSQL\17\bin\pg_dump.exe)
 PG_DUMP = config("PG_DUMP", default="pg_dump")
+# psql usado pelo "restaurar_banco"; padrão: o que fica ao lado do PG_DUMP
+PG_PSQL = config("PG_PSQL", default="") or str(Path(PG_DUMP).with_name("psql.exe" if PG_DUMP.lower().endswith(".exe") else "psql"))

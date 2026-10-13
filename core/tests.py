@@ -644,6 +644,58 @@ class BackupBancoCommandTests(TestCase):
                 call_command("backup_banco", "--pasta", str(self.pasta), stdout=StringIO())
 
 
+class RestaurarBancoCommandTests(TestCase):
+    """Comando restaurar_banco: manda o backup mais recente ao psql, pede confirmação e acusa falhas."""
+
+    def setUp(self):
+        import gzip
+        import tempfile
+        self.pasta = Path(tempfile.mkdtemp())
+        for nome, conteudo in [("bolsatrader_20200101_000000.sql.gz", b"-- antigo"),
+                               ("bolsatrader_20200102_000000.sql.gz", b"-- recente")]:
+            with gzip.open(self.pasta / nome, "wb") as arquivo:
+                arquivo.write(conteudo)
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.pasta, ignore_errors=True)
+
+    def _psql_falso(self, codigo=0):
+        import io
+        processo = MagicMock()
+        processo.stdin = io.BytesIO()
+        processo.stdin.close = lambda: None  # mantém o conteúdo legível no teste
+        processo.wait.return_value = codigo
+        return processo
+
+    def test_restaura_o_mais_recente_limpando_o_schema(self):
+        psql = self._psql_falso()
+        with patch("core.management.commands.restaurar_banco.subprocess.Popen", return_value=psql) as popen:
+            call_command("restaurar_banco", "--pasta", str(self.pasta), "--sim", stdout=StringIO())
+        enviado = psql.stdin.getvalue()
+        self.assertTrue(enviado.startswith(b"DROP SCHEMA IF EXISTS public CASCADE;"))
+        self.assertTrue(enviado.endswith(b"-- recente"))
+        self.assertIn("--single-transaction", popen.call_args.args[0])
+
+    def test_sem_confirmacao_nao_chama_o_psql(self):
+        with patch("core.management.commands.restaurar_banco.subprocess.Popen") as popen, \
+                patch("builtins.input", return_value="nao"):
+            with self.assertRaises(CommandError):
+                call_command("restaurar_banco", "--pasta", str(self.pasta), stdout=StringIO())
+        popen.assert_not_called()
+
+    def test_falha_do_psql_vira_erro(self):
+        with patch("core.management.commands.restaurar_banco.subprocess.Popen",
+                   return_value=self._psql_falso(codigo=3)):
+            with self.assertRaises(CommandError):
+                call_command("restaurar_banco", "--pasta", str(self.pasta), "--sim", stdout=StringIO())
+
+    def test_psql_ausente_explica_como_resolver(self):
+        with patch("core.management.commands.restaurar_banco.subprocess.Popen", side_effect=FileNotFoundError):
+            with self.assertRaisesMessage(CommandError, "PG_PSQL"):
+                call_command("restaurar_banco", "--pasta", str(self.pasta), "--sim", stdout=StringIO())
+
+
 class AcoesQueAlteramDadosExigemPostTests(TestCase):
     """Atualizar cotações/notícias/ações da B3/cripto e marcar alerta como lido não aceitam GET (CSRF)."""
 

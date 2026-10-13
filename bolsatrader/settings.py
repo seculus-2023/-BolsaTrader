@@ -10,7 +10,7 @@ import os
 import sys
 from pathlib import Path
 from dotenv import load_dotenv
-from decouple import config, Csv
+from decouple import config
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(BASE_DIR / ".env")
@@ -42,19 +42,26 @@ SECRET_KEY = config(
     default="django-insecure-troque-esta-chave-em-producao-0000000000",
 )
 
-DEBUG = config("DEBUG", default=True, cast=bool)
+DEBUG = False
 
-ALLOWED_HOSTS = config(
-    "ALLOWED_HOSTS",
-    default="127.0.0.1,localhost,bolsatrader.com.br,www.bolsatrader.com.br",
-    cast=Csv(),
-)
+# "manage.py test" usa HTTP simples e não roda collectstatic - fica de fora do
+# redirecionamento HTTPS e do manifest de estáticos abaixo
+EM_TESTE = "test" in sys.argv[1:2]
 
-CSRF_TRUSTED_ORIGINS = config(
-    "CSRF_TRUSTED_ORIGINS",
-    default="https://bolsatrader.com.br,https://www.bolsatrader.com.br",
-    cast=Csv(),
-)
+ALLOWED_HOSTS = [
+    "127.0.0.1",
+    "localhost",
+    "24.152.36.103",
+    "bolsatrader.com.br",
+    "www.bolsatrader.com.br",
+    "bolsatrader.duckdns.org",
+]
+
+CSRF_TRUSTED_ORIGINS = [
+    "https://bolsatrader.com.br",
+    "https://www.bolsatrader.com.br",
+    "https://bolsatrader.duckdns.org",
+]
 
 # Nomes de cookie próprios: o navegador não separa cookies por porta, então
 # outros projetos Django rodando em localhost (sessionid/csrftoken padrão)
@@ -66,9 +73,12 @@ CSRF_COOKIE_NAME = "bolsatrader_csrftoken"
 # HTTPS em produção - o Service Worker do PWA (ver static/js/service-worker-
 # source.js) só registra em conexões HTTPS ou em localhost, então sem isso o
 # app não fica instalável nem funciona offline em produção. Só entra em vigor
-# com DEBUG=False, pra não quebrar o runserver local (HTTP simples).
+# com DEBUG=False, pra não quebrar o runserver local (HTTP simples). Servindo
+# só por HTTP (ex: runserver sem proxy HTTPS na frente), ponha USAR_HTTPS=False
+# no .env - senão o redirect e os cookies "Secure" impedem até o login.
 # --------------------------------------------------------------------------
-if not DEBUG:
+USAR_HTTPS = config("USAR_HTTPS", default=True, cast=bool)
+if not DEBUG and not EM_TESTE and USAR_HTTPS:
     SECURE_SSL_REDIRECT = config("SECURE_SSL_REDIRECT", default=True, cast=bool)
     # healthcheck interno do Docker chama /saude/ por HTTP, dentro do container
     SECURE_REDIRECT_EXEMPT = [r"^saude/$"]
@@ -190,7 +200,7 @@ STORAGES = {
     "default": {"BACKEND": "django.core.files.storage.FileSystemStorage"},
     "staticfiles": {
         "BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage"
-        if not DEBUG
+        if not DEBUG and not EM_TESTE
         else "django.contrib.staticfiles.storage.StaticFilesStorage"
     },
 }
@@ -373,7 +383,7 @@ OPENAI_MODEL = config("OPENAI_MODEL", default="gpt-4o-mini")
 LOG_NIVEL = config("LOG_NIVEL", default="INFO").upper()
 LOG_ARQUIVO = config("LOG_ARQUIVO", default=str(BASE_DIR / "logs" / "bolsatrader.log"))
 # a suíte de testes provoca erros de propósito - não mistura isso no log real
-if "test" in sys.argv[1:2]:
+if EM_TESTE:
     LOG_ARQUIVO = ""
 
 _handlers_log = ["console"]

@@ -26,7 +26,7 @@
             <input type="hidden" name="acao" value="carteira">
             <button type="submit" class="btn-futurista btn-secundario btn-atualizar-cotacoes" data-overlay-texto="Buscando balanços da carteira...">🔄 Avaliar minha carteira</button>
         </form>
-        {% if tem_consultados %}
+        {% if linhas %}
         <form method="post" class="form-acao-inline">
             {% csrf_token %}
             <input type="hidden" name="acao" value="limpar">
@@ -56,6 +56,7 @@
         <tr>
             <td>
                 <strong>{{ linha.ticker }}</strong>
+                {% if linha.consultada %}<small class="badge-tendencia badge-neutro" style="margin-left: .3rem;">🔎 Consultada</small>{% endif %}
                 {% if linha.situacao %}<small class="badge-tendencia {% if linha.situacao == 'Comprada' %}badge-alta{% else %}badge-neutro{% endif %}" style="margin-left: .3rem;">{% if linha.situacao == 'Reservada pelo robô' %}🤖 {% endif %}{{ linha.situacao }}</small>{% endif %}
                 {% if f %}<br><small style="color: var(--text-dim);">{{ f.nome|truncatechars:30 }}{% if f.setor %} &middot; {{ f.setor }}{% endif %}</small>{% endif %}
             </td>
@@ -107,7 +108,11 @@
 </p>
 {% else %}
 <div class="card-glass">
+    {% if carteira_oculta %}
+    <p style="color: var(--text-dim);">Consultas limpas &mdash; digite um ticker acima para avaliar, ou clique em "Avaliar minha carteira" para ver as ações da carteira de novo.</p>
+    {% else %}
     <p style="color: var(--text-dim);">Sem ações na carteira nem consultas ainda &mdash; digite um ticker acima para avaliar.</p>
+    {% endif %}
 </div>
 {% endif %}
 {% endblock %}

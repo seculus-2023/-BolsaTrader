@@ -451,6 +451,8 @@ def operacao_nova(request):
 
 
 _SESSAO_FUNDAMENTOS = "fundamentos_consultados"
+# "Limpar consultas" esconde também as ações da carteira, até o próximo "Avaliar minha carteira"
+_SESSAO_FUNDAMENTOS_OCULTAR_CARTEIRA = "fundamentos_ocultar_carteira"
 
 
 @login_required
@@ -475,6 +477,7 @@ def qualidade_empresas(request):
         acao = request.POST.get("acao")
         if acao == "limpar":
             request.session[_SESSAO_FUNDAMENTOS] = []
+            request.session[_SESSAO_FUNDAMENTOS_OCULTAR_CARTEIRA] = True
             return redirect("core:qualidade_empresas")
         if acao == "avaliar":
             pedidos = [t.strip().upper() for t in re.split(r"[\s,;]+", request.POST.get("tickers", "")) if t.strip()]
@@ -489,6 +492,7 @@ def qualidade_empresas(request):
                 pedidos = pedidos[:FUNDAMENTOS_MAX_TICKERS_POR_CONSULTA]
         else:  # "carteira": atualiza a nota das ações em carteira
             pedidos = carteira
+            request.session[_SESSAO_FUNDAMENTOS_OCULTAR_CARTEIRA] = False
 
         avaliados, falhas = [], []
         for ticker in pedidos:
@@ -498,30 +502,41 @@ def qualidade_empresas(request):
             except BrapiError as exc:
                 falhas.append(f"{ticker}: {exc}")
         if acao == "avaliar":
-            request.session[_SESSAO_FUNDAMENTOS] = list(dict.fromkeys(consultados + avaliados))[-30:]
+            # mais recentes primeiro, pra a consulta aparecer no topo da tabela
+            request.session[_SESSAO_FUNDAMENTOS] = list(dict.fromkeys(avaliados[::-1] + consultados))[:30]
         if avaliados:
             messages.success(request, f"{len(avaliados)} ação(ões) avaliada(s).")
         for falha in falhas:
             messages.warning(request, falha)
         return redirect("core:qualidade_empresas")
 
+    if request.session.get(_SESSAO_FUNDAMENTOS_OCULTAR_CARTEIRA):
+        carteira = []
     salvos = {f.ticker: f for f in FundamentosAtivo.objects.filter(ticker__in=set(carteira) | set(consultados))}
-    linhas = [
+    # consultas no topo (mais recente primeiro); depois a carteira, melhores
+    # notas primeiro e sem nota no fim
+    linhas_carteira = [
         {
-            "ticker": ticker, "na_carteira": ticker in situacoes, "situacao": situacoes.get(ticker),
+            "ticker": ticker, "na_carteira": True, "situacao": situacoes.get(ticker),
             "fundamentos": salvos.get(ticker),
         }
-        for ticker in dict.fromkeys(carteira + consultados)
+        for ticker in carteira if ticker not in consultados
     ]
-    # melhores primeiro; sem nota no fim
-    linhas.sort(key=lambda l: (
+    linhas_carteira.sort(key=lambda l: (
         l["fundamentos"] is None or l["fundamentos"].nota is None,
         -(l["fundamentos"].nota if l["fundamentos"] and l["fundamentos"].nota is not None else 0),
         l["ticker"],
     ))
+    linhas = [
+        {
+            "ticker": ticker, "na_carteira": ticker in situacoes, "situacao": situacoes.get(ticker),
+            "fundamentos": salvos.get(ticker), "consultada": True,
+        }
+        for ticker in consultados
+    ] + linhas_carteira
     return render(request, "core/qualidade_empresas.html", {
         "linhas": linhas,
-        "tem_consultados": bool(consultados),
+        "carteira_oculta": bool(request.session.get(_SESSAO_FUNDAMENTOS_OCULTAR_CARTEIRA)),
         "carteira_sem_nota": any(l["na_carteira"] and not l["fundamentos"] for l in linhas),
         "validade_dias": FUNDAMENTOS_VALIDADE_DIAS,
         "max_tickers": FUNDAMENTOS_MAX_TICKERS_POR_CONSULTA,

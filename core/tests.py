@@ -7023,3 +7023,63 @@ class FatiasRoscaCarteiraTest(TestCase):
         self.assertEqual(len(fatias), 6)
         self.assertEqual(fatias[-1]["rotulo"], "Outros (4)")
         self.assertEqual(fatias[-1]["percentual_texto"], "40,00")
+
+
+class AnaliseCarteiraTests(TestCase):
+    """Aba "Análise da carteira" da tela Posições: análise local na hora e IA por fetch, com cache na sessão."""
+
+    def setUp(self):
+        self.usuario = User.objects.create_user(username="investidor_analise", password="SenhaForte123!")
+        self.client.force_login(self.usuario)
+        self.ativo = Ativo.objects.create(ticker="PETR4", nome="Petrobras", setor="Petróleo")
+        Operacao.objects.create(
+            usuario=self.usuario, ativo=self.ativo, tipo=Operacao.COMPRA,
+            quantidade=10, preco_unitario=Decimal("20.00"), data_operacao=date.today(),
+            meta_lucro_pct=Decimal("5.0"), meta_perda_pct=Decimal("-5.0"),
+        )
+        Cotacao.objects.create(ativo=self.ativo, data=date.today(), preco_fechamento=Decimal("18.00"))  # -10%
+
+    def _resposta_ia(self, texto):
+        return Mock(status_code=200, raise_for_status=Mock(), json=Mock(return_value={"choices": [{"message": {"content": texto}}]}))
+
+    def test_analise_local_marca_stop_atingido(self):
+        analise = core_services.analisar_carteira_comprada(core_services.calcular_posicoes(self.usuario))
+        self.assertEqual(analise["total"], 1)
+        self.assertEqual(analise["ativos"][0]["recomendacao"], "STOP")
+        self.assertEqual(analise["em_perda"], 1)
+        self.assertTrue(any("stop" in t for t in analise["pontos_atencao"]))
+
+    def test_sem_compras_nao_ha_analise(self):
+        Operacao.objects.all().delete()
+        self.assertIsNone(core_services.analisar_carteira_comprada(core_services.calcular_posicoes(self.usuario)))
+
+    def test_tela_mostra_aba_antes_da_concentracao(self):
+        html = self.client.get(reverse("core:posicoes")).content.decode()
+        self.assertIn("Análise da carteira", html)
+        self.assertLess(html.index("painel-analise-carteira"), html.index('data-alvo="painel-concentracao-setor"'))
+
+    def test_parser_separa_carteira_ativos_e_dicas(self):
+        r = core_services._parsear_analise_carteira_ia(
+            "CARTEIRA|ATENÇÃO|Carteira concentrada.\nPETR4|REDUZIR|Passou do stop.\nDICA|MANTER|Diversifique.\nlixo"
+        )
+        self.assertEqual(r["carteira"]["acao"], "ATENCAO")
+        self.assertEqual(r["ativos"][0]["chave"], "PETR4")
+        self.assertEqual(len(r["dicas"]), 1)
+
+    @override_settings(OPENAI_API_KEY="chave-teste")
+    @patch("core.services.requests.post")
+    def test_ia_usa_cache_ao_abrir_e_botao_forca_nova(self, mock_post):
+        mock_post.return_value = self._resposta_ia("CARTEIRA|ATENCAO|Diagnóstico.\nPETR4|REDUZIR|Abaixo do stop.")
+        url = reverse("core:posicoes_analise_ia")
+
+        primeira = self.client.post(url).json()["html"]
+        self.assertIn("Abaixo do stop.", primeira)
+        self.client.post(url)  # abrir de novo: reaproveita
+        self.assertEqual(mock_post.call_count, 1)
+        self.client.post(url, {"forcar": "1"})  # botão "Analisar agora"
+        self.assertEqual(mock_post.call_count, 2)
+
+    @override_settings(OPENAI_API_KEY="")
+    def test_ia_nao_configurada_mostra_aviso(self):
+        html = self.client.post(reverse("core:posicoes_analise_ia")).json()["html"]
+        self.assertIn("não está configurada", html)

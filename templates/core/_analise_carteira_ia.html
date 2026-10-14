@@ -1,0 +1,42 @@
+{% if erro_ia %}
+<p style="color: var(--text-dim); margin: 0;">{{ erro_ia }}</p>
+{% elif analise_ia %}
+<p style="color: var(--text-dim); font-size: .8rem; margin: 0 0 .8rem;">
+    Gerada às {{ gerada_em|date:"H:i" }} de {{ gerada_em|date:"d/m/Y" }}{% if do_cache %} (reaproveitada &mdash; clique em "Analisar agora" para uma nova){% endif %}.
+</p>
+{% if analise_ia.carteira or analise_ia.ativos or analise_ia.dicas %}
+{% if analise_ia.carteira %}
+<p style="margin: 0 0 1rem;">
+    <span class="badge-tendencia badge-{{ analise_ia.carteira.acao_classe }}">{{ analise_ia.carteira.acao }}</span>
+    {{ analise_ia.carteira.comentario }}
+</p>
+{% endif %}
+{% if analise_ia.ativos %}
+<div class="tabela-scroll">
+<table class="tabela-futurista">
+    <thead><tr><th>Ativo</th><th>Leitura da IA</th><th>Comentário</th></tr></thead>
+    <tbody>
+        {% for linha in analise_ia.ativos %}
+        <tr>
+            <td><strong>{{ linha.chave }}</strong></td>
+            <td><span class="badge-tendencia badge-{{ linha.acao_classe }}">{{ linha.acao }}</span></td>
+            <td>{{ linha.comentario }}</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+</div>
+{% endif %}
+{% if analise_ia.dicas %}
+<h3 style="margin-top: 1.2rem;">Próximos passos sugeridos</h3>
+<ul style="margin: .4rem 0 0; padding-left: 1.2rem;">
+    {% for dica in analise_ia.dicas %}<li style="margin-bottom: .3rem;">{{ dica.comentario }}</li>{% endfor %}
+</ul>
+{% endif %}
+{% else %}
+<p style="color: var(--text-dim); white-space: pre-line;">{{ analise_ia.texto }}</p>
+{% endif %}
+<p style="color: var(--text-dim); font-size: .8rem; margin: .8rem 0 0;">
+    A IA só comenta os números calculados pelo sistema acima. Não é recomendação de investimento.
+</p>
+{% endif %}

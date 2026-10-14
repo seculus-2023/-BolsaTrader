@@ -4,6 +4,7 @@ import hmac
 import json
 import logging
 import re
+from datetime import timedelta
 from decimal import Decimal
 
 from django.conf import settings
@@ -12,6 +13,7 @@ from django.contrib.auth.decorators import login_required
 from django.db.models import Max
 from django.http import HttpResponse, HttpResponseNotAllowed, JsonResponse
 from django.shortcuts import render, redirect, get_object_or_404
+from django.template.loader import render_to_string
 from django.urls import reverse
 from django.utils import timezone
 from django.utils.dateparse import parse_date, parse_datetime
@@ -116,6 +118,8 @@ from .services import (
     gerar_excel_scanner_e_analise_ia,
     gerar_pdf_scanner_e_analise_ia,
     gerar_sugestoes_ia,
+    analisar_carteira_comprada,
+    gerar_analise_carteira_ia,
     MOEDAS_CRIPTO_SUGERIDAS,
     calcular_posicoes_cripto, totais_posicoes_cripto,
     atualizar_cotacoes_cripto_ativos,
@@ -726,6 +730,9 @@ def posicoes(request):
     posicoes_reservadas.sort(key=_ordem_variacao_reserva)
     posicoes_reservadas_robo.sort(key=_ordem_variacao_reserva)
     metricas_risco = calcular_metricas_risco(lista_posicoes)
+    concentracao_setor = calcular_concentracao_setor(lista_posicoes)
+    correlacao_e_estresse = calcular_correlacao_e_estresse(lista_posicoes)
+    comparativo_benchmark = calcular_comparativo_benchmark(request.user, posicoes=lista_posicoes)
 
     contexto = {
         "posicoes": lista_posicoes,
@@ -738,11 +745,18 @@ def posicoes(request):
         "valor_atual_total": valor_atual_total,
         "lucro_perda_total": lucro_perda_total,
         "lucro_perda_pct_total": lucro_perda_pct_total,
-        "concentracao_setor": calcular_concentracao_setor(lista_posicoes),
+        "concentracao_setor": concentracao_setor,
         "metricas_risco": metricas_risco,
         "fatias_carteira": _fatias_rosca_carteira(metricas_risco["por_ativo"]),
-        **calcular_correlacao_e_estresse(lista_posicoes),
-        "comparativo_benchmark": calcular_comparativo_benchmark(request.user, posicoes=lista_posicoes),
+        **correlacao_e_estresse,
+        "comparativo_benchmark": comparativo_benchmark,
+        # aba "Análise da carteira": análise local na hora; a da IA vem por
+        # fetch depois que a tela abre (ver posicoes_analise_ia)
+        "analise_carteira": analisar_carteira_comprada(
+            lista_posicoes, metricas_risco, concentracao_setor,
+            comparativo_benchmark=comparativo_benchmark, **correlacao_e_estresse,
+        ),
+        "ia_configurada": ia_configurada(),
         # usado pela caixa "Pesquisar ativo" (situação de cada ticker na carteira)
         "situacao_ativos": [
             {
@@ -764,6 +778,58 @@ def posicoes(request):
     }
     contexto.update(_contexto_historico_atualizacoes(request.user, limite=20))
     return render(request, "core/posicoes.html", contexto)
+
+
+_SESSAO_ANALISE_CARTEIRA_IA = "analise_carteira_ia"
+ANALISE_CARTEIRA_IA_VALIDADE_MINUTOS = 30
+
+
+@login_required
+@require_POST
+def posicoes_analise_ia(request):
+    """
+    Análise da carteira por IA (aba "Análise da carteira" da tela Posições):
+    chamada por fetch assim que a tela abre e pelo botão "Analisar agora".
+    Ao abrir, reaproveita a última análise da sessão por até
+    ANALISE_CARTEIRA_IA_VALIDADE_MINUTOS (a tela recarrega sozinha a cada
+    atualização de cotações - sem isso, cada recarga gastaria uma consulta à
+    IA) desde que os ativos comprados sejam os mesmos; "forcar=1" (o botão)
+    sempre consulta de novo. Devolve {"html": ...} com o trecho pronto.
+    """
+    lista_posicoes = calcular_posicoes(request.user)
+    tickers = sorted(p.ativo.ticker for p in lista_posicoes if not p.apenas_reservado and p.quantidade > 0)
+    contexto = {"analise_ia": None, "erro_ia": None, "gerada_em": None, "do_cache": False}
+
+    guardada = request.session.get(_SESSAO_ANALISE_CARTEIRA_IA)
+    gerada_em = parse_datetime(guardada["gerada_em"]) if guardada else None
+    if (
+        guardada and request.POST.get("forcar") != "1" and guardada.get("tickers") == tickers and gerada_em
+        and timezone.now() - gerada_em < timedelta(minutes=ANALISE_CARTEIRA_IA_VALIDADE_MINUTOS)
+    ):
+        contexto.update(analise_ia=guardada["resultado"], gerada_em=gerada_em, do_cache=True)
+    else:
+        metricas_risco = calcular_metricas_risco(lista_posicoes)
+        analise = analisar_carteira_comprada(
+            lista_posicoes, metricas_risco, calcular_concentracao_setor(lista_posicoes),
+            comparativo_benchmark=calcular_comparativo_benchmark(request.user, posicoes=lista_posicoes),
+            **calcular_correlacao_e_estresse(lista_posicoes),
+        )
+        if analise is None:
+            contexto["erro_ia"] = "Nenhuma ação comprada para analisar."
+        else:
+            try:
+                resultado = gerar_analise_carteira_ia(analise)
+            except IAError as exc:
+                contexto["erro_ia"] = str(exc)
+            else:
+                agora = timezone.now()
+                request.session[_SESSAO_ANALISE_CARTEIRA_IA] = {
+                    "gerada_em": agora.isoformat(), "tickers": tickers, "resultado": resultado,
+                }
+                contexto.update(analise_ia=resultado, gerada_em=agora)
+
+    html = render_to_string("core/_analise_carteira_ia.html", contexto, request=request)
+    return JsonResponse({"html": html})
 
 
 # cores das fatias (validadas contra o fundo escuro dos cards, incluindo

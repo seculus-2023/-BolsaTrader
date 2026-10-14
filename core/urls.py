@@ -21,6 +21,7 @@ urlpatterns = [
     ),
     path("operacoes/<int:operacao_id>/excluir/", views.operacao_excluir, name="operacao_excluir"),
     path("posicoes/", views.posicoes, name="posicoes"),
+    path("posicoes/analise-ia/", views.posicoes_analise_ia, name="posicoes_analise_ia"),
     path("posicoes/exportar/excel/", views.posicoes_exportar_excel, name="posicoes_exportar_excel"),
     path("posicoes/exportar/pdf/", views.posicoes_exportar_pdf, name="posicoes_exportar_pdf"),
     path("scanner-tecnico/", views.scanner_tecnico, name="scanner_tecnico"),

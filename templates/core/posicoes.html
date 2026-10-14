@@ -329,15 +329,107 @@
 </div>
 {% endif %}
 
-{% if concentracao_setor or metricas_risco.por_ativo or comparativo %}
+{% if analise_carteira or concentracao_setor or metricas_risco.por_ativo or comparativo %}
 <div class="grupo-abas" style="margin-top: 1.2rem;">
 <div class="abas-navegacao" role="tablist">
-    <button type="button" class="aba-navegacao ativa" role="tab" aria-selected="true" data-alvo="painel-concentracao-setor">Concentração por setor</button>
+    {% if analise_carteira %}
+    <button type="button" class="aba-navegacao ativa" role="tab" aria-selected="true" data-alvo="painel-analise-carteira">🧠 Análise da carteira</button>
+    {% endif %}
+    <button type="button" class="aba-navegacao{% if not analise_carteira %} ativa{% endif %}" role="tab" aria-selected="{% if analise_carteira %}false{% else %}true{% endif %}" data-alvo="painel-concentracao-setor">Concentração por setor</button>
     <button type="button" class="aba-navegacao" role="tab" aria-selected="false" data-alvo="painel-indicadores-risco">Indicadores de risco</button>
     <button type="button" class="aba-navegacao" role="tab" aria-selected="false" data-alvo="painel-comparativo-historico">Valor de compra x valor atual (histórico)</button>
 </div>
 
-<div class="painel-abas" id="painel-concentracao-setor" role="tabpanel">
+{% if analise_carteira %}
+<div class="painel-abas" id="painel-analise-carteira" role="tabpanel">
+<div class="card-glass">
+    <div style="display: flex; justify-content: space-between; align-items: baseline; flex-wrap: wrap; gap: .6rem;">
+        <h2 style="margin-top: 0;">Análise dos ativos comprados</h2>
+        <span class="badge-tendencia badge-{{ analise_carteira.classe }}" style="font-size: .95rem;">
+            Saúde da carteira: {{ analise_carteira.nota }}/100 &middot; {{ analise_carteira.classificacao }}
+        </span>
+    </div>
+    <p style="color: var(--text-dim); font-size: .85rem; margin-top: -.3rem;">
+        Feita agora, ao abrir a tela, com as cotações e o histórico já salvos: resultado e metas de cada posição,
+        Scanner Técnico, volatilidade, peso na carteira, qualidade fundamentalista, setores, correlação, beta e
+        comparação com Ibovespa/CDI. Não é recomendação de investimento.
+    </p>
+    <div class="grid-stats">
+        <div class="stat-tile"><div class="label">Ativos analisados</div><div class="value">{{ analise_carteira.total }}</div></div>
+        <div class="stat-tile"><div class="label">Em lucro / em prejuízo</div><div class="value"><span class="valor-positivo">{{ analise_carteira.em_lucro }}</span> / <span class="valor-negativo">{{ analise_carteira.em_perda }}</span></div></div>
+        {% if analise_carteira.melhor %}
+        <div class="stat-tile"><div class="label">Melhor posição</div><div class="value valor-positivo">{{ analise_carteira.melhor.ticker }} {{ analise_carteira.melhor.lucro_pct|floatformat:2 }}%</div></div>
+        {% endif %}
+        {% if analise_carteira.pior %}
+        <div class="stat-tile"><div class="label">Pior posição</div><div class="value {% if analise_carteira.pior.lucro_pct < 0 %}valor-negativo{% else %}valor-positivo{% endif %}">{{ analise_carteira.pior.ticker }} {{ analise_carteira.pior.lucro_pct|floatformat:2 }}%</div></div>
+        {% endif %}
+    </div>
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr)); gap: 1rem; margin-top: 1rem;">
+        <div>
+            <h3 style="margin-top: 0; color: var(--neon-green);">✓ Pontos fortes</h3>
+            {% if analise_carteira.pontos_fortes %}
+            <ul style="margin: 0; padding-left: 1.2rem;">{% for t in analise_carteira.pontos_fortes %}<li style="margin-bottom: .3rem;">{{ t }}</li>{% endfor %}</ul>
+            {% else %}<p style="color: var(--text-dim); margin: 0;">Nenhum destaque positivo no momento.</p>{% endif %}
+        </div>
+        <div>
+            <h3 style="margin-top: 0; color: var(--neon-yellow);">⚠ Pontos de atenção</h3>
+            {% if analise_carteira.pontos_atencao %}
+            <ul style="margin: 0; padding-left: 1.2rem;">{% for t in analise_carteira.pontos_atencao %}<li style="margin-bottom: .3rem;">{{ t }}</li>{% endfor %}</ul>
+            {% else %}<p style="color: var(--text-dim); margin: 0;">Nada preocupante encontrado.</p>{% endif %}
+        </div>
+    </div>
+</div>
+
+<div class="card-glass">
+    <h3 style="margin-top: 0;">Ativo por ativo</h3>
+    <div class="tabela-scroll">
+    <table class="tabela-futurista">
+        <thead>
+            <tr>
+                <th>Ativo</th>
+                <th>% da carteira</th>
+                <th>Resultado</th>
+                <th>Scanner</th>
+                <th>Recomendação</th>
+                <th>Por quê</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for a in analise_carteira.ativos %}
+            <tr>
+                <td><strong title="{{ a.nome }}">{{ a.ticker }}</strong>{% if a.setor %}<br><small style="color: var(--text-dim);">{{ a.setor }}</small>{% endif %}</td>
+                <td>{% if a.peso_pct is not None %}{{ a.peso_pct }}%{% else %}&mdash;{% endif %}</td>
+                <td class="{% if a.lucro_pct > 0 %}valor-positivo{% elif a.lucro_pct < 0 %}valor-negativo{% else %}valor-neutro{% endif %}">{% if a.lucro_pct is not None %}{{ a.lucro_pct|floatformat:2 }}%{% else %}&mdash;{% endif %}</td>
+                <td><span class="badge-tendencia badge-{{ a.veredito_classe }}">{{ a.veredito_label }}</span><br><small style="color: var(--text-dim);">{{ a.score }}/100</small></td>
+                <td><span class="badge-tendencia badge-{{ a.recomendacao_classe }}">{{ a.recomendacao_label }}</span></td>
+                <td><ul style="margin: 0; padding-left: 1rem; font-size: .85rem;">{% for m in a.motivos %}<li>{{ m }}</li>{% endfor %}</ul></td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    </div>
+</div>
+
+<div class="card-glass">
+    <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: .6rem;">
+        <h3 style="margin: 0;">🤖 Análise da carteira por IA</h3>
+        <form id="form-analise-carteira-ia" method="post" action="{% url 'core:posicoes_analise_ia' %}" style="margin: 0;">
+            {% csrf_token %}
+            <button type="submit" class="btn-futurista" id="botao-analise-carteira-ia">🔄 Analisar agora</button>
+        </form>
+    </div>
+    <div id="resultado-analise-carteira-ia" aria-live="polite" style="margin-top: .8rem;"{% if ia_configurada %} data-auto="1"{% endif %}>
+        {% if ia_configurada %}
+        <p style="color: var(--text-dim); margin: 0;">⏳ Analisando sua carteira com a IA...</p>
+        {% else %}
+        <p style="color: var(--text-dim); margin: 0;">A análise por IA ainda não está configurada neste sistema (falta a chave de API em OPENAI_API_KEY). A análise acima continua valendo.</p>
+        {% endif %}
+    </div>
+</div>
+</div>
+{% endif %}
+
+<div class="painel-abas" id="painel-concentracao-setor" role="tabpanel"{% if analise_carteira %} hidden{% endif %}>
 <div class="card-glass">
     {% if concentracao_setor %}
     <h2>Concentração por setor</h2>
@@ -678,6 +770,45 @@
                 resultado.appendChild(linha);
             });
         });
+    })();
+</script>
+
+<script>
+    (function () {
+        // Aba "Análise da carteira": a análise da IA roda sozinha quando a
+        // tela abre (o servidor reaproveita a última por até 30 min) e de
+        // novo, sempre consultando a IA, pelo botão "Analisar agora".
+        var form = document.getElementById("form-analise-carteira-ia");
+        if (!form) return;
+        var resultado = document.getElementById("resultado-analise-carteira-ia");
+        var botao = document.getElementById("botao-analise-carteira-ia");
+
+        function analisar(forcar) {
+            var dados = new FormData(form);
+            if (forcar) dados.append("forcar", "1");
+            botao.disabled = true;
+            botao.textContent = "⏳ Analisando...";
+            if (forcar) resultado.innerHTML = '<p style="color: var(--text-dim); margin: 0;">⏳ Analisando sua carteira com a IA...</p>';
+            fetch(form.action, { method: "POST", body: dados, headers: { "X-Requested-With": "XMLHttpRequest" } })
+                .then(function (resposta) {
+                    if (!resposta.ok) throw new Error("HTTP " + resposta.status);
+                    return resposta.json();
+                })
+                .then(function (json) { resultado.innerHTML = json.html; })
+                .catch(function () {
+                    resultado.innerHTML = '<p style="color: var(--text-dim); margin: 0;">Não foi possível consultar a IA agora. Tente novamente em instantes.</p>';
+                })
+                .finally(function () {
+                    botao.disabled = false;
+                    botao.textContent = "🔄 Analisar agora";
+                });
+        }
+
+        form.addEventListener("submit", function (evento) {
+            evento.preventDefault();
+            analisar(true);
+        });
+        if (resultado.dataset.auto) analisar(false);
     })();
 </script>
 

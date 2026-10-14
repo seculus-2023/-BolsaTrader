@@ -4744,6 +4744,309 @@ def gerar_sugestoes_ia(maiores_altas: list[dict], maiores_baixas: list[dict]) ->
 
 
 # --------------------------------------------------------------------------
+# "Análise da carteira" (aba da tela Posições em Carteira)
+#
+# Duas camadas: analisar_carteira_comprada é 100% local (resultado, metas,
+# Scanner Técnico, fundamentos, concentração, correlação, beta, benchmark) e
+# sai na hora em que a tela abre; gerar_analise_carteira_ia manda esse mesmo
+# retrato pra IA comentar - a IA só interpreta, não inventa número nenhum.
+# --------------------------------------------------------------------------
+RECOMENDACOES_CARTEIRA = {
+    "STOP": ("🛑 Stop atingido — revisar", "baixa"),
+    "REALIZAR": ("💰 Meta atingida — realizar lucro", "alta"),
+    "PROTEGER": ("📈 Meta atingida em alta — subir o stop", "alta"),
+    "ATENCAO": ("⚠ Atenção", "neutro"),
+    "MANTER": ("✅ Manter", "alta"),
+    "ACOMPANHAR": ("👀 Acompanhar", "neutro"),
+}
+IA_ACOES_CARTEIRA = {"MANTER": "alta", "AUMENTAR": "alta", "REALIZAR": "neutro", "ATENCAO": "neutro", "REDUZIR": "baixa"}
+
+
+def _recomendacao_posicao(lucro_pct, meta_perda, meta_lucro_atingida: bool, veredito: str, qualidade: str) -> str:
+    """Regra (ordem importa) da recomendação local de cada posição - ver RECOMENDACOES_CARTEIRA."""
+    if lucro_pct is not None and lucro_pct <= meta_perda:
+        return "STOP"
+    if meta_lucro_atingida:
+        return "PROTEGER" if veredito == "PREDOMINIO_ALTA" else "REALIZAR"
+    if veredito == "PREDOMINIO_BAIXA" or (qualidade == "BAIXA" and lucro_pct is not None and lucro_pct < 0):
+        return "ATENCAO"
+    if veredito == "PREDOMINIO_ALTA":
+        return "MANTER"
+    return "ACOMPANHAR"
+
+
+def analisar_carteira_comprada(
+    posicoes: list, metricas_risco: dict | None = None, concentracao_setor: list | None = None,
+    correlacao: dict | None = None, estresse: dict | None = None, comparativo_benchmark: dict | None = None,
+) -> dict | None:
+    """
+    Análise completa das posições compradas (reservas não entram): para cada
+    ativo, resultado, distância até a meta de lucro e até o stop, Scanner
+    Técnico (veredito, pontuação, IFR, suporte/resistência), volatilidade,
+    peso na carteira e nota de qualidade, com uma recomendação e os motivos;
+    para a carteira, uma nota de saúde 0-100 com pontos fortes e de atenção
+    (concentração por ativo/setor, correlação, beta, ativos em baixa ou no
+    stop, comparação com Ibovespa/CDI). Os dicts opcionais são os que a tela
+    já calculou (ver core.views.posicoes) - quando não vêm, são calculados
+    aqui. None se não há nada comprado.
+    """
+    compradas = [p for p in posicoes if not p.apenas_reservado and p.quantidade > 0]
+    if not compradas:
+        return None
+    if metricas_risco is None:
+        metricas_risco = calcular_metricas_risco(posicoes)
+    if concentracao_setor is None:
+        concentracao_setor = calcular_concentracao_setor(posicoes)
+
+    pesos = {i["ativo"].ticker: i for i in metricas_risco["por_ativo"]}
+    fundamentos = {f.ticker: f for f in FundamentosAtivo.objects.filter(ticker__in=[p.ativo.ticker for p in compradas])}
+
+    ativos = []
+    for p in compradas:
+        ticker = p.ativo.ticker
+        scanner = escanear_ativo(p.ativo)
+        score = _score_scanner(scanner)
+        fund = fundamentos.get(ticker)
+        qualidade = fund.classificacao if fund else "SEM_DADOS"
+        risco = pesos.get(ticker, {})
+        peso_pct = float(risco["percentual_carteira"]) if risco.get("percentual_carteira") is not None else None
+        lucro_pct = float(p.lucro_perda_pct) if p.lucro_perda_pct is not None else None
+        meta_lucro = float(abs(p.meta_lucro_pct if p.meta_lucro_pct is not None else Decimal(str(settings.META_LUCRO_PADRAO))))
+        meta_perda = -float(abs(p.meta_perda_pct if p.meta_perda_pct is not None else Decimal(str(settings.META_PERDA_PADRAO))))
+        rsi = scanner.get("rsi")
+        sr = scanner.get("suporte_resistencia") or {}
+
+        motivos = []
+        if lucro_pct is not None:
+            dias = p.dias_desde_compra
+            motivos.append(
+                f"Resultado de {lucro_pct:+.2f}%"
+                + (f" em {dias} dia{'s' if dias != 1 else ''} de carteira" if dias is not None else "")
+                + (f" (R$ {float(p.lucro_perda_valor):+.2f})" if p.lucro_perda_valor is not None else "") + "."
+            )
+            if lucro_pct < meta_lucro:
+                motivos.append(f"Faltam {meta_lucro - lucro_pct:.2f} p.p. para a meta de lucro (+{meta_lucro:g}%).")
+            if lucro_pct > meta_perda:
+                motivos.append(f"Está {lucro_pct - meta_perda:.2f} p.p. acima do stop ({meta_perda:g}%).")
+        else:
+            motivos.append("Sem cotação para apurar o resultado - atualize as cotações.")
+        motivos.append(f"Scanner Técnico: {scanner['veredito_label']} (pontuação {score}/100).")
+        if rsi is not None and rsi >= 70:
+            motivos.append(f"IFR {rsi:.0f}: sobrecomprado - o preço subiu rápido e pode corrigir.")
+        elif rsi is not None and rsi <= 30:
+            motivos.append(f"IFR {rsi:.0f}: sobrevendido - caiu muito em pouco tempo.")
+        if sr.get("suporte") or sr.get("resistencia"):
+            motivos.append(
+                "Suporte " + (f"R$ {sr['suporte']:.2f}" if sr.get("suporte") else "—")
+                + " · resistência " + (f"R$ {sr['resistencia']:.2f}" if sr.get("resistencia") else "—") + "."
+            )
+        if scanner["volatilidade_chave"] == "ALTA":
+            motivos.append(f"Volatilidade alta ({scanner['volatilidade_pct']}% ao ano) - oscila bastante.")
+        if peso_pct is not None and peso_pct >= float(LIMIAR_CONCENTRACAO_ALERTA_PCT):
+            motivos.append(f"Sozinho é {peso_pct:.1f}% da carteira - posição concentrada.")
+        if fund and fund.nota is not None:
+            motivos.append(f"Qualidade fundamentalista {qualidade.lower().replace('media', 'média')} (nota {fund.nota}/10).")
+
+        codigo = _recomendacao_posicao(lucro_pct, meta_perda, p.meta_lucro_atingida, scanner["veredito"], qualidade)
+        label, classe = RECOMENDACOES_CARTEIRA[codigo]
+        ativos.append({
+            "ticker": ticker,
+            "nome": p.ativo.nome or "",
+            "setor": p.ativo.setor or "",
+            "peso_pct": round(peso_pct, 1) if peso_pct is not None else None,
+            "lucro_pct": round(lucro_pct, 2) if lucro_pct is not None else None,
+            "lucro_valor": float(p.lucro_perda_valor) if p.lucro_perda_valor is not None else None,
+            "dias": p.dias_desde_compra,
+            "preco_medio": float(p.preco_medio),
+            "preco_atual": float(p.preco_atual) if p.preco_atual is not None else None,
+            "meta_lucro_pct": meta_lucro,
+            "meta_perda_pct": meta_perda,
+            "veredito": scanner["veredito"],
+            "veredito_label": scanner["veredito_label"],
+            "veredito_classe": scanner["veredito_classe"],
+            "score": score,
+            "rsi": round(rsi, 1) if rsi is not None else None,
+            "volatilidade_pct": scanner["volatilidade_pct"],
+            "nota_qualidade": float(fund.nota) if fund and fund.nota is not None else None,
+            "recomendacao": codigo,
+            "recomendacao_label": label,
+            "recomendacao_classe": classe,
+            "motivos": motivos,
+        })
+    ativos.sort(key=lambda a: a["peso_pct"] or 0, reverse=True)
+
+    # ---- visão da carteira inteira
+    nota, fortes, atencao = 100, [], []
+    com_resultado = [a for a in ativos if a["lucro_pct"] is not None]
+    em_lucro = [a for a in com_resultado if a["lucro_pct"] > 0]
+    em_perda = [a for a in com_resultado if a["lucro_pct"] < 0]
+    if len(ativos) < 3:
+        nota -= 10
+        atencao.append(f"Só {len(ativos)} ativo{'s' if len(ativos) > 1 else ''} comprado{'s' if len(ativos) > 1 else ''}: pouca diversificação.")
+    if metricas_risco.get("concentracao_alta"):
+        nota -= 15
+        atencao.append(f"{metricas_risco['maior_posicao_ativo'].ticker} sozinho é {metricas_risco['maior_posicao_pct']}% da carteira.")
+    setores_altos = [s for s in concentracao_setor if s["setor"] != "Sem setor" and float(s["percentual"]) > settings.LIMITE_SETOR_PCT]
+    if setores_altos:
+        nota -= min(10 * len(setores_altos), 20)
+        atencao.append(
+            "Setor acima do limite recomendado de " + f"{settings.LIMITE_SETOR_PCT:g}%: "
+            + ", ".join(f"{s['setor']} ({s['percentual']}%)" for s in setores_altos) + "."
+        )
+    elif len([s for s in concentracao_setor if s["setor"] != "Sem setor"]) >= 3:
+        fortes.append(f"Carteira espalhada em {len(concentracao_setor)} setores, nenhum acima de {settings.LIMITE_SETOR_PCT:g}%.")
+    if correlacao and correlacao.get("pares_altos"):
+        nota -= min(5 * len(correlacao["pares_altos"]), 15)
+        atencao.append(
+            "Ativos que andam muito juntos (não diversificam entre si): "
+            + ", ".join(f"{par['a']} & {par['b']} ({par['valor']})" for par in correlacao["pares_altos"][:4]) + "."
+        )
+    elif correlacao:
+        fortes.append(f"Nenhum par de ativos com correlação alta (média da carteira {correlacao['media']}).")
+    beta = estresse.get("beta_carteira") if estresse else None
+    if beta is not None and beta > 1.2:
+        nota -= 10
+        atencao.append(f"Beta {beta}: a carteira tende a cair mais que o Ibovespa nas quedas.")
+    elif beta is not None and beta < 0.9:
+        fortes.append(f"Beta {beta}: a carteira tende a oscilar menos que o Ibovespa.")
+    em_baixa = [a for a in ativos if a["veredito"] == "PREDOMINIO_BAIXA"]
+    if em_baixa:
+        nota -= round(20 * len(em_baixa) / len(ativos))
+        atencao.append("Scanner Técnico com predomínio de baixa em: " + ", ".join(a["ticker"] for a in em_baixa) + ".")
+    em_alta = [a for a in ativos if a["veredito"] == "PREDOMINIO_ALTA"]
+    if em_alta:
+        fortes.append("Scanner Técnico com predomínio de alta em: " + ", ".join(a["ticker"] for a in em_alta) + ".")
+    no_stop = [a for a in ativos if a["recomendacao"] == "STOP"]
+    if no_stop:
+        nota -= min(10 * len(no_stop), 20)
+        atencao.append("Já passaram do stop: " + ", ".join(f"{a['ticker']} ({a['lucro_pct']:+.2f}%)" for a in no_stop) + ".")
+    na_meta = [a for a in ativos if a["recomendacao"] in ("REALIZAR", "PROTEGER")]
+    if na_meta:
+        fortes.append("Meta de lucro atingida: " + ", ".join(f"{a['ticker']} ({a['lucro_pct']:+.2f}%)" for a in na_meta) + ".")
+    qualidade_baixa = [a for a in ativos if a["nota_qualidade"] is not None and a["nota_qualidade"] < 4]
+    if qualidade_baixa:
+        nota -= 5
+        atencao.append("Qualidade fundamentalista baixa: " + ", ".join(a["ticker"] for a in qualidade_baixa) + ".")
+    if comparativo_benchmark:
+        if comparativo_benchmark.get("retorno_ibovespa_pct") is not None:
+            if comparativo_benchmark.get("carteira_bateu_ibovespa"):
+                fortes.append(f"Carteira ({comparativo_benchmark['retorno_carteira_pct']}%) bateu o Ibovespa ({comparativo_benchmark['retorno_ibovespa_pct']}%) no período.")
+            else:
+                nota -= 5
+                atencao.append(f"Carteira ({comparativo_benchmark['retorno_carteira_pct']}%) abaixo do Ibovespa ({comparativo_benchmark['retorno_ibovespa_pct']}%) no período.")
+        if comparativo_benchmark.get("retorno_cdi_pct") is not None and not comparativo_benchmark.get("carteira_bateu_cdi"):
+            nota -= 5
+            atencao.append(f"Carteira abaixo do CDI ({comparativo_benchmark['retorno_cdi_pct']}%) no período - a renda fixa rendeu mais.")
+    nota = max(0, min(100, nota))
+    if nota >= 75:
+        classificacao, classe = "Saudável", "alta"
+    elif nota >= 50:
+        classificacao, classe = "Atenção moderada", "neutro"
+    else:
+        classificacao, classe = "Precisa de cuidado", "baixa"
+
+    return {
+        "ativos": ativos,
+        "nota": nota,
+        "classificacao": classificacao,
+        "classe": classe,
+        "pontos_fortes": fortes,
+        "pontos_atencao": atencao,
+        "total": len(ativos),
+        "em_lucro": len(em_lucro),
+        "em_perda": len(em_perda),
+        "melhor": max(com_resultado, key=lambda a: a["lucro_pct"]) if com_resultado else None,
+        "pior": min(com_resultado, key=lambda a: a["lucro_pct"]) if com_resultado else None,
+        "beta": beta,
+    }
+
+
+def _prompt_analise_carteira_ia(analise: dict) -> str:
+    """Prompt da "Análise da carteira (IA)": manda o retrato local (ver analisar_carteira_comprada) e pede linhas "CHAVE|ACAO|COMENTARIO"."""
+    def _fmt(valor, sufixo=""):
+        return f"{valor}{sufixo}" if valor is not None else "sem dados"
+
+    linhas_ativos = "\n".join(
+        f"- {a['ticker']} ({a['nome'] or 'sem nome'}, setor {a['setor'] or 'desconhecido'}): "
+        f"{_fmt(a['peso_pct'], '%')} da carteira, resultado {_fmt(a['lucro_pct'], '%')} "
+        f"em {_fmt(a['dias'])} dias, preço médio R$ {a['preco_medio']:.2f}, cotação {_fmt(a['preco_atual'])}, "
+        f"meta +{a['meta_lucro_pct']:g}% / stop {a['meta_perda_pct']:g}%, scanner {a['veredito_label']} "
+        f"({a['score']}/100), IFR {_fmt(a['rsi'])}, volatilidade {_fmt(a['volatilidade_pct'], '% a.a.')}, "
+        f"nota de qualidade {_fmt(a['nota_qualidade'], '/10')}, regra do sistema: {a['recomendacao_label']}"
+        for a in analise["ativos"]
+    )
+    fortes = "\n".join(f"- {t}" for t in analise["pontos_fortes"]) or "- nenhum destacado"
+    atencao = "\n".join(f"- {t}" for t in analise["pontos_atencao"]) or "- nenhum destacado"
+
+    return (
+        "Você é um analista revisando a carteira de ações (B3) de um investidor pessoa física. Use SOMENTE os "
+        "dados abaixo, já calculados pelo sistema - não invente preços, indicadores, notícias nem números que "
+        "não estão aqui.\n\n"
+        f"Nota de saúde da carteira (calculada pelo sistema): {analise['nota']}/100 - {analise['classificacao']}. "
+        f"{analise['em_lucro']} ativo(s) em lucro e {analise['em_perda']} em prejuízo, beta {_fmt(analise['beta'])}.\n\n"
+        f"Ativos comprados:\n{linhas_ativos}\n\n"
+        f"Pontos fortes:\n{fortes}\n\nPontos de atenção:\n{atencao}\n\n"
+        "Responda APENAS com linhas no formato exato abaixo (sem cabeçalho, sem markdown, sem texto antes ou "
+        "depois):\nCHAVE|ACAO|COMENTARIO\n\n"
+        "- Uma linha \"CARTEIRA|ACAO|comentário\" com o diagnóstico geral (até 350 caracteres).\n"
+        "- Uma linha por ativo, com o TICKER como CHAVE, na mesma ordem listada acima (comentário até 220 "
+        "caracteres, citando os dados que justificam).\n"
+        "- De 2 a 4 linhas \"DICA|ACAO|próximo passo prático para a carteira\" (até 200 caracteres).\n"
+        "- ACAO deve ser exatamente uma destas palavras: MANTER, AUMENTAR, REALIZAR, ATENCAO ou REDUZIR.\n"
+        "- Comentários em português, diretos ao ponto.\n"
+        "- Isto não é recomendação de investimento, só uma leitura dos dados apresentados."
+    )
+
+
+def _parsear_analise_carteira_ia(texto: str) -> dict:
+    """Separa a resposta da IA em diagnóstico geral, linhas por ativo e dicas - linha fora do formato é ignorada."""
+    resultado = {"carteira": None, "ativos": [], "dicas": []}
+    for bruta in texto.strip().splitlines():
+        partes = [p.strip().strip("*") for p in bruta.split("|")]
+        if len(partes) != 3:
+            continue
+        chave, acao, comentario = partes
+        acao = unicodedata.normalize("NFKD", acao.upper()).encode("ascii", "ignore").decode()
+        if acao not in IA_ACOES_CARTEIRA or not chave or not comentario:
+            continue
+        linha = {"chave": chave.upper(), "acao": acao, "acao_classe": IA_ACOES_CARTEIRA[acao], "comentario": comentario}
+        if linha["chave"] == "CARTEIRA":
+            resultado["carteira"] = linha
+        elif linha["chave"] == "DICA":
+            resultado["dicas"].append(linha)
+        else:
+            resultado["ativos"].append(linha)
+    return resultado
+
+
+def gerar_analise_carteira_ia(analise: dict) -> dict:
+    """
+    Consulta a IA configurada (ver ia_configurada) pra comentar a análise
+    local da carteira comprada (ver analisar_carteira_comprada) - botão
+    "Analisar agora" da aba Análise da carteira. Levanta IAError nas mesmas
+    condições de gerar_analise_b3_ia.
+    """
+    if not ia_configurada():
+        raise IAError("A Análise da carteira por IA ainda não está configurada neste sistema (falta a chave de API).")
+
+    url = f"{settings.OPENAI_BASE_URL.rstrip('/')}/chat/completions"
+    headers = {"Authorization": f"Bearer {settings.OPENAI_API_KEY}", "Content-Type": "application/json"}
+    payload = {
+        "model": settings.OPENAI_MODEL,
+        "messages": [{"role": "user", "content": _prompt_analise_carteira_ia(analise)}],
+        "temperature": 0.4,
+    }
+    try:
+        resposta = requests.post(url, json=payload, headers=headers, timeout=IA_TIMEOUT_SEGUNDOS)
+        resposta.raise_for_status()
+        texto = resposta.json()["choices"][0]["message"]["content"]
+    except (requests.RequestException, KeyError, IndexError, TypeError, ValueError) as exc:
+        raise IAError("Não foi possível consultar a IA agora. Tente novamente em instantes.") from exc
+
+    return {"texto": texto.strip(), **_parsear_analise_carteira_ia(texto)}
+
+
+# --------------------------------------------------------------------------
 # Notificações pelo Telegram
 # --------------------------------------------------------------------------
 TELEGRAM_TIMEOUT_SEGUNDOS = 10

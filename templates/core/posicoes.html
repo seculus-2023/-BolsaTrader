@@ -93,6 +93,20 @@
 {% endif %}
 
 {% if posicoes %}
+<div class="card-glass" style="margin-top: 1.2rem;">
+    <h2 style="margin-top: 0;">Pesquisar ativo</h2>
+    <form id="form-pesquisa-ativo" style="display: flex; flex-wrap: wrap; gap: .6rem; align-items: center;">
+        <input type="search" id="pesquisa-ativo" list="lista-pesquisa-ativo" placeholder="Ex: EMBJ3" autocomplete="off"
+               aria-label="Ticker do ativo" style="text-transform: uppercase; max-width: 14rem;">
+        <datalist id="lista-pesquisa-ativo">
+            {% for item in situacao_ativos %}<option value="{{ item.ticker }}">{{ item.nome }}</option>{% endfor %}
+        </datalist>
+        <button type="submit" class="btn-futurista">Pesquisar</button>
+    </form>
+    <div id="resultado-pesquisa-ativo" aria-live="polite" data-url-nova-compra="{% url 'core:operacao_nova' %}" style="margin-top: .8rem;"></div>
+</div>
+{{ situacao_ativos|json_script:"dados-situacao-ativos" }}
+
 <div class="grupo-abas">
 <div class="abas-navegacao" role="tablist" style="margin-top: 1.2rem;">
     <button type="button" class="aba-navegacao ativa" role="tab" aria-selected="true" data-alvo="painel-compradas">Compradas ({{ posicoes_compradas|length }})</button>
@@ -586,6 +600,82 @@
                     aba.setAttribute("aria-selected", "true");
                     document.getElementById(aba.dataset.alvo).hidden = false;
                 });
+            });
+        });
+    })();
+</script>
+
+<script>
+    (function () {
+        // Caixa "Pesquisar ativo": diz se o ticker está Comprado, Reservado ou
+        // Reservado pelo Robô e leva até a linha dele na aba correspondente.
+        var form = document.getElementById("form-pesquisa-ativo");
+        if (!form) return;
+        var campo = document.getElementById("pesquisa-ativo");
+        var resultado = document.getElementById("resultado-pesquisa-ativo");
+        var dados = JSON.parse(document.getElementById("dados-situacao-ativos").textContent);
+
+        function irParaLinha(item) {
+            var aba = document.querySelector('.aba-navegacao[data-alvo="' + item.aba + '"]');
+            if (aba) aba.click();
+            var painel = document.getElementById(item.aba);
+            var alvo = Array.prototype.find.call(painel.querySelectorAll("tbody strong"), function (el) {
+                return el.textContent.trim().toUpperCase() === item.ticker.toUpperCase();
+            });
+            if (!alvo) return;
+            var linha = alvo.closest("tr");
+            linha.scrollIntoView({ behavior: "smooth", block: "center" });
+            linha.style.outline = "2px solid var(--neon-cyan, #00e5ff)";
+            setTimeout(function () { linha.style.outline = ""; }, 3000);
+        }
+
+        form.addEventListener("submit", function (evento) {
+            evento.preventDefault();
+            var termo = campo.value.trim().toUpperCase();
+            resultado.textContent = "";
+            if (!termo) return;
+            var achados = dados.filter(function (item) { return item.ticker.toUpperCase() === termo; });
+            if (!achados.length) {
+                achados = dados.filter(function (item) { return item.ticker.toUpperCase().indexOf(termo) !== -1; });
+            }
+            if (!achados.length) {
+                var p = document.createElement("p");
+                p.className = "valor-neutro";
+                p.style.margin = "0";
+                p.textContent = termo + " não está na sua carteira (nem comprado, nem reservado, nem reservado pelo robô).";
+                resultado.appendChild(p);
+                var comprarNovo = document.createElement("a");
+                comprarNovo.className = "btn-futurista";
+                comprarNovo.style.marginTop = ".6rem";
+                comprarNovo.href = resultado.dataset.urlNovaCompra + "?ticker=" + encodeURIComponent(termo) + "&tipo=COMPRA";
+                comprarNovo.textContent = "🛒 Comprar " + termo;
+                resultado.appendChild(comprarNovo);
+                return;
+            }
+            achados.forEach(function (item) {
+                var linha = document.createElement("div");
+                linha.style.cssText = "display: flex; flex-wrap: wrap; gap: .6rem; align-items: center; margin-bottom: .4rem;";
+                var texto = document.createElement("span");
+                texto.innerHTML = "<strong></strong> &mdash; ";
+                texto.querySelector("strong").textContent = item.ticker;
+                var situacao = document.createElement("span");
+                situacao.className = item.situacao === "Comprado" ? "badge-compra" : (item.aba === "painel-reservadas-robo" ? "badge-robo" : "badge-atualizacao");
+                situacao.textContent = (item.aba === "painel-reservadas-robo" ? "🤖 " : "") + item.situacao;
+                texto.appendChild(situacao);
+                var botao = document.createElement("button");
+                botao.type = "button";
+                botao.className = "btn-futurista btn-secundario";
+                botao.textContent = "Ver na aba";
+                botao.addEventListener("click", function () { irParaLinha(item); });
+                var comprar = document.createElement("a");
+                comprar.className = "btn-futurista";
+                comprar.href = item.url_comprar;
+                comprar.textContent = "🛒 Comprar";
+                comprar.title = item.situacao === "Comprado" ? "Registrar nova compra (aumentar posição)" : "Converter a reserva em compra";
+                linha.appendChild(texto);
+                linha.appendChild(botao);
+                linha.appendChild(comprar);
+                resultado.appendChild(linha);
             });
         });
     })();

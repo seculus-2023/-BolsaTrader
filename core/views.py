@@ -12,6 +12,7 @@ from django.contrib.auth.decorators import login_required
 from django.db.models import Max
 from django.http import HttpResponse, HttpResponseNotAllowed, JsonResponse
 from django.shortcuts import render, redirect, get_object_or_404
+from django.urls import reverse
 from django.utils import timezone
 from django.utils.dateparse import parse_date, parse_datetime
 from django.views.decorators.csrf import csrf_exempt
@@ -738,6 +739,24 @@ def posicoes(request):
         "fatias_carteira": _fatias_rosca_carteira(metricas_risco["por_ativo"]),
         **calcular_correlacao_e_estresse(lista_posicoes),
         "comparativo_benchmark": calcular_comparativo_benchmark(request.user, posicoes=lista_posicoes),
+        # usado pela caixa "Pesquisar ativo" (situação de cada ticker na carteira)
+        "situacao_ativos": [
+            {
+                "ticker": p.ativo.ticker, "nome": p.ativo.nome or "", "situacao": situacao, "aba": aba,
+                # reserva: converte a própria reserva em compra; comprado: nova compra (aumentar posição)
+                "url_comprar": (
+                    reverse("core:operacao_comprar", args=[p.reserva_operacao_ids[0]])
+                    if p.apenas_reservado and p.reserva_operacao_ids
+                    else f"{reverse('core:operacao_nova')}?ticker={p.ativo.ticker}&tipo=COMPRA"
+                ),
+            }
+            for grupo, situacao, aba in (
+                (posicoes_compradas, "Comprado", "painel-compradas"),
+                (posicoes_reservadas, "Reservado", "painel-reservadas-pos"),
+                (posicoes_reservadas_robo, "Reservado pelo Robô", "painel-reservadas-robo"),
+            )
+            for p in grupo
+        ],
     }
     contexto.update(_contexto_historico_atualizacoes(request.user, limite=20))
     return render(request, "core/posicoes.html", contexto)

@@ -8,8 +8,8 @@
 // navegadores sem suporte (ex.: Firefox) o botão fica escondido.
 //
 // Modo "sempre ouvindo" (botão 👂, #btn-voz-continua): o microfone fica aberto
-// e só reage à palavra de ativação "Trader", como a Alexa - "Trader, abrir
-// posições" executa direto; "Trader" sozinho abre uma janela de alguns
+// e só reage à palavra de ativação "Isa", como a Alexa - "Isa, abrir
+// posições" executa direto; "Isa" sozinho abre uma janela de alguns
 // segundos para a próxima frase. A escolha fica no localStorage e o modo
 // religa sozinho a cada página. Diferente da Alexa, o áudio vai continuamente
 // para o serviço de reconhecimento do navegador enquanto o modo está ligado.
@@ -138,8 +138,8 @@
             mostrarBalao(
                 "Experimente: \"posições\", \"operações\", \"nova operação\", \"alertas\", " +
                 "\"notícias\", \"conta corrente\", \"cripto\", \"atualizar cotações\", " +
-                "\"cotação de PETR4\", \"voltar\". Com o 👂 ligado, comece com \"Trader\": " +
-                "\"Trader, posições\".",
+                "\"cotação de PETR4\", \"voltar\". Com o 👂 ligado, comece com \"Isa\": " +
+                "\"Isa, posições\".",
                 9000
             );
             return;
@@ -229,7 +229,7 @@
 
     botao.addEventListener("click", function () {
         // Com o modo contínuo ligado o microfone já está aberto: o clique
-        // equivale a dizer "Trader" (não dá para rodar dois reconhecimentos).
+        // equivale a dizer "Isa" (não dá para rodar dois reconhecimentos).
         if (modoContinuo) {
             aguardarComando();
             return;
@@ -258,8 +258,8 @@
     var botaoContinuo = document.getElementById("btn-voz-continua");
     var CHAVE_PREFERENCIA = "bolsatrader.vozContinua";
     var JANELA_COMANDO_MS = 8000;
-    // "Trader" em pt-BR costuma vir transcrito de vários jeitos.
-    var PALAVRA_ATIVACAO = /(^|\s)(trader|traider|treider|treder|trayder|treyder|tréider|trade|treide)(?=[\s,.!?]|$)[\s,.!?]*/i;
+    // "Isa" em pt-BR costuma vir transcrito de vários jeitos (Iza, Issa...).
+    var PALAVRA_ATIVACAO = /(^|\s)(isa|iza|ísa|íza|issa|izza|isah)(?=[\s,.!?]|$)[\s,.!?]*/i;
 
     var modoContinuo = false;
     var aguardandoAte = 0;
@@ -314,7 +314,7 @@
         gravarPreferencia(true);
         atualizarBotaoContinuo();
         iniciarContinuo();
-        if (avisar) mostrarBalao("👂 Sempre ouvindo. Diga \"Trader\" e o comando, ex.: \"Trader, posições\".", 6000);
+        if (avisar) mostrarBalao("👂 Sempre ouvindo. Diga \"Isa\" e o comando, ex.: \"Isa, posições\".", 6000);
     }
 
     function desligarContinuo(mensagem) {

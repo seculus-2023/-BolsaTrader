@@ -162,7 +162,7 @@ a:hover { color: var(--neon-magenta); }
     animation: pulso-voz 1.1s ease-in-out infinite;
 }
 
-/* Modo "sempre ouvindo" (palavra de ativação "Trader") ligado */
+/* Modo "sempre ouvindo" (palavra de ativação "Isa") ligado */
 .btn-comando-voz.continuo {
     border-color: var(--neon-green);
     background: rgba(57, 255, 143, 0.15);

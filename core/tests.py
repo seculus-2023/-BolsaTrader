@@ -6382,7 +6382,7 @@ class LimparDadosSistemaTests(TestCase):
 
     def test_senha_errada_nao_apaga_nada(self):
         from core.models import Operacao
-        resposta = self.client.post(reverse("accounts:limpar_dados"), {"senha": "errada"}, follow=True)
+        resposta = self.client.post(reverse("accounts:limpar_dados"), {"usuario": "todos", "senha": "errada"}, follow=True)
         self.assertContains(resposta, "Senha incorreta")
         self.assertEqual(Operacao.objects.count(), 2)
 
@@ -6390,7 +6390,7 @@ class LimparDadosSistemaTests(TestCase):
         from core.models import Operacao
         self.client.login(username="outro_limpeza", password="SenhaForte123!")
         self.assertNotContains(self.client.get(reverse("accounts:minha_conta")), "form-limpar-dados")
-        resposta = self.client.post(reverse("accounts:limpar_dados"), {"senha": "SenhaForte123!"}, follow=True)
+        resposta = self.client.post(reverse("accounts:limpar_dados"), {"usuario": "todos", "senha": "SenhaForte123!"}, follow=True)
         self.assertContains(resposta, "Só o administrador")
         self.assertEqual(Operacao.objects.count(), 2)
 
@@ -6402,7 +6402,7 @@ class LimparDadosSistemaTests(TestCase):
 
     def test_senha_certa_apaga_tudo_menos_acoes_b3_usuarios_e_perfis(self):
         from core.models import AcaoB3, Ativo, FonteNoticia, Operacao
-        resposta = self.client.post(reverse("accounts:limpar_dados"), {"senha": "SenhaForte123!"})
+        resposta = self.client.post(reverse("accounts:limpar_dados"), {"usuario": "todos", "senha": "SenhaForte123!"})
         self.assertRedirects(resposta, reverse("accounts:minha_conta"))
         self.assertEqual(Operacao.objects.count(), 0)  # inclusive as do outro usuário
         self.assertEqual(Ativo.objects.count(), 0)
@@ -6415,6 +6415,45 @@ class LimparDadosSistemaTests(TestCase):
         from core.services import MODELOS_LIMPOS_NA_LIMPEZA_GERAL, MODELOS_PRESERVADOS_NA_LIMPEZA_GERAL
         classificados = set(MODELOS_LIMPOS_NA_LIMPEZA_GERAL) | set(MODELOS_PRESERVADOS_NA_LIMPEZA_GERAL)
         self.assertEqual(set(django_apps.get_app_config("core").get_models()), classificados)
+
+    def test_combo_lista_os_usuarios(self):
+        resposta = self.client.get(reverse("accounts:minha_conta"))
+        self.assertContains(resposta, f'<option value="{self.outro.pk}">outro_limpeza</option>', html=True)
+        self.assertContains(resposta, '<option value="todos">Todos os usuários (sistema inteiro)</option>', html=True)
+
+    def test_sem_escolher_conta_nao_apaga(self):
+        from core.models import Operacao
+        resposta = self.client.post(reverse("accounts:limpar_dados"), {"senha": "SenhaForte123!"}, follow=True)
+        self.assertContains(resposta, "Escolha a conta")
+        self.assertEqual(Operacao.objects.count(), 2)
+
+    def test_conta_escolhida_apaga_so_os_dados_dela(self):
+        from core.models import AcaoB3, Ativo, ContaCorrente, FonteNoticia, Operacao, PostIt
+        ContaCorrente.objects.create(usuario=self.outro)
+        PostIt.objects.create(usuario=self.outro, texto="lembrete")
+        PostIt.objects.create(usuario=self.usuario, texto="meu")
+        fontes_antes = FonteNoticia.objects.count()
+        resposta = self.client.post(
+            reverse("accounts:limpar_dados"), {"usuario": self.outro.pk, "senha": "SenhaForte123!"}, follow=True,
+        )
+        self.assertContains(resposta, "Dados da conta outro_limpeza apagados")
+        self.assertFalse(Operacao.objects.filter(usuario=self.outro).exists())
+        self.assertFalse(ContaCorrente.objects.filter(usuario=self.outro).exists())
+        self.assertFalse(PostIt.objects.filter(usuario=self.outro).exists())
+        self.assertEqual(Operacao.objects.filter(usuario=self.usuario).count(), 1)
+        self.assertTrue(PostIt.objects.filter(usuario=self.usuario).exists())
+        self.assertEqual(Ativo.objects.count(), 1)
+        self.assertEqual(FonteNoticia.objects.count(), fontes_antes)
+        self.assertEqual(AcaoB3.objects.count(), 1)
+        self.assertTrue(User.objects.filter(pk=self.outro.pk).exists())
+
+    def test_todo_model_da_limpeza_geral_esta_classificado_na_limpeza_por_usuario(self):
+        from core.services import (
+            MODELOS_COMPARTILHADOS_NA_LIMPEZA_USUARIO, MODELOS_LIMPOS_NA_LIMPEZA_GERAL,
+            MODELOS_LIMPOS_NA_LIMPEZA_USUARIO,
+        )
+        classificados = set(MODELOS_LIMPOS_NA_LIMPEZA_USUARIO) | set(MODELOS_COMPARTILHADOS_NA_LIMPEZA_USUARIO)
+        self.assertEqual(set(MODELOS_LIMPOS_NA_LIMPEZA_GERAL), classificados)
 
 
 class LogoNavbarTests(TestCase):

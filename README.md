@@ -29,7 +29,8 @@ Todas as configurações ficam no `.env`, explicadas uma a uma no [.env.example]
 - **Cadastro**: por padrão só administradores (staff) cadastram usuários, pelo menu "Cadastrar
   Usuário". Para abrir o cadastro ao público na tela de login, use `CADASTRO_PUBLICO=True`.
 - **Só staff**: gerenciar fontes de notícias e ver as mensagens do WhatsApp.
-- **Só superusuário**: "Limpar dados do sistema" em Minha Conta (apaga os dados de todos).
+- **Só superusuário**: "Limpar dados do sistema" em Minha Conta (escolhe no combo a conta a apagar,
+  ou "Todos os usuários" para apagar os dados de todos).
 - **Senha**: "Esqueci minha senha" no login envia um link por e-mail (configure `EMAIL_*` no
   `.env`; sem isso o e-mail só aparece no console do servidor). "Alterar senha" fica em Minha Conta.
 - **Login**: após 5 senhas erradas seguidas, bloqueado por 15 min (`LOGIN_MAX_TENTATIVAS`,

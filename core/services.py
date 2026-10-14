@@ -5802,6 +5802,50 @@ def limpar_dados_sistema() -> int:
     return total
 
 
+# Limpeza de UMA conta (combo de usuário no mesmo botão): modelo -> caminho
+# até o usuário dono do registro, na ordem de exclusão (filhos antes dos
+# pais). Os demais modelos de MODELOS_LIMPOS_NA_LIMPEZA_GERAL (ativos,
+# cotações, índices, notícias, WhatsApp...) são compartilhados entre os
+# usuários e ficam intactos - ver MODELOS_COMPARTILHADOS_NA_LIMPEZA_USUARIO.
+MODELOS_LIMPOS_NA_LIMPEZA_USUARIO = {
+    LancamentoContaCorrente: "conta__usuario",
+    ContaCorrente: "usuario",
+    OperacaoCripto: "usuario",
+    RegistroAtualizacaoCarteiraCripto: "usuario",
+    Alerta: "usuario",
+    Operacao: "usuario",
+    RegistroCotacao: "usuario",
+    PrevisaoAnalista: "usuario",
+    RegistroAtualizacaoCarteira: "usuario",
+    PostIt: "usuario",
+}
+MODELOS_COMPARTILHADOS_NA_LIMPEZA_USUARIO = [
+    CotacaoCripto,
+    CriptoAtivo,
+    Cotacao,
+    Ativo,
+    CotacaoIndice,
+    Noticia,
+    FonteNoticia,
+    MensagemWhatsapp,
+]
+
+
+@transaction.atomic
+def limpar_dados_usuario(usuario) -> int:
+    """
+    Apaga os dados de um usuário só (operações, alertas, conta corrente,
+    cripto, post-it, previsões, históricos de atualização), mantendo o
+    usuário, o perfil (Minha Conta) e os dados compartilhados. Devolve o
+    total de registros apagados.
+    """
+    total = 0
+    for modelo, campo_usuario in MODELOS_LIMPOS_NA_LIMPEZA_USUARIO.items():
+        apagados, _ = modelo.objects.filter(**{campo_usuario: usuario}).delete()
+        total += apagados
+    return total
+
+
 # --------------------------------------------------------------------------
 # Previsões dos analistas (preço-alvo de 12 meses) x preço real
 #

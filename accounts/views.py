@@ -1,7 +1,7 @@
 import logging
 
 from django.conf import settings
-from django.contrib.auth import login
+from django.contrib.auth import get_user_model, login
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.views import LoginView, LogoutView
 from django.core.cache import cache
@@ -10,7 +10,7 @@ from django.urls import reverse_lazy
 from django.contrib import messages
 from django.views.decorators.http import require_POST
 
-from core.services import limpar_dados_sistema
+from core.services import limpar_dados_sistema, limpar_dados_usuario
 
 from .forms import CadastroForm, PerfilUsuarioForm
 from .models import PerfilUsuario
@@ -119,18 +119,20 @@ def minha_conta_view(request):
     else:
         form = PerfilUsuarioForm(instance=perfil)
 
-    return render(request, "accounts/minha_conta.html", {"form": form})
+    contexto = {"form": form}
+    if request.user.is_superuser:
+        contexto["usuarios_limpeza"] = get_user_model().objects.order_by("username")
+    return render(request, "accounts/minha_conta.html", contexto)
 
 
 @login_required
 @require_POST
 def limpar_dados_view(request):
     """
-    Apaga os dados de TODOS os usuários (operações, alertas, conta corrente,
-    cripto, cotações, notícias etc.), mantendo só Ações da B3, os usuários e
-    Minha Conta - ver core.services.limpar_dados_sistema. Como afeta todos
-    os usuários, só superusuário pode usar, e precisa confirmar digitando a
-    própria senha.
+    Apaga os dados da conta escolhida no combo (core.services.limpar_dados_usuario)
+    ou, com a opção "todos", de TODOS os usuários (core.services.limpar_dados_sistema).
+    Em qualquer caso ficam os usuários e Minha Conta. Só superusuário pode
+    usar, e precisa confirmar digitando a própria senha.
     """
     if not request.user.is_superuser:
         messages.error(request, "Só o administrador do sistema pode limpar os dados.")
@@ -141,9 +143,23 @@ def limpar_dados_view(request):
         messages.error(request, "Senha incorreta - nenhum dado foi apagado.")
         return redirect("accounts:minha_conta")
 
-    total = limpar_dados_sistema()
+    escolha = request.POST.get("usuario", "")
+    if escolha == "todos":
+        total = limpar_dados_sistema()
+        messages.success(
+            request,
+            f"Dados do sistema apagados ({total} registro(s)). Ações da B3, usuários e Minha Conta foram mantidos.",
+        )
+        return redirect("accounts:minha_conta")
+
+    alvo = get_user_model().objects.filter(pk=escolha).first() if escolha.isdigit() else None
+    if alvo is None:
+        messages.error(request, "Escolha a conta que terá os dados apagados - nenhum dado foi apagado.")
+        return redirect("accounts:minha_conta")
+
+    total = limpar_dados_usuario(alvo)
     messages.success(
         request,
-        f"Dados do sistema apagados ({total} registro(s)). Ações da B3, usuários e Minha Conta foram mantidos.",
+        f"Dados da conta {alvo.username} apagados ({total} registro(s)). O usuário e Minha Conta foram mantidos.",
     )
     return redirect("accounts:minha_conta")

@@ -106,6 +106,39 @@
     Mesmo uma empresa nota 10 pode cair na bolsa &mdash; combine com a Calculadora de risco (stop e tamanho da posição)
     na tela de compra.
 </p>
+<section class="card-glass" style="margin: 1rem 0; font-size: .85rem;" aria-label="O que significa cada coluna">
+    <h3 style="margin-top: 0; font-size: 1rem;">O que significa cada coluna</h3>
+    <dl style="margin: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: .8rem 1.2rem;">
+        <div>
+            <dt><strong>P/L</strong> &mdash; Preço / Lucro</dt>
+            <dd style="margin: .2rem 0 0; color: var(--text-dim);">Preço da ação dividido pelo lucro por ação: quantos anos de lucro "pagam" a ação. Menor = mais barata; negativo = empresa com prejuízo.</dd>
+        </div>
+        <div>
+            <dt><strong>P/VP</strong> &mdash; Preço / Valor Patrimonial</dt>
+            <dd style="margin: .2rem 0 0; color: var(--text-dim);">Preço da ação dividido pelo patrimônio líquido por ação. Abaixo de 1 = a bolsa paga menos do que a empresa vale no balanço.</dd>
+        </div>
+        <div>
+            <dt><strong>ROE</strong> &mdash; Retorno sobre o Patrimônio</dt>
+            <dd style="margin: .2rem 0 0; color: var(--text-dim);">Lucro líquido dividido pelo patrimônio líquido: quanto a empresa rende com o dinheiro dos sócios. Maior = melhor.</dd>
+        </div>
+        <div>
+            <dt><strong>Margem</strong> &mdash; Margem líquida</dt>
+            <dd style="margin: .2rem 0 0; color: var(--text-dim);">Quanto sobra de lucro de cada R$ 100 vendidos, depois de todos os custos e impostos.</dd>
+        </div>
+        <div>
+            <dt><strong>Lucro (3 anos)</strong></dt>
+            <dd style="margin: .2rem 0 0; color: var(--text-dim);">Quanto o lucro cresceu, em média, por ano nos últimos 3 anos, e em quantos dos últimos anos (até 5) a empresa deu lucro.</dd>
+        </div>
+        <div>
+            <dt><strong>Passivo/Ativo</strong> &mdash; Endividamento</dt>
+            <dd style="margin: .2rem 0 0; color: var(--text-dim);">Parte do que a empresa tem (ativo) que está comprometida com dívidas e obrigações (passivo). Menor = mais folga. Não se aplica a bancos e seguradoras.</dd>
+        </div>
+        <div>
+            <dt><strong>Div. yield</strong> &mdash; Dividend yield</dt>
+            <dd style="margin: .2rem 0 0; color: var(--text-dim);">Dividendos pagos nos últimos 12 meses divididos pelo preço da ação: o "aluguel" que a ação paga por ano.</dd>
+        </div>
+    </dl>
+</section>
 {% else %}
 <div class="card-glass">
     {% if carteira_oculta %}

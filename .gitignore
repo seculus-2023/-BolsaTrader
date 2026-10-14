@@ -10,4 +10,5 @@ staticfiles/
 *.log
 logs/
 backups/
-Backup/
+Backup/*
+!Backup/*.bat

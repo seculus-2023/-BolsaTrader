@@ -719,6 +719,7 @@ def posicoes(request):
 
     posicoes_reservadas.sort(key=_ordem_variacao_reserva)
     posicoes_reservadas_robo.sort(key=_ordem_variacao_reserva)
+    metricas_risco = calcular_metricas_risco(lista_posicoes)
 
     contexto = {
         "posicoes": lista_posicoes,
@@ -732,11 +733,52 @@ def posicoes(request):
         "lucro_perda_total": lucro_perda_total,
         "lucro_perda_pct_total": lucro_perda_pct_total,
         "concentracao_setor": calcular_concentracao_setor(lista_posicoes),
-        "metricas_risco": calcular_metricas_risco(lista_posicoes),
+        "metricas_risco": metricas_risco,
+        "fatias_carteira": _fatias_rosca_carteira(metricas_risco["por_ativo"]),
         "comparativo_benchmark": calcular_comparativo_benchmark(request.user, posicoes=lista_posicoes),
     }
     contexto.update(_contexto_historico_atualizacoes(request.user, limite=20))
     return render(request, "core/posicoes.html", contexto)
+
+
+# cores das fatias (validadas contra o fundo escuro dos cards, incluindo
+# daltonismo); "Outros" fica num cinza neutro
+_CORES_ROSCA = ("#3987e5", "#d95926", "#199e70", "#c98500", "#d55181")
+_COR_ROSCA_OUTROS = "#a3acb9"
+
+
+def _fatias_rosca_carteira(por_ativo: list) -> list[dict]:
+    """
+    Fatias do gráfico de rosca "% da carteira" (aba Indicadores de risco):
+    as 5 maiores posições e o resto somado em "Outros" - mais fatias que isso
+    viram cores difíceis de distinguir (a tabela logo abaixo lista todas).
+    O círculo do SVG tem circunferência 100, então cada fatia é um traço de
+    comprimento = % com deslocamento = soma das anteriores.
+    """
+    itens = [(i["ativo"].ticker, float(i["percentual_carteira"])) for i in por_ativo if i["percentual_carteira"]]
+    if len(itens) > len(_CORES_ROSCA) + 1:
+        itens = itens[:len(_CORES_ROSCA)] + [
+            (f"Outros ({len(itens) - len(_CORES_ROSCA)})", sum(p for _, p in itens[len(_CORES_ROSCA):])),
+        ]
+    total = sum(p for _, p in itens)
+    if not total:
+        return []
+    fatias, inicio = [], 0.0
+    for indice, (rotulo, pct) in enumerate(itens):
+        tamanho = pct / total * 100
+        outros = rotulo.startswith("Outros")
+        fatias.append({
+            "rotulo": rotulo,
+            "percentual_texto": f"{pct:.2f}".replace(".", ","),
+            "cor": _COR_ROSCA_OUTROS if outros else _CORES_ROSCA[indice],
+            # 0,4 de folga = o vão de ~2px entre fatias vizinhas
+            "traco": round(max(tamanho - 0.4, 0.1), 3),
+            "vao": round(100 - max(tamanho - 0.4, 0.1), 3),
+            # 25 = começa no topo (o traço do círculo nasce às 3 horas)
+            "deslocamento": round(25 - inicio, 3),
+        })
+        inicio += tamanho
+    return fatias
 
 
 @login_required

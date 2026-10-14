@@ -1395,3 +1395,22 @@ body.pagina-popup {
 .btn-grafico-cotacao:hover {
     background: rgba(0, 240, 255, 0.12);
 }
+
+/* Gráfico de rosca "% da carteira" (aba Indicadores de risco) */
+.rosca-carteira {
+    display: flex;
+    align-items: center;
+    gap: 1.5rem;
+    flex-wrap: wrap;
+    margin: .8rem 0 1.2rem;
+}
+.rosca-carteira-svg { width: 200px; height: 200px; flex-shrink: 0; }
+.rosca-carteira-svg circle { transition: stroke-width .15s; cursor: default; }
+.rosca-carteira-svg circle:hover { stroke-width: 7.5; }
+.rosca-carteira-centro { fill: var(--text-main); font-family: 'Orbitron', sans-serif; font-size: 6px; font-weight: 700; }
+.rosca-carteira-centro-sub { fill: var(--text-dim); font-size: 3.2px; }
+.rosca-carteira-legenda { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: .45rem; min-width: 180px; }
+.rosca-carteira-legenda li { display: flex; align-items: center; gap: .55rem; font-size: .95rem; }
+.rosca-carteira-legenda i { width: 12px; height: 12px; border-radius: 3px; flex-shrink: 0; }
+.rosca-carteira-legenda span { flex: 1; }
+.rosca-carteira-legenda strong { color: var(--text-main); font-variant-numeric: tabular-nums; }

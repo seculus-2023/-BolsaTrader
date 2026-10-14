@@ -362,6 +362,27 @@
         <strong style="color: var(--neon-red);">⚠ {{ metricas_risco.maior_posicao_ativo.ticker }} sozinho já é {{ metricas_risco.maior_posicao_pct }}% da carteira.</strong>
         {% endif %}
     </p>
+    {% if fatias_carteira %}
+    <div class="rosca-carteira">
+        {% localize off %}
+        <svg viewBox="0 0 42 42" class="rosca-carteira-svg" role="img" aria-label="Percentual de cada ativo na carteira">
+            {% for fatia in fatias_carteira %}
+            <circle cx="21" cy="21" r="15.91549" fill="none" stroke="{{ fatia.cor }}" stroke-width="6"
+                    stroke-dasharray="{{ fatia.traco }} {{ fatia.vao }}" stroke-dashoffset="{{ fatia.deslocamento }}">
+                <title>{{ fatia.rotulo }}: {{ fatia.percentual_texto }}%</title>
+            </circle>
+            {% endfor %}
+            <text x="21" y="20.5" text-anchor="middle" class="rosca-carteira-centro">{{ metricas_risco.por_ativo|length }}</text>
+            <text x="21" y="25" text-anchor="middle" class="rosca-carteira-centro-sub">ativos</text>
+        </svg>
+        {% endlocalize %}
+        <ul class="rosca-carteira-legenda">
+            {% for fatia in fatias_carteira %}
+            <li><i style="background: {{ fatia.cor }};"></i><span>{{ fatia.rotulo }}</span><strong>{{ fatia.percentual_texto }}%</strong></li>
+            {% endfor %}
+        </ul>
+    </div>
+    {% endif %}
     <div class="tabela-scroll">
     <table class="tabela-futurista">
         <thead>

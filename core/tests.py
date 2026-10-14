@@ -3303,6 +3303,73 @@ class MetricasRiscoTests(TestCase):
         self.assertContains(resposta, "Indicadores de risco")
 
 
+class CorrelacaoEstresseTests(TestCase):
+    """core.services.calcular_correlacao_e_estresse"""
+
+    def setUp(self):
+        from core.models import CotacaoIndice
+        self.usuario = User.objects.create_user(username="investidor_corr", password="SenhaForte123!")
+        self.a = Ativo.objects.create(ticker="AAAA3")
+        self.b = Ativo.objects.create(ticker="BBBB3")
+        self.c = Ativo.objects.create(ticker="CCCC3")
+        for ativo in (self.a, self.b, self.c):
+            Operacao.objects.create(
+                usuario=self.usuario, ativo=ativo, tipo=Operacao.COMPRA,
+                quantidade=10, preco_unitario=Decimal("10.00"), data_operacao=date.today() - timedelta(days=60),
+            )
+        # mercado alternando +1%/-1%; A = 2x o mercado (beta 2), B igual a A (correlação 1),
+        # C no sentido oposto ao mercado (correlação -1)
+        ibov, pa, pc = 100000.0, 10.0, 10.0
+        for i in range(40):
+            dia = date.today() - timedelta(days=40 - i)
+            r = 0.01 if i % 2 else -0.01
+            if i:
+                ibov *= 1 + r
+                pa *= 1 + 2 * r
+                pc *= 1 - r
+            CotacaoIndice.objects.create(indice=CotacaoIndice.IBOVESPA, data=dia, valor=Decimal(f"{ibov:.6f}"))
+            Cotacao.objects.create(ativo=self.a, data=dia, preco_fechamento=Decimal(f"{pa:.2f}"))
+            Cotacao.objects.create(ativo=self.b, data=dia, preco_fechamento=Decimal(f"{pa:.2f}"))
+            Cotacao.objects.create(ativo=self.c, data=dia, preco_fechamento=Decimal(f"{pc:.2f}"))
+
+    def _resultado(self):
+        from core.services import calcular_correlacao_e_estresse
+        return calcular_correlacao_e_estresse(calcular_posicoes(self.usuario))
+
+    def test_detecta_par_que_anda_junto_e_par_oposto(self):
+        correlacao = self._resultado()["correlacao"]
+        pares = {(p["a"], p["b"]) if p["a"] < p["b"] else (p["b"], p["a"]): p["valor"] for p in correlacao["pares_altos"]}
+        self.assertEqual(list(pares), [("AAAA3", "BBBB3")])
+        self.assertGreater(pares[("AAAA3", "BBBB3")], 0.99)
+        linha_a = next(l for l in correlacao["linhas"] if l["ticker"] == "AAAA3")
+        celula_c = next(c for c in linha_a["celulas"] if c["par"] == "CCCC3")
+        self.assertLess(celula_c["valor"], -0.9)
+
+    def test_beta_e_cenarios_de_queda(self):
+        estresse = self._resultado()["estresse"]
+        betas = {b["ticker"]: b["beta"] for b in estresse["betas"]}
+        self.assertAlmostEqual(betas["AAAA3"], 2, delta=0.1)
+        self.assertAlmostEqual(betas["CCCC3"], -1, delta=0.1)
+        primeiro = estresse["cenarios"][0]
+        self.assertEqual(primeiro["queda_ibov_pct"], 10)
+        self.assertAlmostEqual(primeiro["perda_pct"], estresse["beta_carteira"] * 10, delta=0.1)
+        self.assertEqual([p["rotulo"] for p in estresse["piores"]], ["Pior dia", "Pior semana", "Pior mês"])
+
+    def test_sem_ibovespa_nao_tem_cenarios(self):
+        from core.models import CotacaoIndice
+        CotacaoIndice.objects.all().delete()
+        estresse = self._resultado()["estresse"]
+        self.assertIsNone(estresse["beta_carteira"])
+        self.assertEqual(estresse["cenarios"], [])
+
+    def test_tela_mostra_correlacao_e_estresse(self):
+        self.client.login(username="investidor_corr", password="SenhaForte123!")
+        resposta = self.client.get(reverse("core:posicoes"))
+        self.assertContains(resposta, "Correlação entre os ativos")
+        self.assertContains(resposta, "Teste de estresse")
+        self.assertContains(resposta, "Se o Ibovespa cair 10%")
+
+
 class AnaliseB3IaTests(TestCase):
     """core.services: ia_configurada, _parsear_resposta_ia_em_grade, gerar_analise_b3_ia."""
 

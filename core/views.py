@@ -78,6 +78,7 @@ from .services import (
     backtest_sinais_robo,
     calcular_concentracao_setor,
     calcular_metricas_risco,
+    calcular_correlacao_e_estresse,
     calcular_comparativo_benchmark,
     atualizar_benchmarks,
     ultimo_valor_ibovespa,
@@ -735,6 +736,7 @@ def posicoes(request):
         "concentracao_setor": calcular_concentracao_setor(lista_posicoes),
         "metricas_risco": metricas_risco,
         "fatias_carteira": _fatias_rosca_carteira(metricas_risco["por_ativo"]),
+        **calcular_correlacao_e_estresse(lista_posicoes),
         "comparativo_benchmark": calcular_comparativo_benchmark(request.user, posicoes=lista_posicoes),
     }
     contexto.update(_contexto_historico_atualizacoes(request.user, limite=20))

@@ -405,6 +405,102 @@
         </tbody>
     </table>
     </div>
+
+    {% if correlacao %}
+    <h3 style="margin-top: 1.8rem;">Correlação entre os ativos</h3>
+    <p style="color: var(--text-dim); font-size: .85rem; margin-top: -.3rem;">
+        O quanto os ativos sobem e caem juntos nos últimos {{ correlacao.pregoes }} pregões: <strong>1</strong> = sempre juntos,
+        <strong>0</strong> = sem relação, <strong>-1</strong> = em sentidos opostos. Ter vários ativos que andam juntos
+        não diversifica &mdash; numa queda, caem todos. Correlação média da carteira: <strong>{{ correlacao.media }}</strong>.
+    </p>
+    {% if correlacao.pares_altos %}
+    <p style="font-size: .9rem; color: var(--neon-yellow);">
+        ⚠ Andam muito juntos (≥ {{ correlacao.limiar }}):
+        {% for par in correlacao.pares_altos %}<strong>{{ par.a }} &amp; {{ par.b }}</strong> ({{ par.valor }}){% if not forloop.last %}, {% endif %}{% endfor %}.
+    </p>
+    {% else %}
+    <p style="font-size: .9rem; color: var(--neon-green);">✓ Nenhum par de ativos com correlação alta (≥ {{ correlacao.limiar }}).</p>
+    {% endif %}
+    <div class="tabela-scroll">
+    <table class="matriz-correlacao">
+        <thead>
+            <tr><th></th>{% for t in correlacao.tickers %}<th>{{ t }}</th>{% endfor %}</tr>
+        </thead>
+        <tbody>
+            {% for linha in correlacao.linhas %}
+            <tr>
+                <th>{{ linha.ticker }}</th>
+                {% for c in linha.celulas %}
+                <td style="background: {{ c.fundo }};"{% if c.diagonal %} class="diagonal"{% endif %} title="{{ linha.ticker }} x {{ c.par }}: {% if c.valor is not None %}{{ c.valor }}{% else %}histórico insuficiente{% endif %}">{% if c.diagonal %}&mdash;{% elif c.valor is not None %}{{ c.valor }}{% else %}·{% endif %}</td>
+                {% endfor %}
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    </div>
+    <p style="color: var(--text-dim); font-size: .8rem;">
+        <span class="legenda-correlacao" style="background: rgba(230,103,103,.75);"></span> andam juntos
+        <span class="legenda-correlacao" style="background: rgba(57,135,229,.75); margin-left: .8rem;"></span> sentidos opostos
+        {% if correlacao.ocultos %}&middot; mostrando as {{ correlacao.tickers|length }} maiores posições (+{{ correlacao.ocultos }} na lista de pares){% endif %}
+    </p>
+    {% endif %}
+
+    {% if estresse %}
+    <h3 style="margin-top: 1.8rem;">Teste de estresse</h3>
+    {% if estresse.beta_carteira is not None %}
+    <p style="color: var(--text-dim); font-size: .85rem; margin-top: -.3rem;">
+        <strong>Beta da carteira: {{ estresse.beta_carteira }}</strong> &mdash; em média, quando o Ibovespa cai 1%, sua carteira
+        tende a cair {{ estresse.beta_carteira }}%{% if estresse.beta_carteira > 1 %} (mais que o mercado){% elif estresse.beta_carteira < 1 %} (menos que o mercado){% endif %}.
+        Estimativa pelo comportamento do último ano ({{ estresse.pregoes_ibov }} pregões do Ibovespa){% if estresse.cobertura_beta_pct < 100 %}, cobrindo {{ estresse.cobertura_beta_pct }}% da carteira{% endif %} &mdash;
+        numa crise de verdade as quedas costumam ser maiores que a média.
+    </p>
+    <div class="estresse-grade">
+        {% for c in estresse.cenarios %}
+        <div class="estresse-card">
+            <small>Se o Ibovespa cair {{ c.queda_ibov_pct }}%</small>
+            <strong class="valor-negativo">-{{ c.perda_pct }}%</strong>
+            <span>&asymp; -R$ {{ c.perda_valor|floatformat:2 }}</span>
+        </div>
+        {% endfor %}
+    </div>
+    {% else %}
+    <p style="color: var(--text-dim); font-size: .85rem;">
+        Sem histórico do Ibovespa suficiente para estimar o beta &mdash; clique em "Atualizar benchmarks (Ibovespa / CDI)".
+    </p>
+    {% endif %}
+    {% if estresse.piores %}
+    <p style="color: var(--text-dim); font-size: .85rem; margin-top: 1rem;">
+        Se você tivesse <strong>exatamente esta carteira</strong> (mesmas quantidades) durante o último ano
+        ({{ estresse.pregoes_historico }} pregões), estes seriam os piores momentos:
+    </p>
+    <div class="estresse-grade">
+        {% for p in estresse.piores %}
+        <div class="estresse-card">
+            <small>{{ p.rotulo }}</small>
+            <strong class="valor-negativo">{{ p.pct }}%</strong>
+            <span>{{ p.inicio|date:"d/m/Y" }} &rarr; {{ p.fim|date:"d/m/Y" }}</span>
+        </div>
+        {% endfor %}
+    </div>
+    {% endif %}
+    <details style="margin-top: .8rem;">
+        <summary style="cursor: pointer; color: var(--text-dim); font-size: .9rem;">Beta de cada ativo</summary>
+        <div class="tabela-scroll">
+        <table class="tabela-futurista" style="margin-top: .5rem;">
+            <thead><tr><th>Ativo</th><th>% da carteira</th><th>Beta</th></tr></thead>
+            <tbody>
+                {% for b in estresse.betas %}
+                <tr>
+                    <td><strong>{{ b.ticker }}</strong></td>
+                    <td>{{ b.peso_pct }}%</td>
+                    <td>{% if b.beta is not None %}{{ b.beta }}{% if b.beta > 1.2 %} <small style="color: var(--neon-yellow);">oscila mais que o mercado</small>{% endif %}{% else %}<span style="color: var(--text-dim);">histórico insuficiente</span>{% endif %}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        </div>
+    </details>
+    {% endif %}
     {% else %}
     <p style="color: var(--text-dim);">Sem indicadores de risco no momento.</p>
     {% endif %}

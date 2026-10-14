@@ -1867,6 +1867,179 @@ def calcular_metricas_risco(posicoes: list, dias_janela: int = 30) -> dict:
 
 
 # --------------------------------------------------------------------------
+# Correlação e teste de estresse da carteira (aba Indicadores de risco)
+#
+# Diversificar não é ter muitos tickers: oito ações que sobem e caem juntas
+# protegem tanto quanto uma. A correlação mostra isso; o beta contra o
+# Ibovespa estima quanto a carteira tende a cair numa queda do mercado. Tudo
+# a partir das cotações já salvas - nenhuma chamada de API.
+# --------------------------------------------------------------------------
+CORRELACAO_JANELA_PREGOES = 120
+CORRELACAO_ALTA = 0.7
+CORRELACAO_MIN_RETORNOS = 20
+CORRELACAO_MAX_ATIVOS_MATRIZ = 10
+ESTRESSE_JANELA_PREGOES = 250
+ESTRESSE_QUEDAS_IBOV_PCT = (10, 20, 30)
+
+
+def _retornos_pareados(serie_a: dict, serie_b: dict) -> tuple[list[float], list[float]]:
+    """Retornos diários de duas séries {data: preço} só nas datas que as duas têm (pregão a pregão)."""
+    datas = sorted(set(serie_a) & set(serie_b))
+    ret_a, ret_b = [], []
+    for anterior, atual in zip(datas, datas[1:]):
+        if serie_a[anterior] and serie_b[anterior]:
+            ret_a.append(serie_a[atual] / serie_a[anterior] - 1)
+            ret_b.append(serie_b[atual] / serie_b[anterior] - 1)
+    return ret_a, ret_b
+
+
+def _correlacao(xs: list[float], ys: list[float]) -> float | None:
+    if len(xs) < CORRELACAO_MIN_RETORNOS:
+        return None
+    try:
+        return statistics.correlation(xs, ys)
+    except statistics.StatisticsError:  # série constante
+        return None
+
+
+def _beta(retornos_ativo: list[float], retornos_mercado: list[float]) -> float | None:
+    if len(retornos_ativo) < CORRELACAO_MIN_RETORNOS:
+        return None
+    variancia = statistics.pvariance(retornos_mercado)
+    if not variancia:
+        return None
+    media_a, media_m = statistics.fmean(retornos_ativo), statistics.fmean(retornos_mercado)
+    covariancia = statistics.fmean((a - media_a) * (m - media_m) for a, m in zip(retornos_ativo, retornos_mercado))
+    return covariancia / variancia
+
+
+def _fundo_correlacao(valor: float | None) -> str:
+    """Cor de fundo da célula da matriz: vermelho = andam juntos, azul = em sentidos opostos, mais forte quanto maior."""
+    if valor is None:
+        return "transparent"
+    r, g, b = (230, 103, 103) if valor >= 0 else (57, 135, 229)
+    return f"rgba({r}, {g}, {b}, {min(abs(valor), 1) * 0.75:.2f})"
+
+
+def _series_precos(ativos: list, dias: int) -> dict:
+    """{ticker: {data: preço}} dos últimos `dias` pregões de cada ativo."""
+    series = {}
+    for ativo in ativos:
+        linhas = ativo.cotacoes.order_by("-data").values_list("data", "preco_fechamento")[:dias]
+        series[ativo.ticker] = {data: float(preco) for data, preco in linhas}
+    return series
+
+
+def calcular_correlacao_e_estresse(posicoes: list) -> dict:
+    """
+    Correlação entre os ativos comprados (retornos diários dos últimos
+    CORRELACAO_JANELA_PREGOES pregões, cada par nas datas que os dois têm),
+    beta de cada um contra o Ibovespa, perda estimada da carteira em quedas
+    do Ibovespa de ESTRESSE_QUEDAS_IBOV_PCT e o pior dia/semana/mês que a
+    carteira ATUAL (mesmas quantidades) teria tido no último ano.
+    """
+    compradas = [p for p in posicoes if not p.apenas_reservado and p.quantidade > 0 and p.valor_atual]
+    compradas.sort(key=lambda p: p.valor_atual, reverse=True)
+    valor_total = float(sum(p.valor_atual for p in compradas))
+    vazio = {"correlacao": None, "estresse": None}
+    if not compradas or not valor_total:
+        return vazio
+
+    series = _series_precos([p.ativo for p in compradas], ESTRESSE_JANELA_PREGOES)
+    tickers = [p.ativo.ticker for p in compradas]
+
+    # ---- correlação (janela menor: o que importa é o comportamento recente)
+    series_corr = {
+        t: dict(sorted(s.items())[-CORRELACAO_JANELA_PREGOES:]) for t, s in series.items()
+    }
+    pares = []
+    matriz_valores = {}
+    for i, a in enumerate(tickers):
+        for b in tickers[i + 1:]:
+            c = _correlacao(*_retornos_pareados(series_corr[a], series_corr[b]))
+            matriz_valores[(a, b)] = matriz_valores[(b, a)] = c
+            if c is not None:
+                pares.append({"a": a, "b": b, "valor": round(c, 2)})
+    pares.sort(key=lambda par: par["valor"], reverse=True)
+
+    correlacao = None
+    if pares:
+        na_matriz = tickers[:CORRELACAO_MAX_ATIVOS_MATRIZ]
+        for a in na_matriz:
+            matriz_valores[(a, a)] = 1.0
+        correlacao = {
+            "tickers": na_matriz,
+            "linhas": [
+                {
+                    "ticker": a,
+                    "celulas": [
+                        {
+                            "valor": round(matriz_valores[(a, b)], 2) if matriz_valores.get((a, b)) is not None else None,
+                            "fundo": "transparent" if a == b else _fundo_correlacao(matriz_valores.get((a, b))),
+                            "diagonal": a == b, "par": b,
+                        }
+                        for b in na_matriz
+                    ],
+                }
+                for a in na_matriz
+            ],
+            "ocultos": len(tickers) - len(na_matriz),
+            "pares_altos": [par for par in pares if par["valor"] >= CORRELACAO_ALTA],
+            "media": round(statistics.fmean(par["valor"] for par in pares), 2),
+            "limiar": CORRELACAO_ALTA,
+            "pregoes": CORRELACAO_JANELA_PREGOES,
+        }
+
+    # ---- beta contra o Ibovespa e cenários de queda
+    ibov = {
+        data: float(valor) for data, valor in CotacaoIndice.objects.filter(indice=CotacaoIndice.IBOVESPA)
+        .order_by("-data").values_list("data", "valor")[:ESTRESSE_JANELA_PREGOES]
+    }
+    betas, peso_com_beta, beta_carteira = [], 0.0, 0.0
+    for p in compradas:
+        peso = float(p.valor_atual) / valor_total
+        b = _beta(*_retornos_pareados(series[p.ativo.ticker], ibov)) if ibov else None
+        betas.append({"ticker": p.ativo.ticker, "beta": round(b, 2) if b is not None else None, "peso_pct": round(peso * 100, 1)})
+        if b is not None:
+            peso_com_beta += peso
+            beta_carteira += peso * b
+    beta_carteira = beta_carteira / peso_com_beta if peso_com_beta else None
+    cenarios = [
+        {
+            "queda_ibov_pct": queda,
+            "perda_pct": round(beta_carteira * queda, 1),
+            "perda_valor": round(valor_total * beta_carteira * queda / 100, 2),
+        }
+        for queda in ESTRESSE_QUEDAS_IBOV_PCT
+    ] if beta_carteira is not None else []
+
+    # ---- piores períodos da carteira atual (mesmas quantidades) no histórico
+    quantidades = {p.ativo.ticker: p.quantidade for p in compradas}
+    datas_comuns = sorted(set.intersection(*(set(s) for s in series.values())))
+    valores = [(d, sum(series[t][d] * q for t, q in quantidades.items())) for d in datas_comuns]
+    piores = []
+    for rotulo, pregoes in (("Pior dia", 1), ("Pior semana", 5), ("Pior mês", 21)):
+        quedas = [
+            (valores[i][1] / valores[i - pregoes][1] - 1, valores[i - pregoes][0], valores[i][0])
+            for i in range(pregoes, len(valores)) if valores[i - pregoes][1]
+        ]
+        if quedas:
+            pct, inicio, fim = min(quedas)
+            piores.append({"rotulo": rotulo, "pct": round(pct * 100, 1), "inicio": inicio, "fim": fim})
+
+    estresse = {
+        "beta_carteira": round(beta_carteira, 2) if beta_carteira is not None else None,
+        "cobertura_beta_pct": round(peso_com_beta * 100),
+        "betas": betas,
+        "cenarios": cenarios,
+        "piores": piores,
+        "pregoes_historico": len(valores),
+        "pregoes_ibov": len(ibov),
+    }
+    return {"correlacao": correlacao, "estresse": estresse}
+
+
+# --------------------------------------------------------------------------
 # Gráfico comparativo: valor de compra x valor atual no histórico (por ativo)
 # --------------------------------------------------------------------------
 def _fmt_reais(valor: float) -> str:

@@ -1414,3 +1414,24 @@ body.pagina-popup {
 .rosca-carteira-legenda i { width: 12px; height: 12px; border-radius: 3px; flex-shrink: 0; }
 .rosca-carteira-legenda span { flex: 1; }
 .rosca-carteira-legenda strong { color: var(--text-main); font-variant-numeric: tabular-nums; }
+
+/* Matriz de correlação e teste de estresse (aba Indicadores de risco) */
+.matriz-correlacao { border-collapse: separate; border-spacing: 2px; font-size: .85rem; margin: .4rem 0; }
+.matriz-correlacao th { color: var(--text-dim); font-weight: 600; padding: .3rem .5rem; white-space: nowrap; }
+.matriz-correlacao thead th { text-align: center; }
+.matriz-correlacao tbody th { text-align: right; }
+.matriz-correlacao td {
+    min-width: 54px; padding: .45rem .3rem; text-align: center; border-radius: 4px;
+    color: var(--text-main); font-variant-numeric: tabular-nums; cursor: default;
+}
+.matriz-correlacao td.diagonal { color: var(--text-dim); background: rgba(127, 147, 179, .08) !important; }
+.matriz-correlacao td:not(.diagonal):hover { outline: 2px solid var(--text-main); }
+.legenda-correlacao { display: inline-block; width: 12px; height: 12px; border-radius: 3px; vertical-align: -1px; margin-right: .25rem; }
+.estresse-grade { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: .8rem; margin: .6rem 0; }
+.estresse-card {
+    display: flex; flex-direction: column; gap: .2rem; padding: .8rem 1rem;
+    border: 1px solid var(--glass-border); border-radius: 12px; background: rgba(5, 9, 18, .35);
+}
+.estresse-card small { color: var(--text-dim); font-size: .85rem; }
+.estresse-card strong { font-family: 'Orbitron', sans-serif; font-size: 1.35rem; }
+.estresse-card span { color: var(--text-dim); font-size: .85rem; }

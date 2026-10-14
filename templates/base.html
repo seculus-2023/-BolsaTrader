@@ -48,6 +48,8 @@
             </button>
             <button type="button" id="btn-comando-voz" class="btn-comando-voz" hidden aria-pressed="false"
                     title="Comando de voz (Ctrl+Espaço) - diga &quot;ajuda&quot; para ver os comandos" aria-label="Comando de voz">🎤</button>
+            <button type="button" id="btn-voz-continua" class="btn-comando-voz" hidden aria-pressed="false"
+                    title="Modo sempre ouvindo: diga &quot;Trader, posições&quot; ou &quot;Trader&quot; e depois o comando" aria-label="Modo sempre ouvindo">👂</button>
             <span class="nav-usuario-logado" title="Usuário logado: {{ user.username }}">👤 {{ user.get_full_name|default:user.username }}</span>
             <form method="post" action="{% url 'accounts:logout' %}" style="display: inline;">
                 {% csrf_token %}

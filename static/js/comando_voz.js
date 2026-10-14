@@ -6,6 +6,13 @@
 // JSON #rotas-comando-voz, gerado com {% url %}), então este arquivo não
 // conhece caminhos fixos. Funciona no Chrome/Edge (desktop e Android); em
 // navegadores sem suporte (ex.: Firefox) o botão fica escondido.
+//
+// Modo "sempre ouvindo" (botão 👂, #btn-voz-continua): o microfone fica aberto
+// e só reage à palavra de ativação "Trader", como a Alexa - "Trader, abrir
+// posições" executa direto; "Trader" sozinho abre uma janela de alguns
+// segundos para a próxima frase. A escolha fica no localStorage e o modo
+// religa sozinho a cada página. Diferente da Alexa, o áudio vai continuamente
+// para o serviço de reconhecimento do navegador enquanto o modo está ligado.
 (function () {
     var botao = document.getElementById("btn-comando-voz");
     var blocoRotas = document.getElementById("rotas-comando-voz");
@@ -131,7 +138,8 @@
             mostrarBalao(
                 "Experimente: \"posições\", \"operações\", \"nova operação\", \"alertas\", " +
                 "\"notícias\", \"conta corrente\", \"cripto\", \"atualizar cotações\", " +
-                "\"cotação de PETR4\", \"voltar\".",
+                "\"cotação de PETR4\", \"voltar\". Com o 👂 ligado, comece com \"Trader\": " +
+                "\"Trader, posições\".",
                 9000
             );
             return;
@@ -220,6 +228,12 @@
     });
 
     botao.addEventListener("click", function () {
+        // Com o modo contínuo ligado o microfone já está aberto: o clique
+        // equivale a dizer "Trader" (não dá para rodar dois reconhecimentos).
+        if (modoContinuo) {
+            aguardarComando();
+            return;
+        }
         if (ouvindo) {
             reconhecimento.stop();
             return;
@@ -238,4 +252,167 @@
             botao.click();
         }
     });
+
+    // ----- Modo "sempre ouvindo" com palavra de ativação -----
+
+    var botaoContinuo = document.getElementById("btn-voz-continua");
+    var CHAVE_PREFERENCIA = "bolsatrader.vozContinua";
+    var JANELA_COMANDO_MS = 8000;
+    // "Trader" em pt-BR costuma vir transcrito de vários jeitos.
+    var PALAVRA_ATIVACAO = /(^|\s)(trader|traider|treider|treder|trayder|treyder|tréider|trade|treide)(?=[\s,.!?]|$)[\s,.!?]*/i;
+
+    var modoContinuo = false;
+    var aguardandoAte = 0;
+    var timerJanela = null;
+    var falhasSeguidas = 0;
+    var continuo = new Reconhecimento();
+    continuo.lang = "pt-BR";
+    continuo.interimResults = true;
+    continuo.maxAlternatives = 1;
+    continuo.continuous = true;
+
+    function lerPreferencia() {
+        try { return localStorage.getItem(CHAVE_PREFERENCIA) === "1"; } catch (e) { return false; }
+    }
+
+    function gravarPreferencia(ligado) {
+        try { localStorage.setItem(CHAVE_PREFERENCIA, ligado ? "1" : "0"); } catch (e) { /* sem storage */ }
+    }
+
+    function aguardarComando() {
+        aguardandoAte = Date.now() + JANELA_COMANDO_MS;
+        mostrarBalao("🎤 Pode falar...");
+        clearTimeout(timerJanela);
+        timerJanela = setTimeout(function () {
+            aguardandoAte = 0;
+            if (balao.textContent.indexOf("Pode falar") !== -1) balao.hidden = true;
+        }, JANELA_COMANDO_MS);
+    }
+
+    function encerrarJanela() {
+        aguardandoAte = 0;
+        clearTimeout(timerJanela);
+    }
+
+    function atualizarBotaoContinuo() {
+        botaoContinuo.classList.toggle("continuo", modoContinuo);
+        botaoContinuo.setAttribute("aria-pressed", modoContinuo ? "true" : "false");
+    }
+
+    function iniciarContinuo() {
+        try {
+            continuo.start();
+        } catch (erro) {
+            // já em execução - ignora
+        }
+    }
+
+    function ligarContinuo(avisar) {
+        if (ouvindo) reconhecimento.abort();
+        modoContinuo = true;
+        falhasSeguidas = 0;
+        gravarPreferencia(true);
+        atualizarBotaoContinuo();
+        iniciarContinuo();
+        if (avisar) mostrarBalao("👂 Sempre ouvindo. Diga \"Trader\" e o comando, ex.: \"Trader, posições\".", 6000);
+    }
+
+    function desligarContinuo(mensagem) {
+        modoContinuo = false;
+        encerrarJanela();
+        gravarPreferencia(false);
+        atualizarBotaoContinuo();
+        continuo.abort();
+        mostrarBalao(mensagem || "👂 Modo sempre ouvindo desligado.", mensagem ? 7000 : 3000);
+    }
+
+    continuo.addEventListener("start", function () {
+        falhasSeguidas = 0;
+    });
+
+    continuo.addEventListener("result", function (evento) {
+        for (var i = evento.resultIndex; i < evento.results.length; i++) {
+            var frase = evento.results[i][0].transcript.trim();
+            var ativacao = frase.match(PALAVRA_ATIVACAO);
+            var emJanela = Date.now() < aguardandoAte;
+
+            if (!evento.results[i].isFinal) {
+                // Mostra o que está sendo dito só quando é com o sistema.
+                if (ativacao || emJanela) mostrarBalao("🎤 " + frase);
+                continue;
+            }
+
+            if (ativacao) {
+                var comando = frase.slice(ativacao.index + ativacao[0].length).trim();
+                if (comando) {
+                    encerrarJanela();
+                    executar(comando);
+                } else {
+                    aguardarComando();
+                }
+            } else if (emJanela && frase) {
+                encerrarJanela();
+                executar(frase);
+            } else if (balao.textContent.indexOf("🎤 ") === 0 && !emJanela) {
+                balao.hidden = true;
+            }
+            // Qualquer outra fala (conversa, TV...) é ignorada.
+        }
+    });
+
+    continuo.addEventListener("error", function (evento) {
+        if (evento.error === "not-allowed" || evento.error === "service-not-allowed") {
+            if (esperandoInteracao) return;
+            desligarContinuo("Permissão do microfone negada. Libere o microfone nas configurações do navegador.");
+        } else if (evento.error === "audio-capture") {
+            desligarContinuo("Nenhum microfone encontrado. Modo sempre ouvindo desligado.");
+        } else if (evento.error !== "no-speech" && evento.error !== "aborted") {
+            falhasSeguidas++;
+        }
+    });
+
+    // O navegador encerra a escuta depois de um tempo (silêncio, limite de
+    // sessão, erro de rede): religa sozinho enquanto o modo estiver ligado,
+    // esperando mais a cada falha seguida para não ficar em loop.
+    continuo.addEventListener("end", function () {
+        if (!modoContinuo || esperandoInteracao) return;
+        if (falhasSeguidas >= 5) {
+            desligarContinuo("Reconhecimento de voz indisponível (sem conexão?). Modo sempre ouvindo desligado.");
+            return;
+        }
+        setTimeout(function () {
+            if (modoContinuo) iniciarContinuo();
+        }, 300 + falhasSeguidas * 2000);
+    });
+
+    botaoContinuo.hidden = false;
+    botaoContinuo.addEventListener("click", function () {
+        if (modoContinuo) {
+            desligarContinuo();
+        } else {
+            esperandoInteracao = false;
+            ligarContinuo(true);
+        }
+    });
+
+    // Religa ao abrir cada página. Se o navegador exigir um gesto do usuário
+    // para abrir o microfone, tenta de novo no primeiro clique/tecla.
+    var esperandoInteracao = false;
+    if (lerPreferencia()) {
+        esperandoInteracao = true;
+        modoContinuo = true;
+        atualizarBotaoContinuo();
+        continuo.addEventListener("start", function () { esperandoInteracao = false; }, { once: true });
+        iniciarContinuo();
+        var tentarDeNovo = function () {
+            document.removeEventListener("pointerdown", tentarDeNovo, true);
+            document.removeEventListener("keydown", tentarDeNovo, true);
+            if (esperandoInteracao && modoContinuo) {
+                esperandoInteracao = false;
+                iniciarContinuo();
+            }
+        };
+        document.addEventListener("pointerdown", tentarDeNovo, true);
+        document.addEventListener("keydown", tentarDeNovo, true);
+    }
 })();

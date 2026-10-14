@@ -43,6 +43,9 @@ from .services import (
     calcular_posicoes,
     gerar_alertas_para_usuario,
     gerar_sinais_robo_para_usuario,
+    notificar_analise_ia_telegram,
+    notificar_compras_scanner_telegram,
+    notificar_sugestoes_ia_telegram,
     limpar_alertas_antigos,
     mercado_b3_aberto,
     atualizar_cotacao_diaria,
@@ -863,6 +866,7 @@ def scanner_tecnico(request):
     core.services.escanear_carteira.
     """
     resultados = escanear_carteira(request.user)
+    notificar_compras_scanner_telegram(request.user, resultados)
     return render(request, "core/scanner_tecnico.html", {"resultados": resultados})
 
 
@@ -987,6 +991,8 @@ def analise_mercado_ia(request):
         )
     except IAError as exc:
         contexto["erro_ia"] = str(exc)
+    else:
+        contexto["telegram_enviado"] = notificar_analise_ia_telegram(request.user, contexto["analise_ia"])
 
     return render(request, "core/analise_mercado.html", contexto)
 
@@ -1007,6 +1013,10 @@ def sugestoes_dia_ia(request):
         contexto["sugestoes_ia"] = gerar_sugestoes_ia(contexto["maiores_altas"], contexto["maiores_baixas"])
     except IAError as exc:
         contexto["erro_sugestoes_ia"] = str(exc)
+    else:
+        contexto["telegram_enviado"] = notificar_sugestoes_ia_telegram(
+            request.user, contexto["sugestoes_ia"], contexto["maiores_altas"], contexto["maiores_baixas"],
+        )
 
     return render(request, "core/analise_mercado.html", contexto)
 

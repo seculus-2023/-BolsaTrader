@@ -15,7 +15,7 @@
         {% for a in alertas %}
         <li style="display: flex; flex-wrap: wrap; gap: .6rem; justify-content: space-between; align-items: center; padding: .8rem 0; border-bottom: 1px solid rgba(0,240,255,.1); {% if a.lido %}opacity: .55;{% endif %}">
             <div>
-                <span class="badge-tendencia {% if a.tipo == 'LUCRO' or a.tipo == 'SINAL_COMPRA' %}badge-alta{% elif a.tipo == 'PERDA' or a.tipo == 'SINAL_VENDA' %}badge-baixa{% else %}badge-neutro{% endif %}">
+                <span class="badge-tendencia {% if a.tipo == 'LUCRO' or a.tipo == 'SINAL_COMPRA' or a.tipo == 'SCAN_COMPRA' %}badge-alta{% elif a.tipo == 'PERDA' or a.tipo == 'SINAL_VENDA' %}badge-baixa{% else %}badge-neutro{% endif %}">
                     {{ a.get_tipo_display }}
                 </span>
                 <span style="margin-left: .6rem;">{{ a.mensagem }}</span>

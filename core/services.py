@@ -548,6 +548,7 @@ def executar_ciclo_atualizacao_cotacoes() -> dict:
     for usuario in get_user_model().objects.filter(operacoes__isnull=False).distinct():
         total_alertas += len(gerar_alertas_para_usuario(usuario))
         total_sinais_robo += len(gerar_sinais_robo_para_usuario(usuario))
+        notificar_compras_scanner_telegram(usuario)
         registrar_atualizacao_carteira(usuario)
         registrar_cotacoes_compradas(usuario, RegistroCotacao.AUTOMATICA)
 
@@ -4807,6 +4808,112 @@ def notificar_alertas_telegram(usuario, alertas: list[Alerta]) -> bool:
     linhas = [f"🔔 BolsaTrader - {usuario.get_username()}"]
     linhas += [f"• {alerta.mensagem}" for alerta in alertas]
     return enviar_notificacao_telegram(usuario, "\n".join(linhas))
+
+
+TELEGRAM_LIMITE_CARACTERES = 4000  # o Telegram recusa mensagens acima de 4096
+
+
+def _enviar_linhas_telegram(usuario, titulo: str, linhas: list[str]) -> bool:
+    """Monta "título + linhas" numa só mensagem (cortada no limite do Telegram) e envia."""
+    texto = "\n".join([f"{titulo} - {usuario.get_username()}", *linhas])
+    if len(texto) > TELEGRAM_LIMITE_CARACTERES:
+        texto = texto[:TELEGRAM_LIMITE_CARACTERES - 1] + "…"
+    return enviar_notificacao_telegram(usuario, texto)
+
+
+def notificar_compras_scanner_telegram(usuario, resultados_scanner: list[dict] | None = None) -> list[Alerta]:
+    """
+    Aviso de compra do Scanner Técnico pelo Telegram: para cada ativo
+    acompanhado (comprado ou reservado) com veredito PREDOMINIO_ALTA e plano
+    de trade, quando a última cotação está na entrada sugerida ou abaixo
+    dela. Cada ativo é avisado no máximo uma vez por dia (registra um
+    Alerta.SCANNER_COMPRA, que também aparece na tela de alertas).
+
+    `resultados_scanner` é a saída de escanear_carteira - quem já calculou
+    (a tela do Scanner) passa a lista pronta pra não escanear duas vezes.
+    """
+    if credenciais_telegram(usuario) is None:
+        return []
+    if resultados_scanner is None:
+        resultados_scanner = escanear_carteira(usuario)
+
+    hoje = timezone.localdate()
+    novos_alertas = []
+    for item in resultados_scanner:
+        plano = item.get("plano_trade")
+        if item["veredito"] != "PREDOMINIO_ALTA" or not plano:
+            continue
+        ativo = item["ativo"]
+        cotacao = ativo.ultima_cotacao()
+        if cotacao is None or float(cotacao.preco_fechamento) > plano["entrada"]:
+            continue
+        if Alerta.objects.filter(
+            usuario=usuario, ativo=ativo, tipo=Alerta.SCANNER_COMPRA, criado_em__date=hoje,
+        ).exists():
+            continue
+
+        rr = f", R:R 1:{plano['relacao_risco_retorno']}" if plano.get("relacao_risco_retorno") else ""
+        situacao = "reservado" if item.get("apenas_reservado") else "em carteira"
+        mensagem = (
+            f"{ativo.ticker} ({situacao}): cotação R$ {cotacao.preco_fechamento} na entrada "
+            f"R$ {plano['entrada']} - stop R$ {plano['stop']}, alvo R$ {plano['alvo']}{rr}."
+        )
+        novos_alertas.append(Alerta.objects.create(
+            usuario=usuario, ativo=ativo, tipo=Alerta.SCANNER_COMPRA, mensagem=mensagem[:255],
+        ))
+
+    if novos_alertas:
+        _enviar_linhas_telegram(
+            usuario, "🛒 Scanner Técnico: oportunidade de compra",
+            [f"• {alerta.mensagem}" for alerta in novos_alertas]
+            + ["Sinal técnico, não é recomendação de investimento."],
+        )
+    return novos_alertas
+
+
+def notificar_analise_ia_telegram(usuario, analise_ia: dict) -> bool:
+    """
+    Envia pelo Telegram o resultado do botão "Análise da B3 hoje (IA)": o
+    resumo do mercado e os ativos que a IA classificou como ALTA (candidatos
+    a compra), com a pontuação do Scanner quando houver. Nada é enviado se
+    nenhum ativo saiu como ALTA.
+    """
+    linhas_ia = analise_ia.get("linhas") or []
+    altas = [l for l in linhas_ia if not l["eh_mercado_geral"] and l["situacao"] == "ALTA"]
+    if not altas or credenciais_telegram(usuario) is None:
+        return False
+
+    linhas = [f"B3 hoje: {l['comentario']}" for l in linhas_ia if l["eh_mercado_geral"]]
+    for linha in altas:
+        score = f" ({linha['score']}/100)" if linha.get("score") is not None else ""
+        linhas.append(f"• {linha['ticker']}{score}: {linha['comentario']}")
+    linhas.append("Leitura da IA, não é recomendação de investimento.")
+    return _enviar_linhas_telegram(usuario, "🤖 Análise da B3 hoje (IA): sinais de compra", linhas)
+
+
+def notificar_sugestoes_ia_telegram(usuario, sugestoes_ia: dict, maiores_altas: list[dict], maiores_baixas: list[dict]) -> bool:
+    """
+    Envia pelo Telegram as "Sugestões de hoje (IA)", com a cotação e a
+    variação do dia de cada ativo (tiradas das maiores altas/baixas que o
+    sistema já buscou - não vêm da IA).
+    """
+    sugestoes = sugestoes_ia.get("linhas") or []
+    if not sugestoes or credenciais_telegram(usuario) is None:
+        return False
+
+    por_ticker = {a.get("stock", "").upper(): a for a in [*maiores_altas, *maiores_baixas]}
+    linhas = []
+    for sugestao in sugestoes:
+        dados = por_ticker.get(sugestao["ticker"], {})
+        detalhes = []
+        if dados.get("close") is not None:
+            detalhes.append(f"R$ {dados['close']}")
+        if dados.get("change") is not None:
+            detalhes.append(f"{dados['change']:+.2f}%" if isinstance(dados["change"], (int, float)) else f"{dados['change']}%")
+        sufixo = f" ({', '.join(detalhes)})" if detalhes else ""
+        linhas.append(f"• {sugestao['ticker']}{sufixo}: {sugestao['justificativa']}")
+    linhas.append("Sugestões da IA, não é recomendação de investimento.")
+    return _enviar_linhas_telegram(usuario, "💡 Sugestões de hoje (IA)", linhas)
 
 
 # --------------------------------------------------------------------------

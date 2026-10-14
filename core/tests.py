@@ -1288,6 +1288,71 @@ class NotificacaoTelegramTests(TestCase):
         with self.assertLogs("core.services", level="WARNING"):
             self.assertFalse(core_services.enviar_notificacao_telegram(self.usuario, "oi"))
 
+    def _item_scanner(self, veredito="PREDOMINIO_ALTA", entrada=25.0):
+        plano = {"entrada": entrada, "stop": 23.5, "alvo": 28.0, "relacao_risco_retorno": 2.0}
+        return {
+            "ativo": self.ativo, "veredito": veredito, "apenas_reservado": False,
+            "plano_trade": plano if veredito in ("PREDOMINIO_ALTA", "PREDOMINIO_BAIXA") else None,
+        }
+
+    @patch("core.services.requests.post")
+    def test_scanner_avisa_compra_com_cotacao_na_entrada_uma_vez_por_dia(self, mock_post):
+        mock_post.return_value = Mock(status_code=200, json=Mock(return_value={"ok": True}))
+        self._cadastrar_telegram(self.usuario)
+
+        alertas = core_services.notificar_compras_scanner_telegram(self.usuario, [self._item_scanner()])
+        core_services.notificar_compras_scanner_telegram(self.usuario, [self._item_scanner()])
+
+        self.assertEqual([a.tipo for a in alertas], [Alerta.SCANNER_COMPRA])
+        mock_post.assert_called_once()
+        texto = mock_post.call_args.kwargs["data"]["text"]
+        self.assertIn("BBDC4", texto)
+        self.assertIn("stop R$ 23.5", texto)
+
+    @patch("core.services.requests.post")
+    def test_scanner_nao_avisa_acima_da_entrada_nem_sem_predominio_de_alta(self, mock_post):
+        self._cadastrar_telegram(self.usuario)
+        itens = [self._item_scanner(entrada=24.0), self._item_scanner(veredito="CONFLITANTE")]
+
+        self.assertEqual(core_services.notificar_compras_scanner_telegram(self.usuario, itens), [])
+        mock_post.assert_not_called()
+
+    @patch("core.services.requests.post")
+    def test_analise_ia_envia_so_ativos_em_alta(self, mock_post):
+        mock_post.return_value = Mock(status_code=200, json=Mock(return_value={"ok": True}))
+        self._cadastrar_telegram(self.usuario)
+        analise = {"linhas": [
+            {"ticker": "MERCADO", "eh_mercado_geral": True, "situacao": "NEUTRO", "comentario": "Pregão morno."},
+            {"ticker": "BBDC4", "eh_mercado_geral": False, "situacao": "ALTA", "comentario": "Rompeu.", "score": 83},
+            {"ticker": "VALE3", "eh_mercado_geral": False, "situacao": "BAIXA", "comentario": "Fraca.", "score": 20},
+        ]}
+
+        self.assertTrue(core_services.notificar_analise_ia_telegram(self.usuario, analise))
+        texto = mock_post.call_args.kwargs["data"]["text"]
+        self.assertIn("Pregão morno.", texto)
+        self.assertIn("BBDC4 (83/100): Rompeu.", texto)
+        self.assertNotIn("VALE3", texto)
+
+    @patch("core.services.requests.post")
+    def test_analise_ia_sem_ativo_em_alta_nao_envia(self, mock_post):
+        self._cadastrar_telegram(self.usuario)
+        analise = {"linhas": [
+            {"ticker": "VALE3", "eh_mercado_geral": False, "situacao": "BAIXA", "comentario": "Fraca.", "score": 20},
+        ]}
+        self.assertFalse(core_services.notificar_analise_ia_telegram(self.usuario, analise))
+        mock_post.assert_not_called()
+
+    @patch("core.services.requests.post")
+    def test_sugestoes_ia_enviam_cotacao_e_variacao_do_dia(self, mock_post):
+        mock_post.return_value = Mock(status_code=200, json=Mock(return_value={"ok": True}))
+        self._cadastrar_telegram(self.usuario)
+        sugestoes = {"linhas": [{"ticker": "PETR4", "justificativa": "Volume forte."}]}
+        altas = [{"stock": "PETR4", "name": "Petrobras", "close": 38.1, "change": 4.2}]
+
+        self.assertTrue(core_services.notificar_sugestoes_ia_telegram(self.usuario, sugestoes, altas, []))
+        texto = mock_post.call_args.kwargs["data"]["text"]
+        self.assertIn("PETR4 (R$ 38.1, +4.20%): Volume forte.", texto)
+
 
 class BrapiIntegracaoTests(TestCase):
     """Testa a integração com a API de cotações usando um mock (sem chamar a API real)."""

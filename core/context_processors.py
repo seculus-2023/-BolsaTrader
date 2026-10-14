@@ -14,7 +14,7 @@ def alertas_pendentes(request):
     nao_lidos = request.user.alertas.filter(lido=False)
     total = nao_lidos.count()
     total_acao = nao_lidos.filter(
-        tipo__in=[Alerta.LUCRO, Alerta.PERDA, Alerta.SINAL_COMPRA, Alerta.SINAL_VENDA]
+        tipo__in=[Alerta.LUCRO, Alerta.PERDA, Alerta.SINAL_COMPRA, Alerta.SINAL_VENDA, Alerta.SCANNER_COMPRA]
     ).count()
     return {"total_alertas_pendentes": total, "total_alertas_acao_pendentes": total_acao}
 

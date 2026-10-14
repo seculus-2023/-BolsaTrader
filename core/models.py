@@ -352,6 +352,9 @@ class Alerta(models.Model):
     TENDENCIA = "TENDENCIA"
     SINAL_COMPRA = "SINAL_COMPRA"
     SINAL_VENDA = "SINAL_VENDA"
+    # Scanner Técnico com predomínio de alta e cotação na entrada (ou abaixo)
+    # do plano de trade - ver core.services.notificar_compras_scanner_telegram
+    SCANNER_COMPRA = "SCAN_COMPRA"
     LEMBRETE = "LEMBRETE"
     TIPO_CHOICES = [
         (LUCRO, "Meta de lucro atingida"),
@@ -359,6 +362,7 @@ class Alerta(models.Model):
         (TENDENCIA, "Sinal de tendência de mercado"),
         (SINAL_COMPRA, "Robô: sinal de compra"),
         (SINAL_VENDA, "Robô: sinal de venda"),
+        (SCANNER_COMPRA, "Scanner: cotação na entrada (compra)"),
         (LEMBRETE, "Lembrete geral"),
     ]
 

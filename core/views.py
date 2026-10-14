@@ -34,7 +34,7 @@ from .forms import (
     PrevisaoAnalistaForm,
 )
 from .models import (
-    Operacao, Alerta, Ativo, Cotacao, MensagemWhatsapp, FonteNoticia, AcaoB3, RegistroAtualizacaoCarteira,
+    Operacao, Alerta, Ativo, Cotacao, MensagemWhatsapp, FonteNoticia, Noticia, AcaoB3, RegistroAtualizacaoCarteira,
     LancamentoContaCorrente, CriptoAtivo, OperacaoCripto, RegistroAtualizacaoCarteiraCripto, RegistroCotacao,
     PrevisaoAnalista, FundamentosAtivo,
 )
@@ -1593,6 +1593,18 @@ def noticias_atualizar(request):
     if falhas:
         messages.warning(request, f"Não foi possível ler {falhas} fonte(s) agora. Tente novamente em instantes.")
 
+    return redirect("core:noticias")
+
+
+@login_required
+@require_POST
+def noticias_limpar(request):
+    """Apaga todas as manchetes capturadas (as fontes continuam cadastradas) - só staff."""
+    if recusa := _recusa_se_nao_for_staff(request):
+        return recusa
+    qtd, _ = Noticia.objects.all().delete()
+    request.session.pop("noticias_novas_ids", None)
+    messages.success(request, f"{qtd} notícia(s) excluída(s).")
     return redirect("core:noticias")
 
 

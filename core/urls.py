@@ -102,6 +102,7 @@ urlpatterns = [
     ),
     path("noticias/", views.noticias, name="noticias"),
     path("noticias/atualizar/", views.noticias_atualizar, name="noticias_atualizar"),
+    path("noticias/limpar/", views.noticias_limpar, name="noticias_limpar"),
     path("noticias/fontes/<int:fonte_id>/alternar/", views.noticia_fonte_alternar, name="noticia_fonte_alternar"),
     path("noticias/fontes/<int:fonte_id>/excluir/", views.noticia_fonte_excluir, name="noticia_fonte_excluir"),
     path("acoes-b3/", views.acoes_b3, name="acoes_b3"),

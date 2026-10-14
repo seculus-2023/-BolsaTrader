@@ -777,7 +777,8 @@ def _fatias_rosca_carteira(por_ativo: list) -> list[dict]:
     comprimento = % com deslocamento = soma das anteriores.
     """
     itens = [(i["ativo"].ticker, float(i["percentual_carteira"])) for i in por_ativo if i["percentual_carteira"]]
-    if len(itens) > len(_CORES_ROSCA) + 1:
+    # só há uma cor por fatia: a partir da 6ª posição tudo vai para "Outros"
+    if len(itens) > len(_CORES_ROSCA):
         itens = itens[:len(_CORES_ROSCA)] + [
             (f"Outros ({len(itens) - len(_CORES_ROSCA)})", sum(p for _, p in itens[len(_CORES_ROSCA):])),
         ]
@@ -787,11 +788,10 @@ def _fatias_rosca_carteira(por_ativo: list) -> list[dict]:
     fatias, inicio = [], 0.0
     for indice, (rotulo, pct) in enumerate(itens):
         tamanho = pct / total * 100
-        outros = rotulo.startswith("Outros")
         fatias.append({
             "rotulo": rotulo,
             "percentual_texto": f"{pct:.2f}".replace(".", ","),
-            "cor": _COR_ROSCA_OUTROS if outros else _CORES_ROSCA[indice],
+            "cor": _CORES_ROSCA[indice] if indice < len(_CORES_ROSCA) else _COR_ROSCA_OUTROS,
             # 0,4 de folga = o vão de ~2px entre fatias vizinhas
             "traco": round(max(tamanho - 0.4, 0.1), 3),
             "vao": round(100 - max(tamanho - 0.4, 0.1), 3),

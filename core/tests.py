@@ -6852,3 +6852,39 @@ class PrevisoesAnalistasTests(TestCase):
 
         self.assertEqual(resumo["ativos_total"], 1)
         self.assertTrue(Cotacao.objects.filter(ativo=self.ativo, data=timezone.localdate()).exists())
+
+
+class FatiasRoscaCarteiraTest(TestCase):
+    """core.views._fatias_rosca_carteira - gráfico de rosca "% da carteira"."""
+
+    def _por_ativo(self, quantidade):
+        return [
+            {"ativo": Mock(ticker=f"ATV{n}"), "percentual_carteira": Decimal("10")}
+            for n in range(quantidade)
+        ]
+
+    def test_seis_ativos_agrupa_o_sexto_em_outros(self):
+        from .views import _fatias_rosca_carteira, _COR_ROSCA_OUTROS
+
+        fatias = _fatias_rosca_carteira(self._por_ativo(6))
+
+        self.assertEqual(len(fatias), 6)
+        self.assertEqual(fatias[-1]["rotulo"], "Outros (1)")
+        self.assertEqual(fatias[-1]["cor"], _COR_ROSCA_OUTROS)
+
+    def test_ate_cinco_ativos_nao_cria_outros(self):
+        from .views import _fatias_rosca_carteira
+
+        fatias = _fatias_rosca_carteira(self._por_ativo(5))
+
+        self.assertEqual([f["rotulo"] for f in fatias], [f"ATV{n}" for n in range(5)])
+        self.assertEqual(len({f["cor"] for f in fatias}), 5)
+
+    def test_muitos_ativos_soma_o_resto_em_outros(self):
+        from .views import _fatias_rosca_carteira
+
+        fatias = _fatias_rosca_carteira(self._por_ativo(9))
+
+        self.assertEqual(len(fatias), 6)
+        self.assertEqual(fatias[-1]["rotulo"], "Outros (4)")
+        self.assertEqual(fatias[-1]["percentual_texto"], "40,00")

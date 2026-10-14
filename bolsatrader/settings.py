@@ -372,6 +372,11 @@ WHATSAPP_APP_SECRET = config("WHATSAPP_APP_SECRET", default="")
 OPENAI_API_KEY = config("OPENAI_API_KEY", default="")
 OPENAI_BASE_URL = config("OPENAI_BASE_URL", default="https://api.openai.com/v1")
 OPENAI_MODEL = config("OPENAI_MODEL", default="gpt-4o-mini")
+# Análise da B3 hoje + Sugestões de hoje (IA) enviadas sozinhas pelo Telegram,
+# uma vez por dia útil, no primeiro ciclo de cotações a partir desta hora
+# (B3 abre às 10h) - ver core.services.enviar_ia_diaria_telegram.
+TELEGRAM_IA_DIARIA = config("TELEGRAM_IA_DIARIA", default=True, cast=bool)
+TELEGRAM_IA_DIARIA_HORA = config("TELEGRAM_IA_DIARIA_HORA", default=11, cast=int)
 
 
 # --------------------------------------------------------------------------

@@ -45,6 +45,7 @@ from .services import (
     gerar_sinais_robo_para_usuario,
     notificar_analise_ia_telegram,
     notificar_compras_scanner_telegram,
+    notificar_reservas_atingidas_telegram,
     notificar_sugestoes_ia_telegram,
     limpar_alertas_antigos,
     mercado_b3_aberto,
@@ -899,6 +900,7 @@ def alertas(request):
     """
     gerar_alertas_para_usuario(request.user)
     gerar_sinais_robo_para_usuario(request.user)
+    notificar_reservas_atingidas_telegram(request.user)
     limpar_alertas_antigos()
     lista_alertas = request.user.alertas.all()
     return render(request, "core/alertas.html", {"alertas": lista_alertas})

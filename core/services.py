@@ -545,10 +545,13 @@ def executar_ciclo_atualizacao_cotacoes() -> dict:
     atualizados, falhas = atualizar_cotacoes_ativos(ativos)
 
     total_alertas, total_sinais_robo = 0, 0
+    cache_ia_diaria = {}
     for usuario in get_user_model().objects.filter(operacoes__isnull=False).distinct():
         total_alertas += len(gerar_alertas_para_usuario(usuario))
         total_sinais_robo += len(gerar_sinais_robo_para_usuario(usuario))
         notificar_compras_scanner_telegram(usuario)
+        notificar_reservas_atingidas_telegram(usuario)
+        enviar_ia_diaria_telegram(usuario, cache_ia_diaria)
         registrar_atualizacao_carteira(usuario)
         registrar_cotacoes_compradas(usuario, RegistroCotacao.AUTOMATICA)
 
@@ -4797,11 +4800,12 @@ def notificar_alertas_telegram(usuario, alertas: list[Alerta]) -> bool:
     única mensagem. Como os alertas não se repetem no mesmo dia para o mesmo
     ativo/tipo, cada um é avisado uma vez só.
 
-    Só vai para o Telegram a meta de lucro atingida de um ativo comprado
-    (Alerta.LUCRO) - meta de perda, tendência e sinais do robô continuam
-    sendo gerados, mas ficam só na tela de alertas do sistema.
+    Só vão para o Telegram a meta de lucro atingida de um ativo comprado
+    (Alerta.LUCRO) e o sinal de compra do robô consultor (Alerta.SINAL_COMPRA)
+    - meta de perda, tendência e sinal de venda continuam sendo gerados, mas
+    ficam só na tela de alertas do sistema.
     """
-    alertas = [alerta for alerta in alertas if alerta.tipo == Alerta.LUCRO]
+    alertas = [alerta for alerta in alertas if alerta.tipo in (Alerta.LUCRO, Alerta.SINAL_COMPRA)]
     if not alertas or credenciais_telegram(usuario) is None:
         return False
 
@@ -4871,6 +4875,55 @@ def notificar_compras_scanner_telegram(usuario, resultados_scanner: list[dict] |
     return novos_alertas
 
 
+def notificar_reservas_atingidas_telegram(usuario) -> list[Alerta]:
+    """
+    Avisa pelo Telegram quando a última cotação de um ativo reservado
+    (Operacao RESERVAR) cai até o preço da reserva ou abaixo - um aviso por
+    ativo por dia (Alerta.RESERVA_ATINGIDA), usando o maior preço reservado
+    quando há mais de uma reserva do mesmo ativo. A reserva automática que o
+    robô consultor criou hoje fica de fora: ela nasce com a cotação do momento
+    como preço, e o sinal de compra do robô já foi avisado.
+    """
+    if credenciais_telegram(usuario) is None:
+        return []
+
+    hoje = timezone.localdate()
+    reservas = (
+        Operacao.objects.filter(usuario=usuario, tipo=Operacao.RESERVAR)
+        .exclude(data_operacao=hoje, observacao=OBSERVACAO_RESERVA_ROBO)
+        .select_related("ativo")
+    )
+    preco_reservado_por_ativo = {}
+    for reserva in reservas:
+        atual = preco_reservado_por_ativo.get(reserva.ativo)
+        if atual is None or reserva.preco_unitario > atual:
+            preco_reservado_por_ativo[reserva.ativo] = reserva.preco_unitario
+
+    novos_alertas = []
+    for ativo, preco_reservado in sorted(preco_reservado_por_ativo.items(), key=lambda par: par[0].ticker):
+        cotacao = ativo.ultima_cotacao()
+        if cotacao is None or cotacao.preco_fechamento > preco_reservado:
+            continue
+        if Alerta.objects.filter(
+            usuario=usuario, ativo=ativo, tipo=Alerta.RESERVA_ATINGIDA, criado_em__date=hoje,
+        ).exists():
+            continue
+        novos_alertas.append(Alerta.objects.create(
+            usuario=usuario, ativo=ativo, tipo=Alerta.RESERVA_ATINGIDA,
+            mensagem=(
+                f"{ativo.ticker}: cotação R$ {cotacao.preco_fechamento} chegou ao preço da reserva "
+                f"(R$ {preco_reservado})."
+            ),
+        ))
+
+    if novos_alertas:
+        _enviar_linhas_telegram(
+            usuario, "🎯 Reserva atingida: hora de decidir a compra",
+            [f"• {alerta.mensagem}" for alerta in novos_alertas],
+        )
+    return novos_alertas
+
+
 def notificar_analise_ia_telegram(usuario, analise_ia: dict) -> bool:
     """
     Envia pelo Telegram o resultado do botão "Análise da B3 hoje (IA)": o
@@ -4914,6 +4967,48 @@ def notificar_sugestoes_ia_telegram(usuario, sugestoes_ia: dict, maiores_altas: 
         linhas.append(f"• {sugestao['ticker']}{sufixo}: {sugestao['justificativa']}")
     linhas.append("Sugestões da IA, não é recomendação de investimento.")
     return _enviar_linhas_telegram(usuario, "💡 Sugestões de hoje (IA)", linhas)
+
+
+def enviar_ia_diaria_telegram(usuario, cache: dict) -> bool:
+    """
+    Envio automático (uma vez por dia útil, a partir de
+    settings.TELEGRAM_IA_DIARIA_HORA) da Análise da B3 hoje e das Sugestões
+    de hoje (IA) pelo Telegram, chamado pelo ciclo de cotações (ver
+    executar_ciclo_atualizacao_cotacoes). O envio do dia fica marcado num
+    Alerta.IA_DIARIA; se a IA ou a brapi falharem, não marca, e o próximo
+    ciclo tenta de novo.
+
+    `cache` é um dict compartilhado entre os usuários do mesmo ciclo: as
+    maiores altas/baixas e as sugestões (iguais pra todos) são buscadas uma
+    vez só - só a análise depende da carteira de cada um.
+    """
+    agora = timezone.localtime()
+    if (
+        not settings.TELEGRAM_IA_DIARIA or not ia_configurada()
+        or agora.weekday() >= 5 or agora.hour < settings.TELEGRAM_IA_DIARIA_HORA
+        or credenciais_telegram(usuario) is None
+        or Alerta.objects.filter(usuario=usuario, tipo=Alerta.IA_DIARIA, criado_em__date=agora.date()).exists()
+    ):
+        return False
+
+    try:
+        if "variacoes" not in cache:
+            cache["variacoes"] = buscar_maiores_variacoes(limite=10)
+        maiores_altas, maiores_baixas = cache["variacoes"]
+        if "sugestoes" not in cache:
+            cache["sugestoes"] = gerar_sugestoes_ia(maiores_altas, maiores_baixas)
+        analise = gerar_analise_b3_ia(escanear_carteira(usuario), maiores_altas, maiores_baixas)
+    except (BrapiError, IAError) as exc:
+        logger.warning("IA diária pelo Telegram não enviada para %s: %s", usuario.get_username(), exc)
+        return False
+
+    enviou_analise = notificar_analise_ia_telegram(usuario, analise)
+    enviou_sugestoes = notificar_sugestoes_ia_telegram(usuario, cache["sugestoes"], maiores_altas, maiores_baixas)
+    Alerta.objects.create(
+        usuario=usuario, tipo=Alerta.IA_DIARIA,
+        mensagem="Análise da B3 hoje e Sugestões de hoje (IA) enviadas automaticamente pelo Telegram.",
+    )
+    return enviou_analise or enviou_sugestoes
 
 
 # --------------------------------------------------------------------------
@@ -5071,7 +5166,11 @@ def gerar_sinais_robo_para_usuario(usuario) -> list[Alerta]:
         if sinal == "COMPRA":
             _reservar_automaticamente(usuario, ativo)
 
+    notificar_alertas_telegram(usuario, novos_alertas)
     return novos_alertas
+
+
+OBSERVACAO_RESERVA_ROBO = "Reserva automática do robô consultor - sinal técnico de compra (RSI/MACD/tendência)."
 
 
 def _reservar_automaticamente(usuario, ativo: Ativo) -> None:
@@ -5100,7 +5199,7 @@ def _reservar_automaticamente(usuario, ativo: Ativo) -> None:
         quantidade=1,
         preco_unitario=cotacao.preco_fechamento,
         data_operacao=timezone.localdate(),
-        observacao="Reserva automática do robô consultor - sinal técnico de compra (RSI/MACD/tendência).",
+        observacao=OBSERVACAO_RESERVA_ROBO,
     )
 
 

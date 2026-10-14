@@ -1224,12 +1224,12 @@ class NotificacaoTelegramTests(TestCase):
         self.assertIn("BBDC4: meta de lucro atingida", kwargs["data"]["text"])
 
     @patch("core.services.requests.post")
-    def test_so_a_meta_de_lucro_vai_para_o_telegram(self, mock_post):
+    def test_so_meta_de_lucro_e_sinal_de_compra_vao_para_o_telegram(self, mock_post):
         mock_post.return_value = Mock(status_code=200, json=Mock(return_value={"ok": True}))
         self._cadastrar_telegram(self.usuario)
         alertas = [
             Alerta.objects.create(usuario=self.usuario, ativo=self.ativo, tipo=tipo, mensagem=f"BBDC4: {tipo}")
-            for tipo in (Alerta.PERDA, Alerta.TENDENCIA, Alerta.SINAL_COMPRA, Alerta.SINAL_VENDA)
+            for tipo in (Alerta.PERDA, Alerta.TENDENCIA, Alerta.SINAL_VENDA)
         ]
 
         self.assertFalse(core_services.notificar_alertas_telegram(self.usuario, alertas))
@@ -1244,6 +1244,13 @@ class NotificacaoTelegramTests(TestCase):
         self.assertIn("BBDC4: lucro", texto)
         self.assertNotIn(Alerta.PERDA, texto)
         self.assertNotIn(Alerta.TENDENCIA, texto)
+
+        mock_post.reset_mock()
+        compra = Alerta.objects.create(
+            usuario=self.usuario, ativo=self.ativo, tipo=Alerta.SINAL_COMPRA, mensagem="BBDC4: compra",
+        )
+        self.assertTrue(core_services.notificar_alertas_telegram(self.usuario, [compra]))
+        self.assertIn("BBDC4: compra", mock_post.call_args.kwargs["data"]["text"])
 
     @patch("core.services.requests.post")
     def test_meta_de_perda_atingida_nao_envia(self, mock_post):
@@ -1341,6 +1348,69 @@ class NotificacaoTelegramTests(TestCase):
         ]}
         self.assertFalse(core_services.notificar_analise_ia_telegram(self.usuario, analise))
         mock_post.assert_not_called()
+
+    def _reservar(self, ativo, preco, **extra):
+        return Operacao.objects.create(
+            usuario=self.usuario, ativo=ativo, tipo=Operacao.RESERVAR, quantidade=1,
+            preco_unitario=Decimal(preco), data_operacao=extra.pop("data_operacao", date.today() - timedelta(days=1)),
+            **extra,
+        )
+
+    @patch("core.services.requests.post")
+    def test_reserva_atingida_avisa_uma_vez_por_dia(self, mock_post):
+        mock_post.return_value = Mock(status_code=200, json=Mock(return_value={"ok": True}))
+        self._cadastrar_telegram(self.usuario)
+        self._reservar(self.ativo, "26.00")  # cotação 25 <= 26
+
+        alertas = core_services.notificar_reservas_atingidas_telegram(self.usuario)
+        core_services.notificar_reservas_atingidas_telegram(self.usuario)
+
+        self.assertEqual([a.tipo for a in alertas], [Alerta.RESERVA_ATINGIDA])
+        mock_post.assert_called_once()
+        self.assertIn("BBDC4: cotação R$ 25.00", mock_post.call_args.kwargs["data"]["text"])
+
+    @patch("core.services.requests.post")
+    def test_reserva_acima_da_cotacao_ou_do_robo_hoje_nao_avisa(self, mock_post):
+        self._cadastrar_telegram(self.usuario)
+        self._reservar(self.ativo, "24.00")  # cotação 25 > 24
+        outro = Ativo.objects.create(ticker="ITUB4")
+        Cotacao.objects.create(ativo=outro, data=date.today(), preco_fechamento=Decimal("30.00"))
+        self._reservar(outro, "30.00", data_operacao=date.today(), observacao=core_services.OBSERVACAO_RESERVA_ROBO)
+
+        self.assertEqual(core_services.notificar_reservas_atingidas_telegram(self.usuario), [])
+        mock_post.assert_not_called()
+
+    @override_settings(OPENAI_API_KEY="chave", TELEGRAM_IA_DIARIA=True, TELEGRAM_IA_DIARIA_HORA=11)
+    @patch("core.services.gerar_analise_b3_ia")
+    @patch("core.services.gerar_sugestoes_ia")
+    @patch("core.services.buscar_maiores_variacoes")
+    @patch("core.services.requests.post")
+    def test_ia_diaria_envia_uma_vez_por_dia_util(self, mock_post, mock_variacoes, mock_sugestoes, mock_analise):
+        mock_post.return_value = Mock(status_code=200, json=Mock(return_value={"ok": True}))
+        mock_variacoes.return_value = ([{"stock": "PETR4", "close": 38.1, "change": 4.2}], [])
+        mock_sugestoes.return_value = {"linhas": [{"ticker": "PETR4", "justificativa": "Volume forte."}]}
+        mock_analise.return_value = {"linhas": [
+            {"ticker": "BBDC4", "eh_mercado_geral": False, "situacao": "ALTA", "comentario": "Rompeu.", "score": 83},
+        ]}
+        self._cadastrar_telegram(self.usuario)
+        quarta_meio_dia = timezone.make_aware(datetime(2026, 10, 14, 12, 0))
+
+        with patch("core.services.timezone.localtime", return_value=quarta_meio_dia):
+            cache = {}
+            self.assertTrue(core_services.enviar_ia_diaria_telegram(self.usuario, cache))
+            self.assertFalse(core_services.enviar_ia_diaria_telegram(self.usuario, cache))
+
+        self.assertEqual(mock_post.call_count, 2)  # análise + sugestões, só no primeiro ciclo
+        mock_variacoes.assert_called_once()
+
+    @override_settings(OPENAI_API_KEY="chave", TELEGRAM_IA_DIARIA=True, TELEGRAM_IA_DIARIA_HORA=11)
+    @patch("core.services.buscar_maiores_variacoes")
+    def test_ia_diaria_nao_roda_antes_da_hora_nem_no_fim_de_semana(self, mock_variacoes):
+        self._cadastrar_telegram(self.usuario)
+        for momento in (datetime(2026, 10, 14, 10, 30), datetime(2026, 10, 17, 12, 0)):  # quarta cedo, sábado
+            with patch("core.services.timezone.localtime", return_value=timezone.make_aware(momento)):
+                self.assertFalse(core_services.enviar_ia_diaria_telegram(self.usuario, {}))
+        mock_variacoes.assert_not_called()
 
     @patch("core.services.requests.post")
     def test_sugestoes_ia_enviam_cotacao_e_variacao_do_dia(self, mock_post):

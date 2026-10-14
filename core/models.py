@@ -355,6 +355,12 @@ class Alerta(models.Model):
     # Scanner Técnico com predomínio de alta e cotação na entrada (ou abaixo)
     # do plano de trade - ver core.services.notificar_compras_scanner_telegram
     SCANNER_COMPRA = "SCAN_COMPRA"
+    # cotação caiu até o preço de uma reserva (Operacao RESERVAR) - ver
+    # core.services.notificar_reservas_atingidas_telegram
+    RESERVA_ATINGIDA = "RESERVA_OK"
+    # marca que a Análise/Sugestões diárias da IA já foram enviadas hoje pelo
+    # Telegram - ver core.services.enviar_ia_diaria_telegram
+    IA_DIARIA = "IA_DIARIA"
     LEMBRETE = "LEMBRETE"
     TIPO_CHOICES = [
         (LUCRO, "Meta de lucro atingida"),
@@ -363,6 +369,8 @@ class Alerta(models.Model):
         (SINAL_COMPRA, "Robô: sinal de compra"),
         (SINAL_VENDA, "Robô: sinal de venda"),
         (SCANNER_COMPRA, "Scanner: cotação na entrada (compra)"),
+        (RESERVA_ATINGIDA, "Reserva: cotação no preço reservado"),
+        (IA_DIARIA, "IA do dia enviada ao Telegram"),
         (LEMBRETE, "Lembrete geral"),
     ]
 

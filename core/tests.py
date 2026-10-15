@@ -3868,7 +3868,8 @@ class RelatorioScannerEIaServicosTests(TestCase):
         import openpyxl
         wb = openpyxl.load_workbook(io.BytesIO(conteudo))
         self.assertEqual(
-            wb.sheetnames, ["Scanner Técnico", "Ranking técnico", "Análise da B3 (IA)", "Sugestões de hoje (IA)"],
+            wb.sheetnames, ["Scanner Técnico", "Ranking técnico", "Análise da B3 (IA)", "Sugestões de hoje (IA)",
+             "Análise da carteira", "Análise da carteira (IA)"],
         )
 
         ws1 = wb["Scanner Técnico"]
@@ -4026,7 +4027,10 @@ class RelatorioScannerEIaViewTests(TestCase):
         resposta_sugestoes.json = lambda: {
             "choices": [{"message": {"content": "RELS3|Boa oportunidade de entrada hoje."}}]
         }
-        mock_post.side_effect = [resposta_analise, resposta_sugestoes]
+        resposta_carteira = Mock()
+        resposta_carteira.raise_for_status = lambda: None
+        resposta_carteira.json = lambda: {"choices": [{"message": {"content": "CARTEIRA|MANTER|Ok."}}]}
+        mock_post.side_effect = [resposta_analise, resposta_sugestoes, resposta_carteira]
 
         with override_settings(OPENAI_API_KEY="sk-teste"):
             resposta = self.client.get(reverse("core:scanner_ia_exportar_excel"))
@@ -4034,7 +4038,7 @@ class RelatorioScannerEIaViewTests(TestCase):
         import io
         import openpyxl
         wb = openpyxl.load_workbook(io.BytesIO(resposta.content))
-        self.assertEqual(mock_post.call_count, 2)  # uma consulta pra cada seção, não repete a mesma chamada
+        self.assertEqual(mock_post.call_count, 3)  # uma consulta pra cada seção, não repete a mesma chamada
         valores_sugestoes = [c.value for row in wb["Sugestões de hoje (IA)"].iter_rows() for c in row if c.value]
         self.assertIn("RELS3", valores_sugestoes)
         self.assertIn("Boa oportunidade de entrada hoje.", valores_sugestoes)
@@ -4076,6 +4080,63 @@ class RelatorioScannerEIaViewTests(TestCase):
         wb = openpyxl.load_workbook(io.BytesIO(resposta.content))
         valores = [c.value for row in wb["Scanner Técnico"].iter_rows() for c in row if c.value]
         self.assertNotIn("ALHEIA3", valores)
+
+    def _resposta_ia(self, conteudo):
+        resposta = Mock()
+        resposta.raise_for_status = lambda: None
+        resposta.json = lambda: {"choices": [{"message": {"content": conteudo}}]}
+        return resposta
+
+    @patch("core.services.requests.post")
+    def test_exportar_excel_inclui_analise_da_carteira_local_e_por_ia(self, mock_post):
+        mock_post.side_effect = [
+            self._resposta_ia("MERCADO|ALTA|Pregão positivo."),
+            self._resposta_ia("RELS3|Boa entrada."),
+            self._resposta_ia(
+                "CARTEIRA|ATENCAO|Carteira concentrada num ativo só.\n"
+                "RELS3|MANTER|Segue dentro das metas.\n"
+                "DICA|AUMENTAR|Diversificar em outros setores."
+            ),
+        ]
+        with override_settings(OPENAI_API_KEY="sk-teste"):
+            resposta = self.client.get(reverse("core:scanner_ia_exportar_excel"))
+
+        import io
+        import openpyxl
+        wb = openpyxl.load_workbook(io.BytesIO(resposta.content))
+        local = [c.value for row in wb["Análise da carteira"].iter_rows() for c in row if c.value]
+        self.assertIn("Ativo por ativo", local)
+        self.assertTrue(any(str(v).startswith("RELS3") for v in local))
+        self.assertTrue(any(str(v).startswith("Saúde da carteira") for v in local))
+        ia = [c.value for row in wb["Análise da carteira (IA)"].iter_rows() for c in row if c.value]
+        self.assertIn("Carteira concentrada num ativo só.", ia)
+        self.assertIn("Segue dentro das metas.", ia)
+        self.assertIn("Próximos passos sugeridos", ia)
+        self.assertIn("Diversificar em outros setores.", ia)
+
+    @patch("core.services.requests.post")
+    def test_relatorio_reaproveita_analise_da_carteira_ia_guardada_na_sessao(self, mock_post):
+        mock_post.side_effect = [
+            self._resposta_ia("CARTEIRA|MANTER|Da tela Posições."),  # tela Posições (posicoes_analise_ia)
+            self._resposta_ia("MERCADO|ALTA|Pregão positivo."),
+            self._resposta_ia("RELS3|Boa entrada."),
+        ]
+        with override_settings(OPENAI_API_KEY="sk-teste"):
+            self.client.post(reverse("core:posicoes_analise_ia"))
+            resposta = self.client.get(reverse("core:scanner_ia_exportar_pdf"))
+        self.assertEqual(resposta.status_code, 200)
+        self.assertEqual(mock_post.call_count, 3)  # não consultou a IA da carteira de novo
+
+    def test_botoes_aparecem_na_tela_posicoes(self):
+        resposta = self.client.get(reverse("core:posicoes"))
+        self.assertContains(resposta, reverse("core:scanner_ia_exportar_excel"))
+        self.assertContains(resposta, reverse("core:scanner_ia_exportar_pdf"))
+
+    def test_exportar_pdf_inclui_analise_da_carteira_sem_ia(self):
+        with override_settings(OPENAI_API_KEY=""):
+            resposta = self.client.get(reverse("core:scanner_ia_exportar_pdf"))
+        self.assertEqual(resposta.status_code, 200)
+        self.assertTrue(resposta.content.startswith(b"%PDF"))
 
 
 class HistoricoAtualizacoesTests(TestCase):

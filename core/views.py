@@ -784,6 +784,37 @@ _SESSAO_ANALISE_CARTEIRA_IA = "analise_carteira_ia"
 ANALISE_CARTEIRA_IA_VALIDADE_MINUTOS = 30
 
 
+def _tickers_comprados(lista_posicoes) -> list[str]:
+    return sorted(p.ativo.ticker for p in lista_posicoes if not p.apenas_reservado and p.quantidade > 0)
+
+
+def _analise_carteira_local(usuario, lista_posicoes):
+    """analisar_carteira_comprada com os mesmos retratos da tela Posições (risco, setores, benchmark, correlação/estresse)."""
+    return analisar_carteira_comprada(
+        lista_posicoes, calcular_metricas_risco(lista_posicoes), calcular_concentracao_setor(lista_posicoes),
+        comparativo_benchmark=calcular_comparativo_benchmark(usuario, posicoes=lista_posicoes),
+        **calcular_correlacao_e_estresse(lista_posicoes),
+    )
+
+
+def _analise_carteira_ia_da_sessao(request, tickers):
+    """(resultado, gerada_em) da última Análise da carteira por IA guardada na sessão, se ainda vale para estes tickers; senão None."""
+    guardada = request.session.get(_SESSAO_ANALISE_CARTEIRA_IA)
+    gerada_em = parse_datetime(guardada["gerada_em"]) if guardada else None
+    if (
+        guardada and guardada.get("tickers") == tickers and gerada_em
+        and timezone.now() - gerada_em < timedelta(minutes=ANALISE_CARTEIRA_IA_VALIDADE_MINUTOS)
+    ):
+        return guardada["resultado"], gerada_em
+    return None
+
+
+def _guardar_analise_carteira_ia(request, tickers, resultado):
+    agora = timezone.now()
+    request.session[_SESSAO_ANALISE_CARTEIRA_IA] = {"gerada_em": agora.isoformat(), "tickers": tickers, "resultado": resultado}
+    return agora
+
+
 @login_required
 @require_POST
 def posicoes_analise_ia(request):
@@ -797,23 +828,14 @@ def posicoes_analise_ia(request):
     sempre consulta de novo. Devolve {"html": ...} com o trecho pronto.
     """
     lista_posicoes = calcular_posicoes(request.user)
-    tickers = sorted(p.ativo.ticker for p in lista_posicoes if not p.apenas_reservado and p.quantidade > 0)
+    tickers = _tickers_comprados(lista_posicoes)
     contexto = {"analise_ia": None, "erro_ia": None, "gerada_em": None, "do_cache": False}
 
-    guardada = request.session.get(_SESSAO_ANALISE_CARTEIRA_IA)
-    gerada_em = parse_datetime(guardada["gerada_em"]) if guardada else None
-    if (
-        guardada and request.POST.get("forcar") != "1" and guardada.get("tickers") == tickers and gerada_em
-        and timezone.now() - gerada_em < timedelta(minutes=ANALISE_CARTEIRA_IA_VALIDADE_MINUTOS)
-    ):
-        contexto.update(analise_ia=guardada["resultado"], gerada_em=gerada_em, do_cache=True)
+    guardada = _analise_carteira_ia_da_sessao(request, tickers) if request.POST.get("forcar") != "1" else None
+    if guardada:
+        contexto.update(analise_ia=guardada[0], gerada_em=guardada[1], do_cache=True)
     else:
-        metricas_risco = calcular_metricas_risco(lista_posicoes)
-        analise = analisar_carteira_comprada(
-            lista_posicoes, metricas_risco, calcular_concentracao_setor(lista_posicoes),
-            comparativo_benchmark=calcular_comparativo_benchmark(request.user, posicoes=lista_posicoes),
-            **calcular_correlacao_e_estresse(lista_posicoes),
-        )
+        analise = _analise_carteira_local(request.user, lista_posicoes)
         if analise is None:
             contexto["erro_ia"] = "Nenhuma ação comprada para analisar."
         else:
@@ -822,11 +844,7 @@ def posicoes_analise_ia(request):
             except IAError as exc:
                 contexto["erro_ia"] = str(exc)
             else:
-                agora = timezone.now()
-                request.session[_SESSAO_ANALISE_CARTEIRA_IA] = {
-                    "gerada_em": agora.isoformat(), "tickers": tickers, "resultado": resultado,
-                }
-                contexto.update(analise_ia=resultado, gerada_em=agora)
+                contexto.update(analise_ia=resultado, gerada_em=_guardar_analise_carteira_ia(request, tickers, resultado))
 
     html = render_to_string("core/_analise_carteira_ia.html", contexto, request=request)
     return JsonResponse({"html": html})
@@ -1117,15 +1135,45 @@ def _analise_e_sugestoes_ia_para_relatorio(usuario) -> dict:
     return resultado
 
 
+def _analise_carteira_para_relatorio(request) -> dict:
+    """
+    Aba "Análise da carteira" da tela Posições para os relatórios Scanner + IA
+    (ver scanner_ia_exportar_excel/pdf): a análise local (ativo por ativo) e a
+    da IA (com os próximos passos). A da IA reaproveita a guardada na sessão
+    pela tela Posições enquanto ainda vale (ver posicoes_analise_ia) - só
+    consulta a IA de novo quando não há uma recente para os mesmos ativos.
+    """
+    lista_posicoes = calcular_posicoes(request.user)
+    analise = _analise_carteira_local(request.user, lista_posicoes)
+    resultado = {"analise_carteira": analise, "analise_carteira_ia": None, "erro_analise_carteira_ia": None}
+    if analise is None:
+        return resultado
+
+    tickers = _tickers_comprados(lista_posicoes)
+    guardada = _analise_carteira_ia_da_sessao(request, tickers)
+    if guardada:
+        resultado["analise_carteira_ia"] = guardada[0]
+        return resultado
+    try:
+        resultado["analise_carteira_ia"] = gerar_analise_carteira_ia(analise)
+    except IAError as exc:
+        resultado["erro_analise_carteira_ia"] = str(exc)
+    else:
+        _guardar_analise_carteira_ia(request, tickers, resultado["analise_carteira_ia"])
+    return resultado
+
+
 @login_required
 def scanner_ia_exportar_excel(request):
     """
-    Relatório combinado (planilha .xlsx com quatro abas) do Scanner Técnico
-    completo, do Ranking técnico, da Análise da B3 hoje por IA e das Sugestões de hoje por IA -
+    Relatório combinado (planilha .xlsx) do Scanner Técnico completo, do
+    Ranking técnico, da Análise da B3 hoje por IA, das Sugestões de hoje por
+    IA e da Análise da carteira (local e por IA) -
     ver core.services.gerar_excel_scanner_e_analise_ia.
     """
     resultados = escanear_carteira(request.user)
     dados_ia = _analise_e_sugestoes_ia_para_relatorio(request.user)
+    dados_ia.update(_analise_carteira_para_relatorio(request))
     conteudo = gerar_excel_scanner_e_analise_ia(resultados, **dados_ia)
     resposta = HttpResponse(
         conteudo,
@@ -1138,10 +1186,11 @@ def scanner_ia_exportar_excel(request):
 
 @login_required
 def scanner_ia_exportar_pdf(request):
-    """PDF combinado do Scanner Técnico completo, da Análise da B3 hoje por IA e das Sugestões de hoje por IA - ver core.services.gerar_pdf_scanner_e_analise_ia."""
+    """PDF combinado do Scanner Técnico completo, da Análise da B3 hoje por IA, das Sugestões de hoje por IA e da Análise da carteira - ver core.services.gerar_pdf_scanner_e_analise_ia."""
     nome_usuario = request.user.first_name or request.user.username
     resultados = escanear_carteira(request.user)
     dados_ia = _analise_e_sugestoes_ia_para_relatorio(request.user)
+    dados_ia.update(_analise_carteira_para_relatorio(request))
     conteudo = gerar_pdf_scanner_e_analise_ia(resultados, nome_usuario=nome_usuario, **dados_ia)
     resposta = HttpResponse(conteudo, content_type="application/pdf")
     nome_arquivo = f"scanner_tecnico_e_analise_ia_{timezone.localdate().isoformat()}.pdf"

@@ -3849,19 +3849,224 @@ def _ranking_tecnico_scanner(resultados_scanner: list[dict]) -> list[dict]:
     return sorted(ranking, key=lambda linha: linha["score"], reverse=True)
 
 
+def _sem_emoji(texto: str) -> str:
+    """Tira emojis/símbolos (✅, ⚠, 🛑...) de um texto pro PDF - a fonte padrão do reportlab não os desenha."""
+    return re.sub(r"[☀-➿️\U0001F000-\U0001FAFF]", "", texto).strip()
+
+
+def _texto_ativo_analise_carteira(a: dict) -> dict:
+    """Valores já formatados de uma linha de "Ativo por ativo" (ver analisar_carteira_comprada) para os relatórios."""
+    return {
+        "ativo": a["ticker"] + (f" ({a['setor']})" if a["setor"] else ""),
+        "peso": f"{a['peso_pct']}%" if a["peso_pct"] is not None else "—",
+        "resultado": f"{a['lucro_pct']:+.2f}%" if a["lucro_pct"] is not None else "—",
+        "scanner": f"{a['veredito_label']} ({a['score']}/100)",
+        "recomendacao": a["recomendacao_label"],
+        "motivos": " ".join(a["motivos"]),
+    }
+
+
+def _abas_excel_analise_carteira(wb, analise: dict | None, analise_ia: dict | None, erro_ia: str | None) -> None:
+    """Abas "Análise da carteira" (resumo + ativo por ativo) e "Análise da carteira (IA)" (+ próximos passos) dos relatórios Excel."""
+    from openpyxl.styles import Alignment, Font, PatternFill
+
+    def _cabecalho(ws, valores):
+        ws.append(valores)
+        for celula in ws[ws.max_row]:
+            celula.font = Font(bold=True, color="FFFFFF")
+            celula.fill = PatternFill("solid", fgColor="0D1526")
+            celula.alignment = Alignment(horizontal="center")
+
+    def _titulo(ws, texto):
+        ws.append([texto])
+        ws.cell(row=ws.max_row, column=1).font = Font(bold=True, size=12)
+
+    gerado_em = f"Gerado em {timezone.localtime().strftime('%d/%m/%Y %H:%M')}"
+    ws = wb.create_sheet("Análise da carteira")
+    _titulo(ws, "Análise dos ativos comprados")
+    ws.append([gerado_em])
+    ws.append([
+        "Calculada pelo sistema com as cotações e o histórico já salvos (resultado e metas, Scanner Técnico, "
+        "volatilidade, peso, qualidade, setores, correlação, beta, Ibovespa/CDI) - não constitui recomendação de investimento.",
+    ])
+    ws.append([])
+    if not analise:
+        ws.append(["Nenhuma ação comprada para analisar."])
+    else:
+        ws.append(["Saúde da carteira", f"{analise['nota']}/100 - {analise['classificacao']}"])
+        ws.append(["Ativos analisados", analise["total"]])
+        ws.append(["Em lucro / em prejuízo", f"{analise['em_lucro']} / {analise['em_perda']}"])
+        if analise["melhor"]:
+            ws.append(["Melhor posição", f"{analise['melhor']['ticker']} {analise['melhor']['lucro_pct']:+.2f}%"])
+        if analise["pior"]:
+            ws.append(["Pior posição", f"{analise['pior']['ticker']} {analise['pior']['lucro_pct']:+.2f}%"])
+        ws.append([])
+        _titulo(ws, "✓ Pontos fortes")
+        for texto in analise["pontos_fortes"] or ["Nenhum destaque positivo no momento."]:
+            ws.append(["", texto])
+        _titulo(ws, "⚠ Pontos de atenção")
+        for texto in analise["pontos_atencao"] or ["Nada preocupante encontrado."]:
+            ws.append(["", texto])
+        ws.append([])
+        _titulo(ws, "Ativo por ativo")
+        _cabecalho(ws, ["Ativo", "% da carteira", "Resultado", "Scanner", "Recomendação", "Por quê"])
+        for a in analise["ativos"]:
+            t = _texto_ativo_analise_carteira(a)
+            ws.append([t["ativo"], t["peso"], t["resultado"], t["scanner"], t["recomendacao"], t["motivos"]])
+            ws.cell(row=ws.max_row, column=6).alignment = Alignment(wrap_text=True, vertical="top")
+        for coluna, largura in zip("ABCDEF", (24, 16, 12, 26, 34, 90)):
+            ws.column_dimensions[coluna].width = largura
+
+    ws_ia = wb.create_sheet("Análise da carteira (IA)")
+    _titulo(ws_ia, "Análise da carteira por IA")
+    ws_ia.append([gerado_em])
+    ws_ia.append(["A IA só comenta os números calculados pelo sistema - não constitui recomendação de investimento."])
+    ws_ia.append([])
+    if not analise:
+        ws_ia.append(["Nenhuma ação comprada para analisar."])
+    elif erro_ia:
+        ws_ia.append([erro_ia])
+    elif not analise_ia:
+        ws_ia.append(["A Análise da carteira por IA não está configurada neste sistema."])
+    elif analise_ia["carteira"] or analise_ia["ativos"] or analise_ia["dicas"]:
+        if analise_ia["carteira"]:
+            ws_ia.append(["Carteira", analise_ia["carteira"]["acao"], analise_ia["carteira"]["comentario"]])
+            ws_ia.append([])
+        if analise_ia["ativos"]:
+            _cabecalho(ws_ia, ["Ativo", "Leitura da IA", "Comentário"])
+            for linha in analise_ia["ativos"]:
+                ws_ia.append([linha["chave"], linha["acao"], linha["comentario"]])
+            ws_ia.append([])
+        if analise_ia["dicas"]:
+            _titulo(ws_ia, "Próximos passos sugeridos")
+            for dica in analise_ia["dicas"]:
+                ws_ia.append(["•", "", dica["comentario"]])
+        ws_ia.column_dimensions["A"].width = 14
+        ws_ia.column_dimensions["B"].width = 14
+        ws_ia.column_dimensions["C"].width = 100
+    else:
+        ws_ia.append([analise_ia["texto"]])
+
+
+def _secoes_pdf_analise_carteira(
+    elementos: list, analise: dict | None, analise_ia: dict | None, erro_ia: str | None, estilos, estilo_celula,
+) -> None:
+    """Seções "Análise da carteira" (resumo, ativo por ativo, IA e próximos passos) dos relatórios PDF."""
+    from xml.sax.saxutils import escape
+
+    from reportlab.lib import colors
+    from reportlab.lib.units import cm
+    from reportlab.platypus import Paragraph, Spacer, Table, TableStyle
+
+    estilo_tabela = TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#0D1526")),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+        ("FONTSIZE", (0, 0), (-1, -1), 8),
+        ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#cccccc")),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#eef2f7")]),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("TOPPADDING", (0, 0), (-1, -1), 5),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+    ])
+
+    def _p(texto, estilo=estilo_celula):
+        return Paragraph(escape(_sem_emoji(texto)), estilo)
+
+    elementos.append(Spacer(1, 0.7 * cm))
+    elementos.append(Paragraph("Análise da carteira", estilos["Heading1"]))
+    elementos.append(Paragraph("Análise dos ativos comprados", estilos["Heading2"]))
+    if not analise:
+        elementos.append(Paragraph("Nenhuma ação comprada para analisar.", estilos["Normal"]))
+        return
+    elementos.append(Paragraph(
+        "Calculada pelo sistema com as cotações e o histórico já salvos: resultado e metas de cada posição, Scanner "
+        "Técnico, volatilidade, peso na carteira, qualidade fundamentalista, setores, correlação, beta e comparação "
+        "com Ibovespa/CDI. Não é recomendação de investimento.",
+        estilo_celula,
+    ))
+    elementos.append(Spacer(1, 0.2 * cm))
+    resumo = [
+        ["Saúde da carteira", f"{analise['nota']}/100 - {analise['classificacao']}"],
+        ["Ativos analisados", str(analise["total"])],
+        ["Em lucro / em prejuízo", f"{analise['em_lucro']} / {analise['em_perda']}"],
+    ]
+    if analise["melhor"]:
+        resumo.append(["Melhor posição", f"{analise['melhor']['ticker']} {analise['melhor']['lucro_pct']:+.2f}%"])
+    if analise["pior"]:
+        resumo.append(["Pior posição", f"{analise['pior']['ticker']} {analise['pior']['lucro_pct']:+.2f}%"])
+    tabela_resumo = Table(resumo, colWidths=[5 * cm, 8 * cm], hAlign="LEFT")
+    tabela_resumo.setStyle(TableStyle([
+        ("FONTSIZE", (0, 0), (-1, -1), 9),
+        ("FONTNAME", (0, 0), (0, -1), "Helvetica-Bold"),
+        ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#cccccc")),
+        ("BACKGROUND", (0, 0), (0, -1), colors.HexColor("#eef2f7")),
+    ]))
+    elementos.append(tabela_resumo)
+
+    for titulo, itens, vazio in (
+        ("Pontos fortes", analise["pontos_fortes"], "Nenhum destaque positivo no momento."),
+        ("Pontos de atenção", analise["pontos_atencao"], "Nada preocupante encontrado."),
+    ):
+        elementos.append(Paragraph(titulo, estilos["Heading3"]))
+        for texto in itens or [vazio]:
+            elementos.append(_p(f"• {texto}"))
+
+    elementos.append(Paragraph("Ativo por ativo", estilos["Heading2"]))
+    dados = [["Ativo", "% da carteira", "Resultado", "Scanner", "Recomendação", "Por quê"]]
+    for a in analise["ativos"]:
+        t = _texto_ativo_analise_carteira(a)
+        dados.append([
+            _p(t["ativo"]), t["peso"], t["resultado"], _p(t["scanner"]), _p(t["recomendacao"]), _p(t["motivos"]),
+        ])
+    tabela = Table(dados, colWidths=[3.5 * cm, 2.2 * cm, 2 * cm, 3.5 * cm, 3.8 * cm, 12.3 * cm], repeatRows=1)
+    tabela.setStyle(estilo_tabela)
+    elementos.append(tabela)
+
+    elementos.append(Spacer(1, 0.5 * cm))
+    elementos.append(Paragraph("Análise da carteira por IA", estilos["Heading2"]))
+    if erro_ia:
+        elementos.append(Paragraph(escape(erro_ia), estilos["Normal"]))
+    elif not analise_ia:
+        elementos.append(Paragraph("A Análise da carteira por IA não está configurada neste sistema.", estilos["Normal"]))
+    elif analise_ia["carteira"] or analise_ia["ativos"] or analise_ia["dicas"]:
+        if analise_ia["carteira"]:
+            elementos.append(_p(f"[{analise_ia['carteira']['acao']}] {analise_ia['carteira']['comentario']}", estilos["Normal"]))
+            elementos.append(Spacer(1, 0.3 * cm))
+        if analise_ia["ativos"]:
+            dados_ia = [["Ativo", "Leitura da IA", "Comentário"]]
+            for linha in analise_ia["ativos"]:
+                dados_ia.append([linha["chave"], linha["acao"], _p(linha["comentario"])])
+            tabela_ia = Table(dados_ia, colWidths=[3 * cm, 3 * cm, 21.3 * cm], repeatRows=1)
+            tabela_ia.setStyle(estilo_tabela)
+            elementos.append(tabela_ia)
+        if analise_ia["dicas"]:
+            elementos.append(Paragraph("Próximos passos sugeridos", estilos["Heading3"]))
+            for dica in analise_ia["dicas"]:
+                elementos.append(_p(f"• {dica['comentario']}", estilos["Normal"]))
+    else:
+        elementos.append(_p(analise_ia["texto"], estilos["Normal"]))
+    elementos.append(Spacer(1, 0.2 * cm))
+    elementos.append(Paragraph(
+        "A IA só comenta os números calculados pelo sistema acima. Não é recomendação de investimento.", estilo_celula,
+    ))
+
+
 def gerar_excel_scanner_e_analise_ia(
     resultados_scanner: list[dict], analise_ia: dict | None, erro_ia: str | None,
     sugestoes_ia: dict | None = None, erro_sugestoes_ia: str | None = None,
+    analise_carteira: dict | None = None, analise_carteira_ia: dict | None = None,
+    erro_analise_carteira_ia: str | None = None,
 ) -> bytes:
     """
-    Gera uma planilha .xlsx com quatro abas: o Scanner Técnico completo (cada
+    Gera uma planilha .xlsx com seis abas: o Scanner Técnico completo (cada
     indicador, suporte/resistência, ATR e o plano de trade sugerido) de todo
     ativo em carteira, o Ranking técnico dos ativos acompanhados (ver
-    _ranking_tecnico_scanner), a Análise da B3 hoje por IA (ver gerar_analise_b3_ia) e
-    as Sugestões de hoje por IA (ver gerar_sugestoes_ia), quando configuradas
-    - `analise_ia`/`erro_ia`/`sugestoes_ia`/`erro_sugestoes_ia` vêm de
-    chamadas já feitas por quem chama esta função (não recalcula sozinha,
-    pra não repetir a mesma consulta à IA de graça).
+    _ranking_tecnico_scanner), a Análise da B3 hoje por IA (ver gerar_analise_b3_ia),
+    as Sugestões de hoje por IA (ver gerar_sugestoes_ia), quando configuradas,
+    e a Análise da carteira - local (ver analisar_carteira_comprada) e por IA
+    (ver gerar_analise_carteira_ia) - `analise_ia`/`erro_ia`/`sugestoes_ia`/...
+    vêm de chamadas já feitas por quem chama esta função (não recalcula
+    sozinha, pra não repetir a mesma consulta à IA de graça).
     """
     import io
 
@@ -3968,6 +4173,8 @@ def gerar_excel_scanner_e_analise_ia(
     else:
         ws3.append([sugestoes_ia["texto"]])
 
+    _abas_excel_analise_carteira(wb, analise_carteira, analise_carteira_ia, erro_analise_carteira_ia)
+
     buffer = io.BytesIO()
     wb.save(buffer)
     return buffer.getvalue()
@@ -3976,13 +4183,15 @@ def gerar_excel_scanner_e_analise_ia(
 def gerar_pdf_scanner_e_analise_ia(
     resultados_scanner: list[dict], analise_ia: dict | None, erro_ia: str | None, nome_usuario: str,
     sugestoes_ia: dict | None = None, erro_sugestoes_ia: str | None = None,
+    analise_carteira: dict | None = None, analise_carteira_ia: dict | None = None,
+    erro_analise_carteira_ia: str | None = None,
 ) -> bytes:
     """
-    Gera um PDF com quatro seções: o Scanner Técnico (veredito, suporte/
-    resistência, ATR e plano de trade sugerido) de todo ativo em carteira, o
-    Ranking técnico dos ativos acompanhados, a Análise da B3 hoje por IA e as
-    Sugestões de hoje por IA, quando
-    configuradas - mesma observação de gerar_excel_scanner_e_analise_ia sobre
+    Gera um PDF com o Scanner Técnico (veredito, suporte/resistência, ATR e
+    plano de trade sugerido) de todo ativo em carteira, o Ranking técnico dos
+    ativos acompanhados, a Análise da B3 hoje por IA, as Sugestões de hoje
+    por IA, quando configuradas, e a Análise da carteira (ativo por ativo, IA
+    e próximos passos) - mesma observação de gerar_excel_scanner_e_analise_ia sobre
     os parâmetros de IA já virem prontos de quem chama.
     """
     import io
@@ -4142,6 +4351,10 @@ def gerar_pdf_scanner_e_analise_ia(
         elementos.append(tabela_sugestoes)
     else:
         elementos.append(Paragraph(escape(sugestoes_ia["texto"]), estilos["Normal"]))
+
+    _secoes_pdf_analise_carteira(
+        elementos, analise_carteira, analise_carteira_ia, erro_analise_carteira_ia, estilos, estilo_celula,
+    )
 
     doc.build(elementos)
     return buffer.getvalue()

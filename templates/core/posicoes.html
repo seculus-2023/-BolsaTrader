@@ -338,6 +338,9 @@
     <button type="button" class="aba-navegacao{% if not analise_carteira %} ativa{% endif %}" role="tab" aria-selected="{% if analise_carteira %}false{% else %}true{% endif %}" data-alvo="painel-concentracao-setor">Concentração por setor</button>
     <button type="button" class="aba-navegacao" role="tab" aria-selected="false" data-alvo="painel-indicadores-risco">Indicadores de risco</button>
     <button type="button" class="aba-navegacao" role="tab" aria-selected="false" data-alvo="painel-comparativo-historico">Valor de compra x valor atual (histórico)</button>
+    {# mesmo relatório da tela Análise de Mercado - inclui a Análise da carteira (ativo por ativo, IA e próximos passos) #}
+    <a href="{% url 'core:scanner_ia_exportar_excel' %}" class="btn-futurista btn-secundario" title="Scanner Técnico, Análise da B3, Sugestões e Análise da carteira">⬇ Exportar Scanner + IA (Excel)</a>
+    <a href="{% url 'core:scanner_ia_exportar_pdf' %}" class="btn-futurista btn-secundario" title="Scanner Técnico, Análise da B3, Sugestões e Análise da carteira">⬇ Exportar Scanner + IA (PDF)</a>
 </div>
 
 {% if analise_carteira %}

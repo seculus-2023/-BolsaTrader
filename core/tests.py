@@ -1395,7 +1395,9 @@ class NotificacaoTelegramTests(TestCase):
         self._cadastrar_telegram(self.usuario)
         quarta_meio_dia = timezone.make_aware(datetime(2026, 10, 14, 12, 0))
 
-        with patch("core.services.timezone.localtime", return_value=quarta_meio_dia):
+        # timezone.now também: o Alerta.IA_DIARIA (auto_now_add) precisa cair no mesmo dia simulado
+        with patch("core.services.timezone.localtime", return_value=quarta_meio_dia), \
+                patch("django.utils.timezone.now", return_value=quarta_meio_dia):
             cache = {}
             self.assertTrue(core_services.enviar_ia_diaria_telegram(self.usuario, cache))
             self.assertFalse(core_services.enviar_ia_diaria_telegram(self.usuario, cache))

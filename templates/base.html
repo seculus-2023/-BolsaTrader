@@ -175,6 +175,52 @@
                     overlay.hidden = false;
                 });
             });
+
+            // Botões "Exportar Excel/PDF": o download não troca de página, então
+            // o overlay acima ficaria preso. Baixa via fetch, mostra o popup
+            // "Gerando relatório..." enquanto o servidor monta o arquivo e fecha
+            // sozinho quando o download começa - evita o usuário clicar várias vezes.
+            var gerando = false;
+            document.querySelectorAll('a[href*="/exportar/excel/"], a[href*="/exportar/pdf/"]').forEach(function (link) {
+                link.addEventListener("click", function (evento) {
+                    if (!window.fetch || !window.URL || !URL.createObjectURL) return;
+                    evento.preventDefault();
+                    if (gerando) return;
+                    gerando = true;
+                    var formato = link.href.indexOf("/exportar/pdf/") !== -1 ? "PDF" : "Excel";
+                    texto.textContent = "Gerando relatório " + formato + "... aguarde, o download começa sozinho.";
+                    overlay.hidden = false;
+
+                    fetch(link.href, { credentials: "same-origin" })
+                        .then(function (resposta) {
+                            var disposicao = resposta.headers.get("Content-Disposition") || "";
+                            if (!resposta.ok || disposicao.indexOf("attachment") === -1) {
+                                // sessão expirada (redirecionou pro login) ou erro - segue o link normal
+                                window.location.href = link.href;
+                                return "navegando";
+                            }
+                            var nome = /filename="?([^";]+)"?/.exec(disposicao);
+                            return resposta.blob().then(function (arquivo) {
+                                var url = URL.createObjectURL(arquivo);
+                                var a = document.createElement("a");
+                                a.href = url;
+                                a.download = nome ? nome[1] : "relatorio";
+                                document.body.appendChild(a);
+                                a.click();
+                                a.remove();
+                                setTimeout(function () { URL.revokeObjectURL(url); }, 10000);
+                            });
+                        })
+                        .catch(function () {
+                            alert("Não foi possível gerar o relatório. Verifique sua conexão e tente novamente.");
+                        })
+                        .then(function (estado) {
+                            if (estado === "navegando") return;
+                            gerando = false;
+                            overlay.hidden = true;
+                        });
+                });
+            });
         })();
     </script>
     {% if user.is_authenticated and total_alertas_acao_pendentes %}

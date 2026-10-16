@@ -1,3 +1,5 @@
+import base64
+
 from django.conf import settings
 from django.db import models
 
@@ -60,7 +62,19 @@ class PerfilUsuario(models.Model):
     painel_tv_token = models.CharField(
         "Token do painel para TV", max_length=64, null=True, blank=True, unique=True, editable=False,
     )
+    # Logo da conta, mostrada no lugar do "⚡ BOLSATRADER" da barra de menu e
+    # do painel para TV. Fica no banco (PNG já reduzido por accounts.forms.
+    # LogoContaForm, poucos KB) e não em arquivo, pra não depender de volume
+    # de mídia no Docker. Vazio = usa a marca padrão do BolsaTrader.
+    logo = models.BinaryField("Logo da conta", null=True, blank=True, editable=False)
     atualizado_em = models.DateTimeField(auto_now=True)
+
+    @property
+    def logo_data_uri(self) -> str:
+        """A logo pronta pra um <img src="...">, ou "" se a conta não tem logo."""
+        if not self.logo:
+            return ""
+        return "data:image/png;base64," + base64.b64encode(bytes(self.logo)).decode("ascii")
 
     class Meta:
         verbose_name = "Perfil do usuário"

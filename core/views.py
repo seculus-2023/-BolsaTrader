@@ -259,6 +259,8 @@ def painel_tv(request, token):
     contexto = _contexto_painel(usuario)
     contexto.update({
         "dono_painel": usuario,
+        # página sem login: o context processor não acha a logo sozinho
+        "logo_conta": usuario.perfil.logo_data_uri,
         "tv_token": token,
         "versao_painel": _versao_painel_tv(usuario),
         # o context processor só preenche isso pra quem está logado

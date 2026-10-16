@@ -134,3 +134,46 @@ class PerfilUsuarioForm(forms.ModelForm):
                     "(ou deixe os dois em branco)."
                 )
         return dados
+
+
+class LogoContaForm(forms.Form):
+    """
+    Envio da logo da conta (Minha Conta). Aceita PNG, JPG, GIF ou WEBP de até
+    LOGO_TAMANHO_MAXIMO; a imagem é reduzida para caber em LOGO_DIMENSAO_MAXIMA
+    e regravada como PNG (mantém transparência) - o resultado, de poucos KB,
+    fica em PerfilUsuario.logo. SVG não é aceito (pode carregar script).
+    """
+
+    LOGO_TAMANHO_MAXIMO = 2 * 1024 * 1024
+    LOGO_DIMENSAO_MAXIMA = (480, 160)
+    FORMATOS_ACEITOS = {"PNG", "JPEG", "GIF", "WEBP"}
+
+    logo = forms.FileField(
+        label="Logo da conta",
+        help_text="PNG, JPG, GIF ou WEBP, até 2 MB. De preferência horizontal e com fundo transparente.",
+        widget=forms.ClearableFileInput(attrs={"accept": "image/png,image/jpeg,image/gif,image/webp"}),
+    )
+
+    def clean_logo(self):
+        from io import BytesIO
+
+        from PIL import Image, ImageOps
+
+        arquivo = self.cleaned_data["logo"]
+        if arquivo.size > self.LOGO_TAMANHO_MAXIMO:
+            raise forms.ValidationError("A imagem passa de 2 MB - envie um arquivo menor.")
+        try:
+            imagem = Image.open(arquivo)
+            if imagem.format not in self.FORMATOS_ACEITOS:
+                raise forms.ValidationError("Formato não aceito - use PNG, JPG, GIF ou WEBP.")
+            imagem.load()
+        except forms.ValidationError:
+            raise
+        except Exception:
+            raise forms.ValidationError("Não foi possível ler a imagem - verifique se o arquivo é mesmo uma imagem.")
+
+        imagem = ImageOps.exif_transpose(imagem).convert("RGBA")
+        imagem.thumbnail(self.LOGO_DIMENSAO_MAXIMA, Image.LANCZOS)
+        saida = BytesIO()
+        imagem.save(saida, format="PNG", optimize=True)
+        return saida.getvalue()

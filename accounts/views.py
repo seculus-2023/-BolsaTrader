@@ -13,7 +13,7 @@ from django.views.decorators.http import require_POST
 
 from core.services import limpar_dados_sistema, limpar_dados_usuario
 
-from .forms import CadastroForm, PerfilUsuarioForm
+from .forms import CadastroForm, LogoContaForm, PerfilUsuarioForm
 from .models import PerfilUsuario
 
 logger = logging.getLogger(__name__)
@@ -120,7 +120,7 @@ def minha_conta_view(request):
     else:
         form = PerfilUsuarioForm(instance=perfil)
 
-    contexto = {"form": form}
+    contexto = {"form": form, "form_logo": LogoContaForm(), "perfil": perfil}
     if perfil.painel_tv_token:
         contexto["painel_tv_url"] = request.build_absolute_uri(
             reverse("core:painel_tv", args=[perfil.painel_tv_token])
@@ -148,6 +148,31 @@ def painel_tv_link_view(request):
         perfil.save(update_fields=["painel_tv_token", "atualizado_em"])
         messages.success(request, "Novo link do painel para TV gerado. Se havia um link anterior, ele parou de funcionar.")
     return redirect(reverse("accounts:minha_conta") + "#painel-tv")
+
+
+@login_required
+@require_POST
+def logo_conta_view(request):
+    """
+    Envia ou remove a logo da conta (PerfilUsuario.logo) - mostrada no lugar
+    da marca "⚡ BOLSATRADER" na barra de menu e no painel para TV; sem logo,
+    volta a marca padrão.
+    """
+    perfil, _ = PerfilUsuario.objects.get_or_create(usuario=request.user)
+    if request.POST.get("acao") == "remover":
+        perfil.logo = None
+        perfil.save(update_fields=["logo", "atualizado_em"])
+        messages.success(request, "Logo removida - voltou a marca padrão do BolsaTrader.")
+    else:
+        form = LogoContaForm(request.POST, request.FILES)
+        if form.is_valid():
+            perfil.logo = form.cleaned_data["logo"]
+            perfil.save(update_fields=["logo", "atualizado_em"])
+            messages.success(request, "Logo da conta atualizada.")
+        else:
+            for erro in form.errors.get("logo", ["Escolha uma imagem para enviar."]):
+                messages.error(request, erro)
+    return redirect(reverse("accounts:minha_conta") + "#logo-conta")
 
 
 @login_required

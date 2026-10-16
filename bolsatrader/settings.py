@@ -141,6 +141,7 @@ TEMPLATES = [
                 "core.context_processors.ultima_atualizacao_cotacoes",
                 "core.context_processors.horario_b3",
                 "core.context_processors.post_it",
+                "accounts.context_processors.logo_conta",
             ],
         },
     },

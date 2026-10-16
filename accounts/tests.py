@@ -313,3 +313,65 @@ class PainelTvTests(TestCase):
         self.client.logout()
         self.client.post(reverse("accounts:painel_tv_link"), {"acao": "gerar"})
         self.assertFalse(PerfilUsuario.objects.filter(painel_tv_token__isnull=False).exists())
+
+
+class LogoContaTests(TestCase):
+    """Logo da conta: enviada em Minha Conta, aparece no menu e no painel para TV."""
+
+    def setUp(self):
+        self.usuario = User.objects.create_user(username="investidor_logo", password="SenhaForte123!")
+        self.client.login(username="investidor_logo", password="SenhaForte123!")
+
+    def _imagem(self, formato="PNG", tamanho=(1200, 400), nome="logo.png"):
+        from io import BytesIO
+
+        from django.core.files.uploadedfile import SimpleUploadedFile
+        from PIL import Image
+
+        saida = BytesIO()
+        Image.new("RGBA" if formato == "PNG" else "RGB", tamanho, (0, 200, 220, 255)).save(saida, format=formato)
+        return SimpleUploadedFile(nome, saida.getvalue())
+
+    def _enviar(self, arquivo):
+        return self.client.post(reverse("accounts:logo_conta"), {"acao": "enviar", "logo": arquivo})
+
+    def test_sem_logo_menu_mostra_marca_padrao(self):
+        resposta = self.client.get(reverse("accounts:minha_conta"))
+        self.assertContains(resposta, 'class="brand"')
+        self.assertNotContains(resposta, 'class="brand-logo"')
+
+    def test_envio_reduz_grava_png_e_mostra_no_menu(self):
+        from io import BytesIO
+
+        from PIL import Image
+
+        self._enviar(self._imagem(formato="JPEG", nome="logo.jpg"))
+        perfil = PerfilUsuario.objects.get(usuario=self.usuario)
+        imagem = Image.open(BytesIO(bytes(perfil.logo)))
+        self.assertEqual(imagem.format, "PNG")
+        self.assertLessEqual(imagem.width, 480)
+        self.assertLessEqual(imagem.height, 160)
+
+        resposta = self.client.get(reverse("accounts:minha_conta"))
+        self.assertContains(resposta, 'class="brand-logo"')
+        self.assertContains(resposta, "data:image/png;base64,")
+
+    def test_arquivo_que_nao_e_imagem_e_recusado(self):
+        from django.core.files.uploadedfile import SimpleUploadedFile
+
+        self._enviar(SimpleUploadedFile("logo.svg", b"<svg onload='alert(1)'></svg>"))
+        self.assertFalse(PerfilUsuario.objects.filter(usuario=self.usuario, logo__isnull=False).exists())
+
+    def test_remover_volta_marca_padrao(self):
+        self._enviar(self._imagem())
+        self.client.post(reverse("accounts:logo_conta"), {"acao": "remover"})
+        self.assertIsNone(PerfilUsuario.objects.get(usuario=self.usuario).logo)
+        self.assertNotContains(self.client.get(reverse("accounts:minha_conta")), 'class="brand-logo"')
+
+    def test_logo_aparece_no_painel_tv(self):
+        self._enviar(self._imagem())
+        self.client.post(reverse("accounts:painel_tv_link"), {"acao": "gerar"})
+        token = PerfilUsuario.objects.get(usuario=self.usuario).painel_tv_token
+        self.client.logout()
+        resposta = self.client.get(reverse("core:painel_tv", args=[token]))
+        self.assertContains(resposta, 'class="tv-logo"')

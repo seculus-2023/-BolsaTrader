@@ -30,6 +30,36 @@
     </form>
 </div>
 
+<div class="card-glass" id="logo-conta" style="max-width: 480px; margin-top: 2rem;">
+    <h3 style="margin-top: 0;">🖼️ Logo da conta</h3>
+    <p style="color: var(--text-dim);">
+        A logo aparece no lugar da marca do BolsaTrader na barra de menu e no painel para TV. Sem logo, fica a marca
+        padrão do BolsaTrader.
+    </p>
+    <div style="display: flex; align-items: center; justify-content: center; min-height: 80px; padding: .8rem; border: 1px dashed var(--glass-border); border-radius: 10px; margin-bottom: 1rem;">
+        {% if perfil.logo %}
+            <img src="{{ perfil.logo_data_uri }}" alt="Logo atual da conta" style="max-height: 80px; max-width: 100%; object-fit: contain;">
+        {% else %}
+            <span class="brand-font" style="font-weight: 900; font-size: 1.35rem; background: linear-gradient(90deg, var(--neon-cyan), var(--neon-purple), var(--neon-magenta)); -webkit-background-clip: text; background-clip: text; color: transparent;">⚡ BOLSATRADER</span>
+        {% endif %}
+    </div>
+    <form method="post" action="{% url 'accounts:logo_conta' %}" enctype="multipart/form-data">
+        {% csrf_token %}
+        <input type="hidden" name="acao" value="enviar">
+        <label for="{{ form_logo.logo.id_for_label }}" style="display: block; margin-bottom: .35rem; font-weight: 600; color: var(--text-dim); font-size: .9rem;">{% if perfil.logo %}Trocar a logo{% else %}Enviar uma logo{% endif %}</label>
+        <input type="file" name="logo" id="{{ form_logo.logo.id_for_label }}" class="form-control-futurista" accept="image/png,image/jpeg,image/gif,image/webp" required>
+        <small style="display: block; margin-top: .35rem; color: var(--text-dim);">{{ form_logo.logo.help_text }}</small>
+        <button type="submit" class="btn-futurista" style="margin-top: 1rem;">⬆ Salvar logo</button>
+    </form>
+    {% if perfil.logo %}
+    <form method="post" action="{% url 'accounts:logo_conta' %}" style="margin-top: .5rem;" onsubmit="return confirm('Remover a logo? Volta a marca padrão do BolsaTrader.');">
+        {% csrf_token %}
+        <input type="hidden" name="acao" value="remover">
+        <button type="submit" class="btn-futurista btn-secundario" style="color: var(--neon-red); border-color: rgba(255, 56, 96, .4);">🗑️ Remover logo</button>
+    </form>
+    {% endif %}
+</div>
+
 <div class="card-glass" id="painel-tv" style="max-width: 480px; margin-top: 2rem;">
     <h3 style="margin-top: 0;">📺 Painel para TV / monitor</h3>
     <p style="color: var(--text-dim);">

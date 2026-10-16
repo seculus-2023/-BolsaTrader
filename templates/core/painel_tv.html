@@ -18,7 +18,7 @@ maiores pra ler de longe. Recarrega sozinho quando as cotações mudam.
 {% endcomment %}
 <body class="pagina-tv">
     <header class="tv-cabecalho">
-        <div class="tv-marca">⚡ BOLSATRADER <span class="tv-dono">{{ dono_painel.get_full_name|default:dono_painel.username }}</span></div>
+        <div class="tv-marca">{% if logo_conta %}<img src="{{ logo_conta }}" alt="Logo da conta" class="tv-logo">{% else %}⚡ BOLSATRADER{% endif %} <span class="tv-dono">{{ dono_painel.get_full_name|default:dono_painel.username }}</span></div>
         <div class="tv-status">
             <span class="badge-horario-b3 {% if b3_mercado_aberto %}aberto{% else %}fechado{% endif %}">
                 {% if b3_mercado_aberto %}🟢{% else %}⚪{% endif %} B3 {{ b3_horario_abertura }} - {{ b3_horario_fechamento }} &middot; {% if b3_mercado_aberto %}Mercado aberto{% else %}Mercado fechado{% endif %}

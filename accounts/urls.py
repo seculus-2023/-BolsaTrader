@@ -10,7 +10,8 @@ urlpatterns = [
     path("logout/", views.LogoutFuturistaView.as_view(), name="logout"),
     path("cadastro/", views.cadastro_view, name="cadastro"),
     path("minha-conta/", views.minha_conta_view, name="minha_conta"),
-    path("minha-conta/limpar-dados/", views.limpar_dados_view, name="limpar_dados"),
+    path("minha-conta/painel-tv/", views.painel_tv_link_view, name="painel_tv_link"),
+    path("minha-conta/limpar-dados/",views.limpar_dados_view, name="limpar_dados"),
     # Recuperação de senha por e-mail ("Esqueci minha senha" na tela de login)
     # - views prontas do Django, só com os templates e URLs do BolsaTrader.
     path(

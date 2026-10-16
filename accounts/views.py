@@ -1,4 +1,5 @@
 import logging
+import secrets
 
 from django.conf import settings
 from django.contrib.auth import get_user_model, login
@@ -6,7 +7,7 @@ from django.contrib.auth.decorators import login_required
 from django.contrib.auth.views import LoginView, LogoutView
 from django.core.cache import cache
 from django.shortcuts import render, redirect
-from django.urls import reverse_lazy
+from django.urls import reverse, reverse_lazy
 from django.contrib import messages
 from django.views.decorators.http import require_POST
 
@@ -120,9 +121,33 @@ def minha_conta_view(request):
         form = PerfilUsuarioForm(instance=perfil)
 
     contexto = {"form": form}
+    if perfil.painel_tv_token:
+        contexto["painel_tv_url"] = request.build_absolute_uri(
+            reverse("core:painel_tv", args=[perfil.painel_tv_token])
+        )
     if request.user.is_superuser:
         contexto["usuarios_limpeza"] = get_user_model().objects.order_by("username")
     return render(request, "accounts/minha_conta.html", contexto)
+
+
+@login_required
+@require_POST
+def painel_tv_link_view(request):
+    """
+    Gera (ou troca) e desativa o link secreto do painel para TV/monitor
+    (core.views.painel_tv). Gerar um novo invalida o anterior na hora -
+    útil se o link vazou ou a TV mudou de lugar.
+    """
+    perfil, _ = PerfilUsuario.objects.get_or_create(usuario=request.user)
+    if request.POST.get("acao") == "desativar":
+        perfil.painel_tv_token = None
+        perfil.save(update_fields=["painel_tv_token", "atualizado_em"])
+        messages.success(request, "Link do painel para TV desativado - quem tinha o link perdeu o acesso.")
+    else:
+        perfil.painel_tv_token = secrets.token_urlsafe(32)
+        perfil.save(update_fields=["painel_tv_token", "atualizado_em"])
+        messages.success(request, "Novo link do painel para TV gerado. Se havia um link anterior, ele parou de funcionar.")
+    return redirect(reverse("accounts:minha_conta") + "#painel-tv")
 
 
 @login_required

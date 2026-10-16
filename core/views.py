@@ -11,7 +11,7 @@ from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.db.models import Max
-from django.http import HttpResponse, HttpResponseNotAllowed, JsonResponse
+from django.http import Http404, HttpResponse, HttpResponseNotAllowed, JsonResponse
 from django.shortcuts import render, redirect, get_object_or_404
 from django.template.loader import render_to_string
 from django.urls import reverse
@@ -20,6 +20,8 @@ from django.utils.dateparse import parse_date, parse_datetime
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.clickjacking import xframe_options_sameorigin
 from django.views.decorators.http import require_GET, require_POST
+
+from accounts.models import PerfilUsuario
 
 from .forms import (
     OperacaoForm,
@@ -152,7 +154,22 @@ def dashboard(request):
     Histórico de Atualizações; "Alertas recentes" ficou aqui, embaixo de
     "Variações de hoje".
     """
-    posicoes = calcular_posicoes(request.user)
+    contexto = _contexto_painel(request.user)
+    # "Contas logadas agora" só pra quem é staff/superusuário - o sistema não
+    # mostra dado de outro usuário pra conta comum em nenhum outro lugar (ver
+    # core.services.usuarios_logados_agora).
+    if request.user.is_staff:
+        contexto["usuarios_logados"] = usuarios_logados_agora()
+    return render(request, "core/dashboard.html", contexto)
+
+
+def _contexto_painel(usuario):
+    """
+    Dados do Painel de Controle de um usuário - compartilhado entre o Painel
+    (core.views.dashboard) e o painel para TV/monitor (core.views.painel_tv),
+    pra os dois mostrarem exatamente os mesmos números.
+    """
+    posicoes = calcular_posicoes(usuario)
     posicoes_compradas = [p for p in posicoes if not p.apenas_reservado]
 
     valor_investido_total = sum((p.valor_investido for p in posicoes), Decimal("0"))
@@ -162,7 +179,7 @@ def dashboard(request):
         (lucro_perda_total / valor_investido_total) * 100 if valor_investido_total else None
     )
 
-    posicoes_cripto = calcular_posicoes_cripto(request.user)
+    posicoes_cripto = calcular_posicoes_cripto(usuario)
 
     contexto = {
         # só as compradas de verdade - reservas (intenção de compra) não
@@ -177,10 +194,10 @@ def dashboard(request):
         "lucro_perda_total": lucro_perda_total,
         "lucro_perda_pct_total": lucro_perda_pct_total,
         "total_ativos": len(posicoes_compradas),
-        "comparativo_benchmark": calcular_comparativo_benchmark(request.user, posicoes=posicoes),
-        "alertas_recentes": request.user.alertas.all()[:8],
+        "comparativo_benchmark": calcular_comparativo_benchmark(usuario, posicoes=posicoes),
+        "alertas_recentes": usuario.alertas.all()[:8],
         "ibovespa": ultimo_valor_ibovespa(),
-        "cotacoes_cripto": _cotacoes_cripto_para_exibir(request.user, posicoes_cripto),
+        "cotacoes_cripto": _cotacoes_cripto_para_exibir(usuario, posicoes_cripto),
         # cartões de resumo da cripto ao lado dos de ações (ver
         # totais_posicoes_cripto) - chave própria pra não colidir com os
         # totais de ações acima, que usam os mesmos nomes de campo.
@@ -189,16 +206,73 @@ def dashboard(request):
     # "Variações de hoje" (mesmo gráfico de Histórico de Atualizações) ao
     # lado de "Posições em carteira" - só precisa de grafico_dia/
     # total_registros_hoje daqui, mas reaproveita o helper inteiro.
-    contexto.update(_contexto_historico_atualizacoes(request.user, limite=20))
+    contexto.update(_contexto_historico_atualizacoes(usuario, limite=20))
     # mesma ideia, mas pro gráfico "Variações de hoje (cripto)" ao lado do
     # cartão "Cotações de cripto" - ver _contexto_historico_atualizacoes_cripto.
-    contexto.update(_contexto_historico_atualizacoes_cripto(request.user, limite=20))
-    # "Contas logadas agora" só pra quem é staff/superusuário - o sistema não
-    # mostra dado de outro usuário pra conta comum em nenhum outro lugar (ver
-    # core.services.usuarios_logados_agora).
-    if request.user.is_staff:
-        contexto["usuarios_logados"] = usuarios_logados_agora()
-    return render(request, "core/dashboard.html", contexto)
+    contexto.update(_contexto_historico_atualizacoes_cripto(usuario, limite=20))
+    return contexto
+
+
+def _usuario_do_painel_tv(token):
+    """Dono do link do painel para TV - 404 se o link não existe ou foi desativado/trocado."""
+    perfil = PerfilUsuario.objects.select_related("usuario").filter(painel_tv_token=token).first() if token else None
+    if perfil is None or not perfil.usuario.is_active:
+        raise Http404("Link do painel não encontrado ou desativado.")
+    return perfil.usuario
+
+
+def _versao_painel_tv(usuario) -> str:
+    """
+    "Assinatura" do momento dos dados do painel para TV: muda quando as
+    cotações dos ativos do usuário são atualizadas (mesmo sinal de
+    verificar_atualizacao_cotacoes), quando entra um registro novo de
+    "Variações de hoje" (ações ou cripto) ou um alerta novo - a TV compara e
+    recarrega sozinha quando muda.
+    """
+    partes = [
+        Ativo.objects.filter(operacoes__usuario=usuario).aggregate(m=Max("atualizado_em"))["m"],
+        RegistroAtualizacaoCarteira.objects.filter(usuario=usuario).aggregate(m=Max("criado_em"))["m"],
+        RegistroAtualizacaoCarteiraCripto.objects.filter(usuario=usuario).aggregate(m=Max("criado_em"))["m"],
+        usuario.alertas.aggregate(m=Max("id"))["m"],
+    ]
+    return "|".join(p.isoformat() if hasattr(p, "isoformat") else str(p or "") for p in partes)
+
+
+def _sem_cache_e_sem_indexar(resposta):
+    # O link carrega o token: não deixa buscador indexar nem o navegador
+    # mandar a URL como Referer pra sites de fora.
+    resposta["Cache-Control"] = "no-store"
+    resposta["X-Robots-Tag"] = "noindex, nofollow"
+    resposta["Referrer-Policy"] = "no-referrer"
+    return resposta
+
+
+def painel_tv(request, token):
+    """
+    Painel para TV/monitor: o mesmo resumo do Painel de Controle de uma
+    conta, só leitura e SEM login - o acesso é pelo link secreto gerado em
+    Minha Conta (accounts.views.painel_tv_link_view). A tela consulta
+    painel_tv_verificar de tempos em tempos e recarrega sozinha quando as
+    cotações são atualizadas, igual ao Painel.
+    """
+    usuario = _usuario_do_painel_tv(token)
+    contexto = _contexto_painel(usuario)
+    contexto.update({
+        "dono_painel": usuario,
+        "tv_token": token,
+        "versao_painel": _versao_painel_tv(usuario),
+        # o context processor só preenche isso pra quem está logado
+        "ultima_atualizacao_cotacoes": Ativo.objects.filter(operacoes__usuario=usuario)
+        .aggregate(m=Max("atualizado_em"))["m"],
+    })
+    return _sem_cache_e_sem_indexar(render(request, "core/painel_tv.html", contexto))
+
+
+@require_GET
+def painel_tv_verificar(request, token):
+    """Endpoint leve (JSON) do polling do painel para TV - ver _versao_painel_tv."""
+    usuario = _usuario_do_painel_tv(token)
+    return _sem_cache_e_sem_indexar(JsonResponse({"versao": _versao_painel_tv(usuario)}))
 
 
 @login_required

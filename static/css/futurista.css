@@ -1442,3 +1442,68 @@ body.pagina-popup {
 .estresse-card small { color: var(--text-dim); font-size: .85rem; }
 .estresse-card strong { font-family: 'Orbitron', sans-serif; font-size: 1.35rem; }
 .estresse-card span { color: var(--text-dim); font-size: .85rem; }
+
+/* =========================================================
+   Painel para TV / monitor (core.views.painel_tv) - sem menu,
+   letras maiores pra ler de longe, só leitura.
+   ========================================================= */
+body.pagina-tv {
+    padding: 1.2rem 1.6rem;
+    font-size: clamp(1rem, 0.6rem + 0.6vw, 1.35rem);
+}
+
+.pagina-tv .tv-cabecalho {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    align-items: center;
+    gap: .8rem;
+    margin-bottom: 1.2rem;
+}
+
+.pagina-tv .tv-marca {
+    font-family: 'Orbitron', sans-serif;
+    font-size: 1.5em;
+    font-weight: 700;
+    color: var(--neon-cyan);
+}
+
+.pagina-tv .tv-dono {
+    font-family: 'Rajdhani', sans-serif;
+    font-size: .6em;
+    font-weight: 600;
+    color: var(--text-dim);
+    margin-left: .6rem;
+}
+
+.pagina-tv .tv-status {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: .8rem;
+}
+
+.pagina-tv .tv-status > span { margin: 0; }
+
+.pagina-tv .tv-relogio {
+    font-family: 'Orbitron', sans-serif;
+    font-size: 1.1em;
+}
+
+.pagina-tv .tv-btn-tela-cheia[hidden] { display: none; }
+
+.pagina-tv .stat-tile .value { font-size: 1.6em; }
+.pagina-tv .stat-tile .label { font-size: .8em; }
+
+/* só leitura: sem o atalho do gráfico (pede login) */
+.pagina-tv .btn-grafico-cotacao { display: none; }
+
+/* na TV não há rolagem com o mouse - lista de alertas sem altura limitada */
+.pagina-tv .lista-scroll { max-height: none; }
+
+.pagina-tv .tv-rodape {
+    margin-top: 1.4rem;
+    text-align: center;
+    color: var(--text-dim);
+    font-size: .8em;
+}

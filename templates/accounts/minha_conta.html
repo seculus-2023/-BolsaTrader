@@ -30,6 +30,58 @@
     </form>
 </div>
 
+<div class="card-glass" id="painel-tv" style="max-width: 480px; margin-top: 2rem;">
+    <h3 style="margin-top: 0;">📺 Painel para TV / monitor</h3>
+    <p style="color: var(--text-dim);">
+        Um link do seu painel para deixar aberto numa TV ou num monitor, <strong>sem precisar fazer login</strong>.
+        Ele mostra só a sua carteira (somente leitura) e se atualiza sozinho sempre que as cotações forem atualizadas,
+        igual ao Painel.
+    </p>
+    {% if painel_tv_url %}
+        <label for="campo-painel-tv-url" style="display: block; margin-bottom: .35rem; font-weight: 600; color: var(--text-dim); font-size: .9rem;">Link do seu painel</label>
+        <input type="text" id="campo-painel-tv-url" class="form-control-futurista" value="{{ painel_tv_url }}" readonly onclick="this.select();">
+        <small style="display: block; margin-top: .35rem; color: var(--text-dim);">
+            ⚠️ Quem tiver este link vê os valores da sua carteira. Não compartilhe; se ele vazar, gere um novo.
+        </small>
+        <div style="display: flex; flex-wrap: wrap; gap: .5rem; margin-top: 1rem;">
+            <button type="button" class="btn-futurista" id="btn-copiar-painel-tv">📋 Copiar link</button>
+            <a href="{{ painel_tv_url }}" target="_blank" rel="noopener" class="btn-futurista btn-secundario">↗ Abrir</a>
+        </div>
+        <div style="display: flex; flex-wrap: wrap; gap: .5rem; margin-top: .5rem;">
+            <form method="post" action="{% url 'accounts:painel_tv_link' %}" onsubmit="return confirm('Gerar um novo link? O link atual para de funcionar na hora (a TV precisará do link novo).');">
+                {% csrf_token %}
+                <input type="hidden" name="acao" value="gerar">
+                <button type="submit" class="btn-futurista btn-secundario">🔄 Gerar novo link</button>
+            </form>
+            <form method="post" action="{% url 'accounts:painel_tv_link' %}" onsubmit="return confirm('Desativar o link? A TV para de mostrar o painel.');">
+                {% csrf_token %}
+                <input type="hidden" name="acao" value="desativar">
+                <button type="submit" class="btn-futurista btn-secundario" style="color: var(--neon-red); border-color: rgba(255, 56, 96, .4);">⛔ Desativar link</button>
+            </form>
+        </div>
+        <script>
+            document.getElementById("btn-copiar-painel-tv").addEventListener("click", function () {
+                var campo = document.getElementById("campo-painel-tv-url");
+                var botao = this;
+                var pronto = function () { botao.textContent = "✅ Copiado!"; setTimeout(function () { botao.textContent = "📋 Copiar link"; }, 2000); };
+                if (navigator.clipboard && window.isSecureContext) {
+                    navigator.clipboard.writeText(campo.value).then(pronto);
+                } else {
+                    campo.select();
+                    document.execCommand("copy");
+                    pronto();
+                }
+            });
+        </script>
+    {% else %}
+        <form method="post" action="{% url 'accounts:painel_tv_link' %}">
+            {% csrf_token %}
+            <input type="hidden" name="acao" value="gerar">
+            <button type="submit" class="btn-futurista">📺 Gerar link do painel</button>
+        </form>
+    {% endif %}
+</div>
+
 {% if user.is_superuser %}
 <div class="card-glass" style="max-width: 480px; margin-top: 2rem; border-color: var(--neon-red);">
     <h3 style="margin-top: 0; color: var(--neon-red);">Limpar dados do sistema</h3>

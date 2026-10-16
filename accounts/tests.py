@@ -240,3 +240,76 @@ class RecuperacaoSenhaTests(TestCase):
         self.assertRedirects(resposta, reverse("accounts:senha_alterada"))
         self.usuario.refresh_from_db()
         self.assertTrue(self.usuario.check_password("SenhaNova456!"))
+
+
+class PainelTvTests(TestCase):
+    """Link secreto do painel para TV/monitor: gerado em Minha Conta, abre sem login."""
+
+    def setUp(self):
+        self.usuario = User.objects.create_user(
+            username="investidor_tv", password="SenhaForte123!", first_name="Ana", last_name="TV",
+        )
+        self.client.login(username="investidor_tv", password="SenhaForte123!")
+
+    def _gerar(self):
+        self.client.post(reverse("accounts:painel_tv_link"), {"acao": "gerar"})
+        return PerfilUsuario.objects.get(usuario=self.usuario).painel_tv_token
+
+    def test_minha_conta_sem_link_mostra_botao_gerar(self):
+        resposta = self.client.get(reverse("accounts:minha_conta"))
+        self.assertContains(resposta, "Gerar link do painel")
+
+    def test_gerar_link_mostra_url_em_minha_conta(self):
+        token = self._gerar()
+        self.assertTrue(token and len(token) >= 40)
+        resposta = self.client.get(reverse("accounts:minha_conta"))
+        self.assertContains(resposta, reverse("core:painel_tv", args=[token]))
+
+    def test_painel_abre_sem_login_e_so_leitura(self):
+        token = self._gerar()
+        self.client.logout()
+        resposta = self.client.get(reverse("core:painel_tv", args=[token]))
+        self.assertEqual(resposta.status_code, 200)
+        self.assertContains(resposta, "Ana TV")
+        self.assertContains(resposta, "Posições em carteira")
+        self.assertNotContains(resposta, "Atualizar cotações agora")
+        self.assertEqual(resposta["X-Robots-Tag"], "noindex, nofollow")
+
+    def test_verificar_devolve_versao_sem_login(self):
+        token = self._gerar()
+        self.client.logout()
+        resposta = self.client.get(reverse("core:painel_tv_verificar", args=[token]))
+        self.assertEqual(resposta.status_code, 200)
+        self.assertIn("versao", resposta.json())
+
+    def test_versao_muda_quando_entra_alerta_novo(self):
+        from core.models import Alerta
+
+        token = self._gerar()
+        url = reverse("core:painel_tv_verificar", args=[token])
+        antes = self.client.get(url).json()["versao"]
+        Alerta.objects.create(usuario=self.usuario, tipo=Alerta.LEMBRETE, mensagem="teste")
+        self.assertNotEqual(self.client.get(url).json()["versao"], antes)
+
+    def test_token_invalido_da_404(self):
+        self.client.logout()
+        self.assertEqual(self.client.get(reverse("core:painel_tv", args=["nao-existe"])).status_code, 404)
+
+    def test_gerar_novo_link_invalida_o_anterior(self):
+        antigo = self._gerar()
+        novo = self._gerar()
+        self.assertNotEqual(antigo, novo)
+        self.assertEqual(self.client.get(reverse("core:painel_tv", args=[antigo])).status_code, 404)
+        self.assertEqual(self.client.get(reverse("core:painel_tv", args=[novo])).status_code, 200)
+
+    def test_desativar_link(self):
+        token = self._gerar()
+        self.client.post(reverse("accounts:painel_tv_link"), {"acao": "desativar"})
+        self.assertIsNone(PerfilUsuario.objects.get(usuario=self.usuario).painel_tv_token)
+        self.assertEqual(self.client.get(reverse("core:painel_tv", args=[token])).status_code, 404)
+
+    def test_gerar_link_exige_login_e_post(self):
+        self.assertEqual(self.client.get(reverse("accounts:painel_tv_link")).status_code, 405)
+        self.client.logout()
+        self.client.post(reverse("accounts:painel_tv_link"), {"acao": "gerar"})
+        self.assertFalse(PerfilUsuario.objects.filter(painel_tv_token__isnull=False).exists())

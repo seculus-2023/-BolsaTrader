@@ -1,0 +1,251 @@
+{% load static l10n %}
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="robots" content="noindex, nofollow">
+    <meta name="referrer" content="no-referrer">
+    <meta name="theme-color" content="#050912">
+    <title>Painel TV - BolsaTrader</title>
+    <link rel="icon" type="image/png" sizes="32x32" href="{% static 'icons/favicon-32.png' %}">
+    <link rel="stylesheet" href="{% static 'css/futurista.css' %}">
+</head>
+{% comment %}
+Painel para TV/monitor (core.views.painel_tv): mesmo resumo do Painel de
+Controle, só leitura e sem login - sem menu, sem botões de ação, com letras
+maiores pra ler de longe. Recarrega sozinho quando as cotações mudam.
+{% endcomment %}
+<body class="pagina-tv">
+    <header class="tv-cabecalho">
+        <div class="tv-marca">⚡ BOLSATRADER <span class="tv-dono">{{ dono_painel.get_full_name|default:dono_painel.username }}</span></div>
+        <div class="tv-status">
+            <span class="badge-horario-b3 {% if b3_mercado_aberto %}aberto{% else %}fechado{% endif %}">
+                {% if b3_mercado_aberto %}🟢{% else %}⚪{% endif %} B3 {{ b3_horario_abertura }} - {{ b3_horario_fechamento }} &middot; {% if b3_mercado_aberto %}Mercado aberto{% else %}Mercado fechado{% endif %}
+            </span>
+            {% if ultima_atualizacao_cotacoes %}
+            <span class="badge-atualizacao">⏱ Cotações: {{ ultima_atualizacao_cotacoes|date:"d/m/Y H:i" }}</span>
+            {% endif %}
+            <span class="tv-relogio" id="tv-relogio"></span>
+            <button type="button" class="btn-futurista btn-secundario tv-btn-tela-cheia" id="tv-btn-tela-cheia" title="Tela cheia">⛶</button>
+        </div>
+    </header>
+
+    <div class="grid-stats">
+        <div class="stat-tile">
+            <div class="label">Ativos em carteira</div>
+            <div class="value">{{ total_ativos }}</div>
+        </div>
+        <div class="stat-tile">
+            <div class="label">Valor investido</div>
+            <div class="value">R$ {{ valor_investido_total|floatformat:2 }}</div>
+        </div>
+        <div class="stat-tile">
+            <div class="label">Valor atual</div>
+            <div class="value">R$ {{ valor_atual_total|floatformat:2 }}</div>
+        </div>
+        <div class="stat-tile">
+            <div class="label">Lucro / Perda</div>
+            <div class="value {% if lucro_perda_total > 0 %}valor-positivo{% elif lucro_perda_total < 0 %}valor-negativo{% else %}valor-neutro{% endif %}">
+                R$ {{ lucro_perda_total|floatformat:2 }}
+                {% if lucro_perda_pct_total is not None %}({{ lucro_perda_pct_total|floatformat:2 }}%){% endif %}
+            </div>
+        </div>
+        {% if totais_cripto.total_moedas %}
+        <div class="stat-tile">
+            <div class="label">Valor atual (cripto)</div>
+            <div class="value">R$ {{ totais_cripto.valor_atual_total|floatformat:2 }}</div>
+        </div>
+        <div class="stat-tile">
+            <div class="label">Lucro / Perda (cripto)</div>
+            <div class="value {% if totais_cripto.lucro_perda_total > 0 %}valor-positivo{% elif totais_cripto.lucro_perda_total < 0 %}valor-negativo{% else %}valor-neutro{% endif %}">
+                R$ {{ totais_cripto.lucro_perda_total|floatformat:2 }}
+                {% if totais_cripto.lucro_perda_pct_total is not None %}({{ totais_cripto.lucro_perda_pct_total|floatformat:2 }}%){% endif %}
+            </div>
+        </div>
+        {% endif %}
+        <div class="stat-tile">
+            <div class="label">Ibovespa</div>
+            {% if ibovespa %}
+            <div class="value {% if ibovespa.variacao_pct > 0 %}valor-positivo{% elif ibovespa.variacao_pct < 0 %}valor-negativo{% else %}valor-neutro{% endif %}">
+                {{ ibovespa.valor|floatformat:0 }} pts
+                {% if ibovespa.variacao_pct is not None %}({{ ibovespa.variacao_pct }}%){% endif %}
+            </div>
+            <small style="color: var(--text-dim);">em {{ ibovespa.data|date:"d/m/Y" }}</small>
+            {% else %}
+            <div class="value valor-neutro">sem dados</div>
+            {% endif %}
+        </div>
+        {% if comparativo_benchmark %}
+        <div class="stat-tile">
+            <div class="label">Carteira x Ibovespa x CDI</div>
+            <div class="value {% if comparativo_benchmark.retorno_carteira_pct > 0 %}valor-positivo{% elif comparativo_benchmark.retorno_carteira_pct < 0 %}valor-negativo{% else %}valor-neutro{% endif %}">
+                {{ comparativo_benchmark.retorno_carteira_pct }}%
+            </div>
+            <small style="color: var(--text-dim);">
+                Ibov {% if comparativo_benchmark.retorno_ibovespa_pct is not None %}{{ comparativo_benchmark.retorno_ibovespa_pct }}%{% else %}—{% endif %}
+                &middot; CDI {% if comparativo_benchmark.retorno_cdi_pct is not None %}{{ comparativo_benchmark.retorno_cdi_pct }}%{% else %}—{% endif %}
+                &middot; desde {{ comparativo_benchmark.data_inicio|date:"d/m/Y" }}
+            </small>
+        </div>
+        {% endif %}
+    </div>
+
+    <div class="grid-duas-colunas">
+        <div>
+            <div class="card-glass">
+                <h2>Posições em carteira</h2>
+                {% include "core/_tabela_posicoes_compradas.html" with ocultar_acoes=True %}
+            </div>
+
+            {% if cotacoes_cripto %}
+            <div class="card-glass" style="margin-top: 1.2rem;">
+                <h2>Cotações de cripto</h2>
+                <div class="tabela-scroll">
+                <table class="tabela-futurista">
+                    <thead>
+                        <tr><th>Moeda</th><th class="coluna-destaque">Preço atual</th><th>Variação do dia</th></tr>
+                    </thead>
+                    <tbody>
+                        {% for c in cotacoes_cripto %}
+                        <tr>
+                            <td><strong>{{ c.coin }}</strong></td>
+                            <td class="coluna-destaque">{% if c.preco_atual is not None %}R$ {{ c.preco_atual }}{% else %}sem dados{% endif %}</td>
+                            <td class="{% if c.variacao_dia_pct > 0 %}valor-positivo{% elif c.variacao_dia_pct < 0 %}valor-negativo{% else %}valor-neutro{% endif %}">
+                                {% if c.variacao_dia_pct is not None %}{{ c.variacao_dia_pct }}%{% else %}&mdash;{% endif %}
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+                </div>
+            </div>
+            {% endif %}
+        </div>
+
+        <div>
+            <div class="card-glass">
+                <h2>Variações de hoje</h2>
+                {% if grafico_dia %}
+                <p style="color: var(--text-dim); font-size: .85rem; margin-top: -.2rem;">
+                    Lucro/perda (%) da carteira em cada atualização de hoje ({{ total_registros_hoje }} registro{{ total_registros_hoje|pluralize }}).
+                </p>
+                <div class="grafico-wrap">
+                    {% localize off %}
+                    <svg viewBox="0 0 {{ grafico_dia.largura }} {{ grafico_dia.altura }}"
+                         class="grafico-carteira-dia" preserveAspectRatio="none"
+                         data-pontos-id="{{ grafico_dia.id_svg }}"
+                         role="img" aria-label="Variação do lucro/perda da carteira ao longo das atualizações de hoje">
+                        <line x1="{{ grafico_dia.x_inicio }}" y1="{{ grafico_dia.y_topo }}"
+                              x2="{{ grafico_dia.x_fim }}" y2="{{ grafico_dia.y_topo }}" class="grafico-grid" />
+                        <line x1="{{ grafico_dia.x_inicio }}" y1="{{ grafico_dia.y_base }}"
+                              x2="{{ grafico_dia.x_fim }}" y2="{{ grafico_dia.y_base }}" class="grafico-grid" />
+                        <path d="{{ grafico_dia.path_d }}" fill="none" class="grafico-linha {% if grafico_dia.tendencia_alta %}linha-alta{% else %}linha-baixa{% endif %}" />
+                        {% for p in grafico_dia.pontos %}
+                            {% if forloop.first or forloop.last %}
+                            <circle cx="{{ p.x }}" cy="{{ p.y }}" r="4" class="grafico-marcador {% if grafico_dia.tendencia_alta %}linha-alta{% else %}linha-baixa{% endif %}" />
+                            {% endif %}
+                        {% endfor %}
+                    </svg>
+                    {% endlocalize %}
+                    {{ grafico_dia.pontos|json_script:grafico_dia.id_svg }}
+                    <div class="grafico-eixos">
+                        <span>{{ grafico_dia.faixa_min_label }}</span>
+                        <span>{{ grafico_dia.faixa_max_label }}</span>
+                    </div>
+                </div>
+                {% else %}
+                <p style="color: var(--text-dim);">Ainda não há pelo menos 2 atualizações de hoje para montar o gráfico.</p>
+                {% endif %}
+            </div>
+
+            {% if registros_com_variacao %}
+            <div class="card-glass" style="margin-top: 1.2rem;">
+                <h2>Registros recentes</h2>
+                <div class="tabela-scroll">
+                <table class="tabela-futurista">
+                    <thead>
+                        <tr><th>Data/hora</th><th>Valor atual</th><th>Lucro/Perda</th></tr>
+                    </thead>
+                    <tbody>
+                        {% for item in registros_com_variacao|slice:":5" %}
+                        <tr>
+                            <td>{{ item.registro.criado_em|date:"d/m H:i" }}</td>
+                            <td>R$ {{ item.registro.valor_atual }}</td>
+                            <td class="{% if item.registro.lucro_perda > 0 %}valor-positivo{% elif item.registro.lucro_perda < 0 %}valor-negativo{% else %}valor-neutro{% endif %}">
+                                R$ {{ item.registro.lucro_perda }}{% if item.registro.lucro_perda_pct is not None %} ({{ item.registro.lucro_perda_pct }}%){% endif %}
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+                </div>
+            </div>
+            {% endif %}
+
+            <div class="card-glass" style="margin-top: 1.2rem;">
+                <h2>Alertas recentes</h2>
+                {% if alertas_recentes %}
+                <ul class="lista-scroll" style="list-style: none; padding: 0;">
+                    {% for a in alertas_recentes %}
+                    <li style="padding: .5rem 0; border-bottom: 1px solid rgba(0,240,255,.1);">
+                        <span class="badge-tendencia badge-{% if a.tipo == 'LUCRO' or a.tipo == 'SINAL_COMPRA' or a.tipo == 'SCAN_COMPRA' or a.tipo == 'RESERVA_OK' %}alta{% elif a.tipo == 'PERDA' or a.tipo == 'SINAL_VENDA' %}baixa{% else %}neutro{% endif %}">{{ a.get_tipo_display }}</span>
+                        {{ a.mensagem }}
+                        <small style="color: var(--text-dim);">— {{ a.criado_em|date:"d/m/Y H:i" }}</small>
+                    </li>
+                    {% endfor %}
+                </ul>
+                {% else %}
+                <p style="color: var(--text-dim);">Nenhum alerta no momento.</p>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+
+    <p class="tv-rodape">Atualiza sozinho quando as cotações forem atualizadas &middot; uso educacional, não é recomendação de investimento</p>
+
+    {{ versao_painel|json_script:"versao-painel" }}
+    <script src="{% static 'js/grafico.js' %}" defer></script>
+    <script>
+        (function () {
+            // Relógio no canto - na TV ajuda a ver que a tela não travou.
+            var relogio = document.getElementById("tv-relogio");
+            function tic() {
+                var agora = new Date();
+                relogio.textContent = "🕒 " + agora.toLocaleDateString("pt-BR") + " " + agora.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
+            }
+            tic();
+            setInterval(tic, 15000);
+
+            // Tela cheia (o botão some quando já está em tela cheia).
+            var botaoTelaCheia = document.getElementById("tv-btn-tela-cheia");
+            if (!document.documentElement.requestFullscreen) {
+                botaoTelaCheia.hidden = true;
+            } else {
+                botaoTelaCheia.addEventListener("click", function () { document.documentElement.requestFullscreen(); });
+                document.addEventListener("fullscreenchange", function () { botaoTelaCheia.hidden = !!document.fullscreenElement; });
+            }
+
+            // Mesmo mecanismo do Painel: consulta de tempos em tempos se os
+            // dados mudaram (cotações, registros, alertas) e recarrega - ver
+            // core.views.painel_tv_verificar. Recarrega também a cada 15 min
+            // por segurança (ex: abertura/fechamento da B3).
+            var versaoConhecida = JSON.parse(document.getElementById("versao-painel").textContent);
+            setInterval(function () {
+                fetch("{% url 'core:painel_tv_verificar' tv_token %}", { cache: "no-store" })
+                    .then(function (resposta) {
+                        if (resposta.status === 404) { window.location.reload(); return null; }
+                        return resposta.json();
+                    })
+                    .then(function (dados) {
+                        if (dados && dados.versao !== versaoConhecida) window.location.reload();
+                    })
+                    .catch(function () {
+                        // falha de rede pontual - tenta de novo no próximo intervalo
+                    });
+            }, 30000);
+            setTimeout(function () { window.location.reload(); }, 15 * 60 * 1000);
+        })();
+    </script>
+</body>
+</html>

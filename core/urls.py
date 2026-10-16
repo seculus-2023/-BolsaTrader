@@ -5,6 +5,9 @@ app_name = "core"
 
 urlpatterns = [
     path("", views.dashboard, name="dashboard"),
+    # Painel para TV/monitor: público, acesso pelo link secreto de Minha Conta
+    path("tv/<str:token>/", views.painel_tv, name="painel_tv"),
+    path("tv/<str:token>/verificar/", views.painel_tv_verificar, name="painel_tv_verificar"),
     path("menu/", views.menu, name="menu"),
     path("operacoes/", views.operacao_lista, name="operacao_lista"),
     path("operacoes/exportar/excel/", views.operacoes_exportar_excel, name="operacoes_exportar_excel"),

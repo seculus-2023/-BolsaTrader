@@ -53,6 +53,13 @@ class PerfilUsuario(models.Model):
         "Assinatura eletrônica da corretora", max_length=32, blank=True,
         help_text="Assinatura que a corretora pede para confirmar ordens no Home Broker. Opcional.",
     )
+    # Link secreto do "painel para TV/monitor" (core.views.painel_tv): quem
+    # tem o link vê o painel desta conta sem login, só leitura. Vazio = link
+    # desativado; gerar um novo invalida o anterior (accounts.views.
+    # painel_tv_link_view).
+    painel_tv_token = models.CharField(
+        "Token do painel para TV", max_length=64, null=True, blank=True, unique=True, editable=False,
+    )
     atualizado_em = models.DateTimeField(auto_now=True)
 
     class Meta:

@@ -460,6 +460,80 @@ class ResumoVendasTests(TestCase):
         self.assertEqual(resumo["lucro_total"], Decimal("20.00"))
 
 
+class RelatorioSomenteVendasTests(TestCase):
+    """Relatório "somente vendas" (Excel/PDF) da aba Vendidas de Minhas Operações (ver core.views.operacoes_vendas_exportar_excel/pdf)."""
+
+    def setUp(self):
+        self.usuario = User.objects.create_user(username="investidor_rel_vendas", password="SenhaForte123!")
+        self.ativo = Ativo.objects.create(ticker="ITUB4")
+        self.outro_ativo = Ativo.objects.create(ticker="VALE3")
+
+    def _vendida(self, ativo, quantidade=10):
+        return Operacao.objects.create(
+            usuario=self.usuario, ativo=ativo, tipo=Operacao.COMPRA,
+            quantidade=quantidade, preco_unitario=Decimal("20.00"), data_operacao=date.today(),
+            quantidade_vendida=quantidade, preco_venda=Decimal("25.00"), data_venda=date.today(),
+        )
+
+    def test_exige_login(self):
+        self.assertEqual(self.client.get(reverse("core:operacoes_vendas_exportar_excel")).status_code, 302)
+        self.assertEqual(self.client.get(reverse("core:operacoes_vendas_exportar_pdf")).status_code, 302)
+
+    def test_excel_traz_so_a_aba_de_vendas_sem_carteira_nem_reservas(self):
+        self.client.login(username="investidor_rel_vendas", password="SenhaForte123!")
+        self._vendida(self.ativo)
+        Operacao.objects.create(
+            usuario=self.usuario, ativo=self.outro_ativo, tipo=Operacao.COMPRA,
+            quantidade=7, preco_unitario=Decimal("60.00"), data_operacao=date.today(),
+        )
+        resposta = self.client.get(reverse("core:operacoes_vendas_exportar_excel"))
+        self.assertEqual(resposta.status_code, 200)
+        self.assertIn("vendas_", resposta["Content-Disposition"])
+
+        import io
+        import openpyxl
+        wb = openpyxl.load_workbook(io.BytesIO(resposta.content))
+        self.assertEqual(wb.sheetnames, ["Vendas"])
+        valores = [c.value for row in wb["Vendas"].iter_rows() for c in row if c.value]
+        self.assertIn("ITUB4", valores)
+        self.assertNotIn("VALE3", valores)
+
+    def test_excel_respeita_filtro_de_ativo(self):
+        self.client.login(username="investidor_rel_vendas", password="SenhaForte123!")
+        self._vendida(self.ativo)
+        self._vendida(self.outro_ativo)
+        resposta = self.client.get(reverse("core:operacoes_vendas_exportar_excel"), {"ativo": "VALE3"})
+
+        import io
+        import openpyxl
+        wb = openpyxl.load_workbook(io.BytesIO(resposta.content))
+        valores = [c.value for row in wb["Vendas"].iter_rows() for c in row if c.value]
+        self.assertIn("VALE3", valores)
+        self.assertNotIn("ITUB4", valores)
+
+    def test_pdf_responde_ok(self):
+        self.client.login(username="investidor_rel_vendas", password="SenhaForte123!")
+        self._vendida(self.ativo)
+        resposta = self.client.get(reverse("core:operacoes_vendas_exportar_pdf"))
+        self.assertEqual(resposta.status_code, 200)
+        self.assertEqual(resposta["Content-Type"], "application/pdf")
+        self.assertTrue(resposta.content.startswith(b"%PDF"))
+
+    def test_botoes_aparecem_so_com_vendas(self):
+        self.client.login(username="investidor_rel_vendas", password="SenhaForte123!")
+        Operacao.objects.create(
+            usuario=self.usuario, ativo=self.ativo, tipo=Operacao.COMPRA,
+            quantidade=10, preco_unitario=Decimal("20.00"), data_operacao=date.today(),
+        )
+        resposta_sem_venda = self.client.get(reverse("core:operacao_lista"))
+        self.assertNotContains(resposta_sem_venda, reverse("core:operacoes_vendas_exportar_excel"))
+
+        self._vendida(self.outro_ativo)
+        resposta_com_venda = self.client.get(reverse("core:operacao_lista"))
+        self.assertContains(resposta_com_venda, reverse("core:operacoes_vendas_exportar_excel"))
+        self.assertContains(resposta_com_venda, reverse("core:operacoes_vendas_exportar_pdf"))
+
+
 class FluxoAutenticacaoTests(TestCase):
     @override_settings(CADASTRO_PUBLICO=True)
     def test_cadastro_cria_usuario_e_loga_automaticamente(self):

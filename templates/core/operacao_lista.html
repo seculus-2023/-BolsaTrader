@@ -267,6 +267,10 @@
         <input type="date" id="id_data_ate_venda" name="data_ate_venda" value="{{ data_ate_venda }}" class="form-control-futurista">
     </div>
     <button type="submit" class="btn-futurista btn-secundario" style="padding: .4rem .9rem; font-size: .85rem;">Filtrar</button>
+    {% if operacoes_vendidas %}
+    <a href="{% url 'core:operacoes_vendas_exportar_excel' %}?data_de_venda={{ data_de_venda }}&data_ate_venda={{ data_ate_venda }}&ativo={{ ativo_selecionado }}" class="btn-futurista btn-secundario" style="padding: .4rem .9rem; font-size: .85rem;" title="Relatório somente das vendas (filtro de data da venda e ativo)">⬇ Vendas (Excel)</a>
+    <a href="{% url 'core:operacoes_vendas_exportar_pdf' %}?data_de_venda={{ data_de_venda }}&data_ate_venda={{ data_ate_venda }}&ativo={{ ativo_selecionado }}" class="btn-futurista btn-secundario" style="padding: .4rem .9rem; font-size: .85rem;" title="Relatório somente das vendas (filtro de data da venda e ativo)">⬇ Vendas (PDF)</a>
+    {% endif %}
 </form>
 <div class="card-glass">
     {% if operacoes_vendidas %}

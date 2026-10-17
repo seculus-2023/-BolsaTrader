@@ -2525,12 +2525,16 @@ def gerar_excel_operacoes(
     periodo_label_carteira: str,
     periodo_label_vendidas: str,
     periodo_label_reservadas: str,
+    apenas_vendas: bool = False,
 ) -> bytes:
     """
     Gera uma planilha .xlsx com as operações do usuário, pronta para download -
     uma aba para cada grid da página (em carteira, vendidas, reservadas), cada
     uma com o período do seu próprio filtro indicado no topo (Vendidas filtra
     pela data da venda, as outras duas pela data da operação).
+
+    Com apenas_vendas=True (relatório "somente vendas" da aba Vendidas), a
+    planilha traz só a aba Vendidas.
     """
     import io
 
@@ -2565,6 +2569,17 @@ def gerar_excel_operacoes(
             ws.column_dimensions[get_column_letter(indice)].width = 17
         ws.freeze_panes = "A5"
 
+    if apenas_vendas:
+        ws_vendidas = wb.active
+        ws_vendidas.title = "Vendas"
+        montar_aba(
+            ws_vendidas, "Vendas", periodo_label_vendidas, COLUNAS_VENDIDAS,
+            [_linha_vendida(op) for op in operacoes_vendidas], INDICES_SOMA_VENDIDAS,
+        )
+        buffer = io.BytesIO()
+        wb.save(buffer)
+        return buffer.getvalue()
+
     ws_carteira = wb.active
     ws_carteira.title = "Em carteira"
     montar_aba(
@@ -2597,6 +2612,7 @@ def gerar_pdf_operacoes(
     periodo_label_vendidas: str,
     periodo_label_reservadas: str,
     nome_usuario: str,
+    apenas_vendas: bool = False,
 ) -> bytes:
     """
     Gera um PDF (paisagem) com as operações do usuário, pronto para download -
@@ -2604,6 +2620,9 @@ def gerar_pdf_operacoes(
     cada uma com o período do seu próprio filtro (Vendidas filtra pela data
     da venda, as outras duas pela data da operação) indicado logo abaixo do
     título da seção.
+
+    Com apenas_vendas=True (relatório "somente vendas" da aba Vendidas), o
+    PDF traz só a tabela de vendas.
     """
     import io
     from xml.sax.saxutils import escape
@@ -2623,7 +2642,7 @@ def gerar_pdf_operacoes(
     estilos = getSampleStyleSheet()
 
     elementos = [
-        Paragraph("BolsaTrader - Minhas Operações", estilos["Title"]),
+        Paragraph("BolsaTrader - Minhas Vendas" if apenas_vendas else "BolsaTrader - Minhas Operações", estilos["Title"]),
         Paragraph(
             f"{nome_usuario} - gerado em {timezone.localtime().strftime('%d/%m/%Y %H:%M')}",
             estilos["Normal"],
@@ -2697,6 +2716,20 @@ def gerar_pdf_operacoes(
 
     identidade = lambda v: v if v is not None else "—"
 
+    formatadores_vendidas = [
+        fmt_data, fmt_data, fmt_dias, identidade, identidade, fmt, fmt, fmt, fmt,
+        lambda v: fmt(v, "%"), fmt, fmt, lambda v: fmt(v, "%"), fmt, lambda v: fmt(v, "%"),
+        lambda v: fmt(v, "%", "padrão"), lambda v: fmt(v, "%", "padrão"),
+    ]
+
+    if apenas_vendas:
+        adicionar_secao(
+            "Vendas", periodo_label_vendidas, COLUNAS_VENDIDAS,
+            [_linha_vendida(op) for op in operacoes_vendidas], formatadores_vendidas, INDICES_SOMA_VENDIDAS,
+        )
+        doc.build(elementos)
+        return buffer.getvalue()
+
     adicionar_secao(
         "Em carteira", periodo_label_carteira, COLUNAS_EM_CARTEIRA,
         [_linha_em_carteira(op) for op in operacoes_compradas],
@@ -2706,11 +2739,7 @@ def gerar_pdf_operacoes(
     )
     adicionar_secao(
         "Vendidas", periodo_label_vendidas, COLUNAS_VENDIDAS,
-        [_linha_vendida(op) for op in operacoes_vendidas],
-        [fmt_data, fmt_data, fmt_dias, identidade, identidade, fmt, fmt, fmt, fmt,
-         lambda v: fmt(v, "%"), fmt, fmt, lambda v: fmt(v, "%"), fmt, lambda v: fmt(v, "%"),
-         lambda v: fmt(v, "%", "padrão"), lambda v: fmt(v, "%", "padrão")],
-        INDICES_SOMA_VENDIDAS,
+        [_linha_vendida(op) for op in operacoes_vendidas], formatadores_vendidas, INDICES_SOMA_VENDIDAS,
     )
     adicionar_secao(
         "Reservadas", periodo_label_reservadas, COLUNAS_RESERVADAS,

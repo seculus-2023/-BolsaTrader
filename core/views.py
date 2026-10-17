@@ -482,6 +482,40 @@ def operacoes_exportar_pdf(request):
 
 
 @login_required
+def operacoes_vendas_exportar_excel(request):
+    """Relatório somente das vendas (aba Vendidas, mesmos filtros de data da venda e ativo da página) como planilha .xlsx."""
+    dados = _periodo_e_operacoes(request)
+    conteudo = gerar_excel_operacoes(
+        [], dados["operacoes_vendidas"], [], "",
+        _periodo_label(dados["data_de_venda"], dados["data_ate_venda"], dados["ativo_selecionado"], campo="Período (data da venda)"),
+        "", apenas_vendas=True,
+    )
+    resposta = HttpResponse(
+        conteudo,
+        content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+    nome_arquivo = f"vendas_{timezone.localdate().isoformat()}.xlsx"
+    resposta["Content-Disposition"] = f'attachment; filename="{nome_arquivo}"'
+    return resposta
+
+
+@login_required
+def operacoes_vendas_exportar_pdf(request):
+    """Relatório somente das vendas (aba Vendidas, mesmos filtros de data da venda e ativo da página) como PDF."""
+    dados = _periodo_e_operacoes(request)
+    nome_usuario = request.user.first_name or request.user.username
+    conteudo = gerar_pdf_operacoes(
+        [], dados["operacoes_vendidas"], [], "",
+        _periodo_label(dados["data_de_venda"], dados["data_ate_venda"], dados["ativo_selecionado"], campo="Período (data da venda)"),
+        "", nome_usuario, apenas_vendas=True,
+    )
+    resposta = HttpResponse(conteudo, content_type="application/pdf")
+    nome_arquivo = f"vendas_{timezone.localdate().isoformat()}.pdf"
+    resposta["Content-Disposition"] = f'attachment; filename="{nome_arquivo}"'
+    return resposta
+
+
+@login_required
 def operacao_nova(request):
     """
     Registra uma nova compra ou reserva. Aceita opcionalmente "?ticker=" e

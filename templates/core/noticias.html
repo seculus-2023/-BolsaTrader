@@ -28,44 +28,6 @@
     {% if ativo_destaque %}<br>Destacando agora: <strong style="color: var(--neon-yellow);">{{ ativo_destaque }}</strong> &mdash; {{ noticias_ativo_ids|length }} notícia(s) encontrada(s).{% endif %}
 </p>
 
-{% if gemini_configurado %}
-<div class="card-glass" style="margin: 1.5rem 0;">
-    <h3 style="margin-top: 0;">✨ Perguntar ao Gemini</h3>
-    <form method="post" action="{% url 'core:noticias_perguntar_ia' %}" class="form-futurista">
-        {% csrf_token %}
-        <div style="display: flex; gap: .8rem; align-items: flex-end; flex-wrap: wrap;">
-            <div style="min-width: 160px;">
-                <label for="campo-ativo-gemini" style="margin-top: 0;">Ativo (opcional)</label>
-                <input type="text" name="ativo" id="campo-ativo-gemini" value="{{ ativo_destaque }}" placeholder="Ex: MBRF3" maxlength="100">
-            </div>
-            <div style="flex: 1; min-width: 240px;">
-                <label for="campo-pergunta-gemini" style="margin-top: 0;">Pergunta</label>
-                <input type="text" name="pergunta" id="campo-pergunta-gemini" maxlength="1000" required
-                       value="{{ resposta_gemini.pergunta|default:'' }}" placeholder="Ex: Quais as últimas notícias sobre esse ativo e o que pode afetar a cotação?">
-            </div>
-            <button type="submit" class="btn-futurista" data-overlay-texto="Perguntando ao Gemini...">Perguntar</button>
-        </div>
-    </form>
-    <p style="color: var(--text-dim); font-size: .8rem; margin: .5rem 0 0;">
-        O Gemini pesquisa no Google e usa as manchetes capturadas acima (as do ativo, se informado). Resposta informativa, não é recomendação de compra/venda.
-    </p>
-    {% if resposta_gemini %}
-    <div style="margin-top: 1rem; padding-top: 1rem; border-top: 1px solid rgba(0,240,255,.15);">
-        <p style="color: var(--text-dim); margin-top: 0;"><strong>Pergunta:</strong> {{ resposta_gemini.pergunta }}</p>
-        <div style="line-height: 1.55;">{{ resposta_gemini.resposta|linebreaksbr }}</div>
-        {% if resposta_gemini.fontes %}
-        <p style="margin-bottom: .3rem; color: var(--text-dim); font-size: .85rem;"><strong>Fontes:</strong></p>
-        <ul style="margin: 0; padding-left: 1.2rem; font-size: .85rem;">
-            {% for fonte in resposta_gemini.fontes %}
-            <li><a href="{{ fonte.url }}" target="_blank" rel="noopener">{{ fonte.titulo }}</a></li>
-            {% endfor %}
-        </ul>
-        {% endif %}
-    </div>
-    {% endif %}
-</div>
-{% endif %}
-
 {% if user.is_staff %}
 <div class="card-glass" style="margin: 1.5rem 0;">
     <h3 style="margin-top: 0;">Fontes de notícias</h3>

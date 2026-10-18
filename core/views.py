@@ -81,8 +81,6 @@ from .services import (
     atualizar_noticias_fonte,
     termos_destaque_noticias,
     noticia_cita_termos,
-    gemini_configurado,
-    perguntar_gemini_noticias,
     NoticiaScrapingError,
     BrapiError,
     backfill_historico_cotacoes,
@@ -1881,37 +1879,8 @@ def noticias(request):
         {
             "form": form, "fontes": fontes, "itens": itens, "noticias_novas_ids": noticias_novas_ids,
             "ativo_destaque": ativo_destaque, "noticias_ativo_ids": noticias_ativo_ids,
-            "gemini_configurado": gemini_configurado(),
-            # resposta da última pergunta (ver noticias_perguntar_ia) - "pop" pra sumir ao recarregar
-            "resposta_gemini": request.session.pop("noticias_resposta_gemini", None),
         },
     )
-
-
-@login_required
-@require_POST
-def noticias_perguntar_ia(request):
-    """Pergunta livre ao Gemini (com Pesquisa Google) sobre o mercado/o ativo em destaque, usando as manchetes capturadas como contexto."""
-    pergunta = request.POST.get("pergunta", "").strip()[:1000]
-    if "ativo" in request.POST:
-        request.session["noticias_ativo_destaque"] = request.POST["ativo"].strip()[:100]
-    ativo = request.session.get("noticias_ativo_destaque", "")
-    if not pergunta:
-        messages.error(request, "Digite uma pergunta para o Gemini.")
-        return redirect("core:noticias")
-
-    termos = termos_destaque_noticias(ativo)
-    recentes = Noticia.objects.filter(fonte__ativa=True).order_by("-capturada_em")[:200]
-    manchetes = [n.titulo for n in recentes if not termos or noticia_cita_termos(n.titulo, termos)]
-
-    try:
-        resultado = perguntar_gemini_noticias(pergunta, ativo, manchetes)
-    except IAError as exc:
-        messages.error(request, str(exc))
-        return redirect("core:noticias")
-
-    request.session["noticias_resposta_gemini"] = {"pergunta": pergunta, **resultado}
-    return redirect("core:noticias")
 
 
 @login_required

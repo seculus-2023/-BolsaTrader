@@ -33,7 +33,7 @@ from accounts.models import PerfilUsuario
 from . import services as core_services
 from .forms import OperacaoForm, VendaLoteForm, PrevisaoAnalistaForm
 from .models import (
-    Ativo, Cotacao, Operacao, Alerta, MensagemWhatsapp, FonteNoticia, CotacaoIndice, RegistroAtualizacaoCarteira,
+    Ativo, Cotacao, Operacao, Alerta, MensagemWhatsapp, FonteNoticia, Noticia, CotacaoIndice, RegistroAtualizacaoCarteira,
     ContaCorrente, LancamentoContaCorrente, PostIt,
     CriptoAtivo, OperacaoCripto, CotacaoCripto, RegistroAtualizacaoCarteiraCripto, RegistroCotacao,
     PrevisaoAnalista,
@@ -657,6 +657,51 @@ class FontesNoticiasSoStaffTests(TestCase):
         self.assertFalse(self.fonte.ativa)
         self.client.post(reverse("core:noticia_fonte_excluir", args=[self.fonte.id]))
         self.assertFalse(FonteNoticia.objects.filter(id=self.fonte.id).exists())
+
+
+class PerguntarGeminiNoticiasTests(TestCase):
+    """Caixa "Perguntar ao Gemini" da tela Notícias do Mercado."""
+
+    def setUp(self):
+        fonte = FonteNoticia.objects.create(nome="Fonte Teste", url="https://exemplo.com/")
+        Noticia.objects.create(fonte=fonte, titulo="MBRF3 dispara após balanço", url="https://exemplo.com/1")
+        Noticia.objects.create(fonte=fonte, titulo="Dólar fecha em queda", url="https://exemplo.com/2")
+        User.objects.create_user(username="leitor_gemini", password="SenhaForte123!")
+        self.client.login(username="leitor_gemini", password="SenhaForte123!")
+
+    @override_settings(GEMINI_API_KEY="")
+    def test_sem_chave_caixa_nao_aparece(self):
+        self.assertNotContains(self.client.get(reverse("core:noticias")), "Perguntar ao Gemini")
+
+    @override_settings(GEMINI_API_KEY="chave", GEMINI_MODEL="gemini-2.5-flash")
+    @patch("core.services.requests.post")
+    def test_pergunta_mostra_resposta_e_fontes(self, mock_post):
+        mock_post.return_value = Mock(
+            raise_for_status=Mock(),
+            json=Mock(return_value={"candidates": [{
+                "content": {"parts": [{"text": "**MBRF3** subiu com o balanço."}]},
+                "groundingMetadata": {"groundingChunks": [{"web": {"uri": "https://fonte.com/x", "title": "fonte.com"}}]},
+            }]}),
+        )
+        resposta = self.client.post(
+            reverse("core:noticias_perguntar_ia"), {"ativo": "MBRF3", "pergunta": "Por que subiu?"}, follow=True,
+        )
+        self.assertContains(resposta, "MBRF3 subiu com o balanço.")
+        self.assertContains(resposta, "https://fonte.com/x")
+        args, kwargs = mock_post.call_args
+        self.assertIn("gemini-2.5-flash:generateContent", args[0])
+        self.assertEqual(kwargs["headers"]["x-goog-api-key"], "chave")
+        prompt = kwargs["json"]["contents"][0]["parts"][0]["text"]
+        self.assertIn("MBRF3 dispara após balanço", prompt)
+        self.assertNotIn("Dólar fecha em queda", prompt)  # só as manchetes do ativo
+        # resposta some ao recarregar
+        self.assertNotContains(self.client.get(reverse("core:noticias")), "MBRF3 subiu com o balanço.")
+
+    @override_settings(GEMINI_API_KEY="chave")
+    @patch("core.services.requests.post", side_effect=requests.ConnectionError("fora"))
+    def test_falha_de_rede_mostra_erro(self, mock_post):
+        resposta = self.client.post(reverse("core:noticias_perguntar_ia"), {"pergunta": "Oi?"}, follow=True)
+        self.assertContains(resposta, "Não foi possível consultar o Gemini agora")
 
 
 class SaudeTests(TestCase):

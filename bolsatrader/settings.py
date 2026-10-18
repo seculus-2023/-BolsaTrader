@@ -379,6 +379,14 @@ OPENAI_MODEL = config("OPENAI_MODEL", default="gpt-4o-mini")
 TELEGRAM_IA_DIARIA = config("TELEGRAM_IA_DIARIA", default=True, cast=bool)
 TELEGRAM_IA_DIARIA_HORA = config("TELEGRAM_IA_DIARIA_HORA", default=11, cast=int)
 
+# Google Gemini para o "Perguntar ao Gemini" da tela Notícias do Mercado (ver
+# core.services.perguntar_gemini_noticias). Usa a API nativa do Gemini com a
+# Pesquisa Google ligada, pra resposta trazer notícias atuais e os links das
+# fontes. Chave gratuita em aistudio.google.com/apikey. Sem GEMINI_API_KEY a
+# caixa de pergunta fica desligada e o resto da tela funciona normalmente.
+GEMINI_API_KEY = config("GEMINI_API_KEY", default="")
+GEMINI_MODEL = config("GEMINI_MODEL", default="gemini-2.5-flash")
+
 
 # --------------------------------------------------------------------------
 # Logs: sempre no console (aparece no terminal do runserver/Waitress e no

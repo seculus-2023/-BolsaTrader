@@ -2138,7 +2138,7 @@ class VerificarAtualizacaoCotacoesTests(TestCase):
 
         resposta = self.client.get(reverse("core:verificar_atualizacao_cotacoes"))
 
-        self.assertEqual(resposta.json()["ultima_atualizacao"], self.ativo.atualizado_em.isoformat())
+        self.assertEqual(resposta.json()["ultima_atualizacao"], timezone.localtime(self.ativo.atualizado_em).isoformat())
 
     def test_nao_enxerga_atualizacao_de_ativo_de_outro_usuario(self):
         outro_usuario = User.objects.create_user(username="outro_polling", password="SenhaForte123!")
@@ -2155,7 +2155,15 @@ class VerificarAtualizacaoCotacoesTests(TestCase):
 
         resposta = self.client.get(reverse("core:verificar_atualizacao_cotacoes"))
 
-        self.assertEqual(resposta.json()["ultima_atualizacao"], self.ativo.atualizado_em.isoformat())
+        self.assertEqual(resposta.json()["ultima_atualizacao"], timezone.localtime(self.ativo.atualizado_em).isoformat())
+
+    def test_marcador_das_telas_bate_com_o_endpoint(self):
+        # o navegador compara as strings: se o formato/fuso divergir, a tela
+        # recarrega a cada 30s sem cotação nova
+        valor = self.client.get(reverse("core:verificar_atualizacao_cotacoes")).json()["ultima_atualizacao"]
+        for nome in ("core:dashboard", "core:posicoes"):
+            resposta = self.client.get(reverse(nome))
+            self.assertContains(resposta, f'id="marcador-ultima-atualizacao" data-ultima="{valor}"')
 
     def test_tela_posicoes_tem_marcador_e_script_de_polling(self):
         resposta = self.client.get(reverse("core:posicoes"))

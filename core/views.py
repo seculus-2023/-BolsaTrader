@@ -1469,7 +1469,12 @@ def verificar_atualizacao_cotacoes(request):
     """
     ultima = Ativo.objects.filter(operacoes__usuario=request.user).aggregate(Max("atualizado_em"))
     ultima_atualizacao = ultima["atualizado_em__max"]
-    return JsonResponse({"ultima_atualizacao": ultima_atualizacao.isoformat() if ultima_atualizacao else None})
+    # No fuso local, igual ao marcador das telas ({{ ...|date:'c' }}) - o
+    # navegador compara as duas strings; em UTC elas nunca batiam e a tela
+    # recarregava a cada consulta, mesmo sem cotação nova.
+    return JsonResponse({
+        "ultima_atualizacao": timezone.localtime(ultima_atualizacao).isoformat() if ultima_atualizacao else None,
+    })
 
 
 @login_required

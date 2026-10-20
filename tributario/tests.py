@@ -955,6 +955,11 @@ class ProventoTests(TestCase):
         self.assertFalse(LancamentoContaCorrente.objects.exists())
         self.assertEqual(Provento.objects.count(), 1)
 
+    def test_formulario_novo_deixa_ir_em_branco(self):
+        resposta = self.client.get(reverse("tributario:proventos"))
+        campo = resposta.context["form"]["ir_retido"]
+        self.assertIsNone(campo.value())
+
     def test_lista_do_ano(self):
         self._registrar("ITUB4", Provento.JCP, "1000.00")
         resposta = self.client.get(reverse("tributario:proventos"), {"ano": "2026"})

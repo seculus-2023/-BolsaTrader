@@ -35,8 +35,12 @@ class ProventoForm(forms.ModelForm):
         if self.instance.pk:
             self.initial.setdefault("ticker", self.instance.ativo.ticker)
             self.initial.setdefault("lancar_conta_corrente", self.instance.lancamento_id is not None)
-        elif not self.initial.get("data_pagamento"):
-            self.initial["data_pagamento"] = timezone.localdate()
+        else:
+            # em branco (não o 0 padrão do model): vazio = o sistema calcula pela regra vigente
+            self.initial["ir_retido"] = None
+            if not self.initial.get("data_pagamento"):
+                self.initial["data_pagamento"] = timezone.localdate()
+        self.fields["lancar_conta_corrente"].widget.attrs["style"] = "width: auto; margin: 0;"
         _estilizar(self)
 
     def clean_ticker(self):

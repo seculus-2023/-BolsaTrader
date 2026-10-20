@@ -267,7 +267,7 @@ GRUPO_LABELS = {
     GRUPO_FII: "Fundos imobiliários",
 }
 
-ZERO = Decimal("0")
+ZERO = Decimal("0.00")  # com centavos, para valores zerados aparecerem como "0,00" nas telas
 
 # usado quando a tabela de parâmetros estiver vazia - mesmos valores padrão do model
 PARAMETRO_PADRAO = ParametroTributario(vigencia_inicio=date(2000, 1, 1))

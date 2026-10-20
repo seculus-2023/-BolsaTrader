@@ -11,7 +11,7 @@ from django.urls import reverse, reverse_lazy
 from django.contrib import messages
 from django.views.decorators.http import require_POST
 
-from core.services import limpar_dados_sistema, limpar_dados_usuario
+from core.services import MANTIDOS_NA_LIMPEZA_GERAL, limpar_dados_sistema, limpar_dados_usuario
 
 from .forms import CadastroForm, LogoContaForm, PerfilUsuarioForm
 from .models import PerfilUsuario
@@ -198,7 +198,7 @@ def limpar_dados_view(request):
         total = limpar_dados_sistema()
         messages.success(
             request,
-            f"Dados do sistema apagados ({total} registro(s)). Ações da B3, usuários e Minha Conta foram mantidos.",
+            f"Dados do sistema apagados ({total} registro(s)). Foram mantidos: {MANTIDOS_NA_LIMPEZA_GERAL}.",
         )
         return redirect("accounts:minha_conta")
 

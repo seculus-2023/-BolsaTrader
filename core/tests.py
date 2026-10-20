@@ -6836,6 +6836,32 @@ class LimparDadosSistemaTests(TestCase):
         self.assertEqual(User.objects.count(), 2)
         self.assertEqual(PerfilUsuario.objects.get(usuario=self.usuario).numero_whatsapp, "5565999998888")
 
+    def test_limpeza_geral_apaga_caches_admin_e_sessoes_expiradas_e_mantem_configuracoes(self):
+        from django.contrib.admin.models import ADDITION, LogEntry
+        from django.contrib.contenttypes.models import ContentType
+        from core.models import ConsumoApiBrapi, FundamentosAtivo
+        from tributario.models import ParametroTributario, TaxaSelicMensal
+        FundamentosAtivo.objects.create(ticker="VALE3")
+        TaxaSelicMensal.objects.create(mes=date(2026, 5, 1), taxa_pct=Decimal("1.07"))
+        ConsumoApiBrapi.objects.create(data=date.today(), requisicoes=10)
+        LogEntry.objects.log_action(
+            user_id=self.usuario.id, content_type_id=ContentType.objects.get_for_model(User).id,
+            object_id=str(self.outro.id), object_repr="outro", action_flag=ADDITION,
+        )
+        Session.objects.create(session_key="expirada", session_data="", expire_date=timezone.now() - timedelta(days=1))
+        parametros = ParametroTributario.objects.count()
+
+        resposta = self.client.post(reverse("accounts:limpar_dados"), {"usuario": "todos", "senha": "SenhaForte123!"}, follow=True)
+
+        self.assertContains(resposta, "parâmetros tributários")
+        self.assertFalse(FundamentosAtivo.objects.exists())
+        self.assertFalse(TaxaSelicMensal.objects.exists())
+        self.assertFalse(LogEntry.objects.exists())
+        self.assertFalse(Session.objects.filter(session_key="expirada").exists())
+        self.assertTrue(Session.objects.filter(expire_date__gte=timezone.now()).exists())  # quem limpou continua logado
+        self.assertEqual(ParametroTributario.objects.count(), parametros)
+        self.assertTrue(ConsumoApiBrapi.objects.exists())
+
     def test_todo_model_do_core_e_do_tributario_esta_classificado(self):
         from core.services import MODELOS_LIMPOS_NA_LIMPEZA_GERAL, MODELOS_PRESERVADOS_NA_LIMPEZA_GERAL
         classificados = set(MODELOS_LIMPOS_NA_LIMPEZA_GERAL) | set(MODELOS_PRESERVADOS_NA_LIMPEZA_GERAL)

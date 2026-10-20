@@ -116,11 +116,14 @@
 <div class="card-glass" style="max-width: 480px; margin-top: 2rem; border-color: var(--neon-red);">
     <h3 style="margin-top: 0; color: var(--neon-red);">Limpar dados do sistema</h3>
     <p style="color: var(--text-dim);">
-        Escolha a conta: apaga <strong>os dados desse usuário</strong> (operações, alertas, conta corrente,
-        criptomoedas, post-it, previsões e históricos de atualização). Ativos, cotações, índices e notícias,
-        que são compartilhados, ficam. Com <strong>Todos os usuários</strong>, apaga também esses dados
-        compartilhados - ficam só <strong>Ações da B3</strong>. Em qualquer caso os <strong>usuários</strong> e os
-        dados de <strong>Minha Conta</strong> são mantidos. Não dá para desfazer.
+        Escolha a conta: apaga <strong>os dados desse usuário</strong> (operações, vendas, alertas, conta corrente,
+        criptomoedas, post-it, previsões, históricos de atualização e dados do Imposto de Renda: DARFs, proventos,
+        eventos e prejuízos anteriores). Ativos, cotações, índices e notícias, que são compartilhados, ficam. Com
+        <strong>Todos os usuários</strong>, apaga também esses dados compartilhados, os fundamentos das empresas,
+        as taxas Selic guardadas e o histórico do Admin - ficam só <strong>Ações da B3</strong>, os
+        <strong>parâmetros tributários</strong> e o <strong>controle de consumo da API de cotações</strong>. Em
+        qualquer caso os <strong>usuários</strong> e os dados de <strong>Minha Conta</strong> são mantidos. Não dá
+        para desfazer.
     </p>
     <form method="post" action="{% url 'accounts:limpar_dados' %}" class="form-futurista" id="form-limpar-dados">
         {% csrf_token %}

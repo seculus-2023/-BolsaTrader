@@ -6775,24 +6775,38 @@ MODELOS_LIMPOS_NA_LIMPEZA_GERAL = [
     SaldoInicialFiscal,
     Darf,
     AvisoLimiteIsencao,
+    FundamentosAtivo,  # cache de dado público - volta a ser buscado
+    TaxaSelicMensal,  # cache do Banco Central - volta a ser buscado
 ]
-# FundamentosAtivo: dado público das empresas (como o catálogo Ações da B3), não do usuário;
-# ParametroTributario e TaxaSelicMensal: regras da lei e taxa pública do Banco Central
-MODELOS_PRESERVADOS_NA_LIMPEZA_GERAL = [AcaoB3, ConsumoApiBrapi, FundamentosAtivo, ParametroTributario, TaxaSelicMensal]
+# Ficam de propósito: o catálogo Ações da B3; o consumo da API brapi (zerar faria
+# o sistema achar que ainda tem cota no mês e estourar o plano); e os parâmetros
+# tributários (alíquotas e limites da lei - sem eles o IR cai no padrão e perde
+# regras com vigência, como a retenção de dividendos de 2026).
+MODELOS_PRESERVADOS_NA_LIMPEZA_GERAL = [AcaoB3, ConsumoApiBrapi, ParametroTributario]
+MANTIDOS_NA_LIMPEZA_GERAL = (
+    "Ações da B3, usuários, Minha Conta, parâmetros tributários e o controle de consumo da API de cotações"
+)
 
 
 @transaction.atomic
 def limpar_dados_sistema() -> int:
     """
-    Apaga todos os dados do sistema, exceto o catálogo Ações da B3, os
-    usuários e seus perfis (ver MODELOS_LIMPOS_NA_LIMPEZA_GERAL). Tudo numa
-    transação só: se algo falhar, nada é apagado. Devolve o total de
-    registros apagados.
+    Apaga todos os dados do sistema, exceto o que está em MANTIDOS_NA_LIMPEZA_GERAL
+    (e as tabelas internas do Django: permissões, grupos, tipos de conteúdo).
+    Também apaga o histórico de ações do Admin e as sessões de login já
+    expiradas - as ativas ficam, senão quem está limpando cairia no meio da
+    operação. Tudo numa transação só: se algo falhar, nada é apagado. Devolve
+    o total de registros apagados.
     """
+    from django.contrib.admin.models import LogEntry
+    from django.contrib.sessions.models import Session
+
     total = 0
     for modelo in MODELOS_LIMPOS_NA_LIMPEZA_GERAL:
         apagados, _ = modelo.objects.all().delete()
         total += apagados
+    total += LogEntry.objects.all().delete()[0]
+    total += Session.objects.filter(expire_date__lt=timezone.now()).delete()[0]
     return total
 
 
@@ -6828,6 +6842,8 @@ MODELOS_COMPARTILHADOS_NA_LIMPEZA_USUARIO = [
     Noticia,
     FonteNoticia,
     MensagemWhatsapp,
+    FundamentosAtivo,
+    TaxaSelicMensal,
 ]
 
 

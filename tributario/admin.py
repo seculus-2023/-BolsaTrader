@@ -1,6 +1,8 @@
 from django.contrib import admin
 
-from .models import AvisoLimiteIsencao, Darf, ParametroTributario, SaldoInicialFiscal, TaxaSelicMensal
+from .models import (
+    AvisoLimiteIsencao, Darf, EventoCorporativo, ParametroTributario, Provento, SaldoInicialFiscal, TaxaSelicMensal,
+)
 
 
 @admin.register(ParametroTributario)
@@ -32,3 +34,16 @@ class TaxaSelicMensalAdmin(admin.ModelAdmin):
 @admin.register(AvisoLimiteIsencao)
 class AvisoLimiteIsencaoAdmin(admin.ModelAdmin):
     list_display = ("usuario", "competencia", "tipo", "criado_em")
+
+
+@admin.register(Provento)
+class ProventoAdmin(admin.ModelAdmin):
+    list_display = ("usuario", "ativo", "tipo", "data_pagamento", "valor_bruto", "ir_retido")
+    list_filter = ("tipo",)
+    search_fields = ("usuario__username", "ativo__ticker")
+
+
+@admin.register(EventoCorporativo)
+class EventoCorporativoAdmin(admin.ModelAdmin):
+    list_display = ("usuario", "ativo", "tipo", "data", "proporcao", "custo_unitario_bonificacao")
+    list_filter = ("tipo",)

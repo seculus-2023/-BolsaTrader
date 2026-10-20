@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block titulo %}Relatório da declaração {{ ano }} - BolsaTrader{% endblock %}
+{% block conteudo %}
+<h1>📄 Declaração de IR {{ ano|add:1 }} (ano-calendário {{ ano }})</h1>
+<a href="{% url 'tributario:imposto_renda' %}" class="btn-futurista btn-secundario">🧾 Imposto de Renda</a>
+<a href="{% url 'tributario:relatorio_anual_excel' %}?ano={{ ano }}" class="btn-futurista btn-secundario">⬇ Excel</a>
+<a href="{% url 'tributario:relatorio_anual_pdf' %}?ano={{ ano }}" class="btn-futurista btn-secundario">⬇ PDF</a>
+<form method="get" class="form-futurista" style="display: inline-flex; gap: .6rem; align-items: flex-end; margin-left: .6rem;">
+    <label for="id_ano" style="margin: 0;">Ano-calendário</label>
+    <select id="id_ano" name="ano" class="form-control-futurista" onchange="this.form.submit()">
+        {% for opcao in anos %}<option value="{{ opcao }}" {% if opcao == ano %}selected{% endif %}>{{ opcao }}</option>{% endfor %}
+    </select>
+</form>
+<p style="color: var(--text-dim); font-size: .9rem;">⚠️ {{ aviso }}</p>
+
+{% for secao in secoes %}
+<div class="card-glass" style="margin-top: 1.5rem;">
+    <h2 style="margin-top: 0;">{{ forloop.counter }}. {{ secao.titulo }}</h2>
+    {% if secao.linhas %}
+    <div class="tabela-scroll">
+    <table class="tabela-futurista">
+        <thead><tr>{% for coluna in secao.colunas %}<th>{{ coluna }}</th>{% endfor %}</tr></thead>
+        <tbody>
+            {% for linha in secao.linhas %}
+            <tr>{% for valor in linha %}<td>{{ valor }}</td>{% endfor %}</tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    </div>
+    {% else %}
+    <p style="color: var(--text-dim);">Nada a declarar nesta ficha.</p>
+    {% endif %}
+    {% if secao.nota %}<p style="color: var(--text-dim); font-size: .85rem; margin-bottom: 0;">{{ secao.nota }}</p>{% endif %}
+</div>
+{% endfor %}
+{% endblock %}

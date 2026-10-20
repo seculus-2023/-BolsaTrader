@@ -4,6 +4,9 @@
 <h1>🧾 Imposto de Renda na Bolsa</h1>
 <a href="{% url 'tributario:darf_lista' %}" class="btn-futurista btn-secundario">💳 DARFs{% if darfs_vencidas %} ({{ darfs_vencidas }} vencida{{ darfs_vencidas|pluralize }}){% endif %}</a>
 <a href="{% url 'tributario:posicao_fiscal' %}" class="btn-futurista btn-secundario">🧮 Posição Fiscal (preço médio)</a>
+<a href="{% url 'tributario:proventos' %}" class="btn-futurista btn-secundario">💵 Proventos</a>
+<a href="{% url 'tributario:eventos_corporativos' %}" class="btn-futurista btn-secundario">🔀 Eventos corporativos</a>
+<a href="{% url 'tributario:relatorio_anual' %}" class="btn-futurista btn-secundario">📄 Relatório da declaração</a>
 <a href="{% url 'core:operacao_lista' %}" class="btn-futurista btn-secundario">Minhas Operações</a>
 <p style="color: var(--text-dim); font-size: .9rem;">
     ⚠️ Valores estimados a partir das operações cadastradas (preço médio, taxas e IR retido calculado pelo sistema) -

@@ -134,6 +134,23 @@ class Operacao(models.Model):
         help_text="Taxa cobrada pela corretora sobre o total vendido - usada para calcular o valor líquido a receber.",
     )
 
+    # desdobramento/grupamento/bonificação (ver tributario.models.EventoCorporativo):
+    # o lote antigo guarda a quantidade comprada de verdade em quantidade_original
+    # e fica só com a parte já vendida; o saldo ajustado vai para um lote novo
+    # com `evento` preenchido, que não é compra (não gera débito na conta corrente
+    # e o cálculo fiscal não o conta como aquisição).
+    quantidade_original = models.PositiveIntegerField(
+        "Quantidade comprada (antes do evento)", null=True, blank=True,
+    )
+    evento = models.ForeignKey(
+        "tributario.EventoCorporativo", on_delete=models.PROTECT, null=True, blank=True,
+        related_name="lotes_gerados",
+    )
+    lote_anterior = models.ForeignKey(
+        "self", on_delete=models.SET_NULL, null=True, blank=True, related_name="lotes_posteriores",
+        help_text="Lote de onde veio o saldo (desdobramento/grupamento) - usado para desfazer o evento.",
+    )
+
     observacao = models.TextField("Observações", blank=True)
     criado_em = models.DateTimeField(auto_now_add=True)
 
@@ -164,6 +181,11 @@ class Operacao(models.Model):
     @property
     def valor_total(self):
         return self.quantidade * self.preco_unitario
+
+    @property
+    def quantidade_comprada(self) -> int:
+        """Quantidade adquirida de fato neste lote (a original, se um evento corporativo moveu o saldo para outro lote)."""
+        return self.quantidade_original if self.quantidade_original is not None else self.quantidade
 
     def vendas_registradas(self):
         """
@@ -748,6 +770,7 @@ class LancamentoContaCorrente(models.Model):
     ORIGEM_VENDA_CRIPTO = "VENDA_CRIPTO"
     ORIGEM_TRANSFERENCIA = "TRANSFERENCIA"
     ORIGEM_IMPOSTO = "IMPOSTO"
+    ORIGEM_PROVENTO = "PROVENTO"
     ORIGEM_CHOICES = [
         (ORIGEM_COMPRA, "Compra de ações"),
         (ORIGEM_VENDA, "Venda de ações"),
@@ -755,6 +778,7 @@ class LancamentoContaCorrente(models.Model):
         (ORIGEM_VENDA_CRIPTO, "Venda de criptomoeda"),
         (ORIGEM_TRANSFERENCIA, "Transferência"),
         (ORIGEM_IMPOSTO, "Imposto (DARF)"),
+        (ORIGEM_PROVENTO, "Provento (dividendo, JCP, FII)"),
     ]
 
     conta = models.ForeignKey(ContaCorrente, on_delete=models.CASCADE, related_name="lancamentos")

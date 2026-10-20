@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+{% block titulo %}Proventos - BolsaTrader{% endblock %}
+{% block conteudo %}
+<h1>💵 Proventos (dividendos, JCP e FII)</h1>
+<a href="{% url 'tributario:imposto_renda' %}" class="btn-futurista btn-secundario">🧾 Imposto de Renda</a>
+<a href="{% url 'tributario:relatorio_anual' %}" class="btn-futurista btn-secundario">📄 Relatório da declaração</a>
+<p style="color: var(--text-dim); font-size: .9rem;">
+    Os valores estão no informe de rendimentos da corretora ou no extrato. Dividendos e rendimentos de FII são isentos
+    para pessoa física; JCP tem 15% retido na fonte. Desde 2026, dividendos acima de R$ 50 mil no mês, pagos pela mesma
+    empresa, têm 10% retido. Deixe o IR em branco e o sistema calcula pela regra vigente.
+</p>
+
+<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 1rem; margin-top: 1rem;">
+    <div class="card-glass">
+        <h3 style="margin-top: 0;">Registrar provento</h3>
+        <form method="post" class="form-futurista">
+            {% csrf_token %}
+            {{ form.non_field_errors }}
+            {% for field in form %}
+                {% if field.name == "lancar_conta_corrente" %}
+                    <label style="display: flex; gap: .5rem; align-items: center; margin-top: 1rem;">{{ field }} {{ field.label }}</label>
+                {% else %}
+                    <label for="{{ field.id_for_label }}">{{ field.label }}</label>
+                    {{ field }}
+                {% endif %}
+                {{ field.errors }}
+            {% endfor %}
+            <button type="submit" class="btn-futurista" style="margin-top: 1.2rem;">Salvar provento</button>
+        </form>
+    </div>
+
+    <div class="card-glass">
+        <div style="display: flex; justify-content: space-between; align-items: flex-end; gap: 1rem; flex-wrap: wrap;">
+            <h3 style="margin: 0;">Recebidos em {{ ano }}</h3>
+            <form method="get" class="form-futurista">
+                <label for="id_ano" style="margin-top: 0;">Ano</label>
+                <select id="id_ano" name="ano" class="form-control-futurista" onchange="this.form.submit()">
+                    {% for opcao in anos %}<option value="{{ opcao }}" {% if opcao == ano %}selected{% endif %}>{{ opcao }}</option>{% endfor %}
+                </select>
+            </form>
+        </div>
+        {% for total in totais %}
+            <p style="margin: .4rem 0;">{{ total.label }}: <strong>R$ {{ total.liquido }}</strong> líquido <span style="color: var(--text-dim);">(bruto R$ {{ total.bruto }}, IR R$ {{ total.ir }})</span></p>
+        {% empty %}
+            <p style="color: var(--text-dim);">Nenhum provento registrado em {{ ano }}.</p>
+        {% endfor %}
+    </div>
+</div>
+
+{% if proventos %}
+<div class="card-glass" style="margin-top: 1.5rem;">
+    <div class="tabela-scroll">
+    <table class="tabela-futurista">
+        <thead>
+            <tr><th>Ações</th><th>Data</th><th>Ativo</th><th>Tipo</th><th>Bruto</th><th>IR retido</th><th>Líquido</th><th>Conta corrente</th><th>Observação</th></tr>
+        </thead>
+        <tbody>
+            {% for p in proventos %}
+            <tr>
+                <td>
+                    <div style="display: flex; gap: .4rem;">
+                        <a href="{% url 'tributario:provento_editar' p.id %}" class="btn-futurista btn-secundario btn-icone" title="Alterar" aria-label="Alterar">✏️</a>
+                        <form method="post" action="{% url 'tributario:provento_excluir' p.id %}" onsubmit="return confirm('Excluir este provento de {{ p.ativo.ticker }}?');">
+                            {% csrf_token %}
+                            <button type="submit" class="btn-futurista btn-secundario btn-icone" style="color: var(--neon-red); border-color: rgba(255, 56, 96, .4);" title="Excluir" aria-label="Excluir">🗑️</button>
+                        </form>
+                    </div>
+                </td>
+                <td>{{ p.data_pagamento|date:"d/m/Y" }}</td>
+                <td>{{ p.ativo.ticker }}</td>
+                <td>{{ p.get_tipo_display }}</td>
+                <td>R$ {{ p.valor_bruto }}</td>
+                <td>R$ {{ p.ir_retido }}</td>
+                <td>R$ {{ p.valor_liquido }}</td>
+                <td>{% if p.lancamento_id %}✅ creditado{% else %}&mdash;{% endif %}</td>
+                <td>{{ p.observacao|default:"" }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    </div>
+</div>
+{% endif %}
+{% endblock %}

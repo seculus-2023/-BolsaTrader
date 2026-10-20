@@ -2,17 +2,23 @@ from decimal import Decimal, InvalidOperation
 
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
-from django.http import JsonResponse
+from django.db import transaction
+from django.http import HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
+from django.urls import reverse
 from django.utils import timezone
 from django.utils.dateparse import parse_date
 from django.views.decorators.http import require_GET, require_POST
 
-from core.models import Operacao, VendaLote
+from core.models import Ativo, Operacao, VendaLote
 
 from .darf import URL_SICALC, acrescimos_ate, desfazer_pagamento, registrar_pagamento, situacao_das_darfs
-from .forms import PagamentoDarfForm, SaldoInicialFiscalForm
-from .models import Darf, SaldoInicialFiscal
+from .eventos import EventoInvalido, aplicar_evento, desfazer_evento
+from .forms import EventoCorporativoForm, PagamentoDarfForm, ProventoForm, SaldoInicialFiscalForm
+from .models import Darf, EventoCorporativo, Provento, SaldoInicialFiscal
+from .proventos import excluir_provento, ir_retido_sugerido, sincronizar_lancamento_provento
+from .relatorio import AVISO as AVISO_RELATORIO
+from .relatorio import gerar_excel_relatorio_anual, gerar_pdf_relatorio_anual, gerar_relatorio_anual
 from .services import (
     COMUM, DAY_TRADE, GRUPO_COMUM, GRUPO_LABELS, GRUPOS, MODALIDADE_LABELS, apurar_meses, apurar_operacoes,
     parametro_vigente, prejuizos_iniciais_do_usuario, simular_venda,
@@ -171,6 +177,161 @@ def darf_desfazer_pagamento(request, darf_id):
     desfazer_pagamento(darf)
     messages.success(request, f"Pagamento da DARF de {darf.competencia:%m/%Y} desfeito - o débito saiu da conta corrente.")
     return redirect("tributario:darf_lista")
+
+
+def _salvar_provento(request, form: ProventoForm) -> Provento:
+    provento = form.save(commit=False)
+    provento.usuario = request.user
+    provento.ativo, _ = Ativo.objects.get_or_create(ticker=form.cleaned_data["ticker"])
+    if form.cleaned_data.get("ir_retido") is None:
+        provento.ir_retido = ir_retido_sugerido(
+            request.user, provento.ativo, provento.tipo, provento.data_pagamento, provento.valor_bruto,
+            excluir_id=provento.pk,
+        )
+    provento.save()
+    sincronizar_lancamento_provento(provento, form.cleaned_data.get("lancar_conta_corrente", False))
+    return provento
+
+
+@login_required
+def proventos(request):
+    """Dividendos, JCP e rendimentos de FII recebidos no ano escolhido, com cadastro de novos."""
+    if request.method == "POST":
+        form = ProventoForm(request.POST)
+        if form.is_valid():
+            provento = _salvar_provento(request, form)
+            messages.success(
+                request,
+                f"{provento.get_tipo_display()} de {provento.ativo.ticker} registrado: bruto R$ {provento.valor_bruto}, "
+                f"IR retido R$ {provento.ir_retido}, líquido R$ {provento.valor_liquido}.",
+            )
+            return redirect(f"{reverse('tributario:proventos')}?ano={provento.data_pagamento.year}")
+    else:
+        form = ProventoForm()
+
+    todos = Provento.objects.filter(usuario=request.user).select_related("ativo")
+    ano, anos = _ano_escolhido(request, sorted({p.data_pagamento.year for p in todos}, reverse=True))
+    do_ano = [p for p in todos if p.data_pagamento.year == ano]
+    totais = []
+    for tipo, rotulo in Provento.TIPO_CHOICES:
+        do_tipo = [p for p in do_ano if p.tipo == tipo]
+        if do_tipo:
+            totais.append({
+                "label": rotulo,
+                "bruto": sum((p.valor_bruto for p in do_tipo), Decimal("0")),
+                "ir": sum((p.ir_retido for p in do_tipo), Decimal("0")),
+                "liquido": sum((p.valor_liquido for p in do_tipo), Decimal("0")),
+            })
+    return render(request, "tributario/proventos.html", {
+        "form": form, "proventos": do_ano, "totais": totais, "ano": ano, "anos": anos,
+    })
+
+
+@login_required
+def provento_editar(request, provento_id):
+    provento = get_object_or_404(Provento, id=provento_id, usuario=request.user)
+    if request.method == "POST":
+        form = ProventoForm(request.POST, instance=provento)
+        if form.is_valid():
+            provento = _salvar_provento(request, form)
+            messages.success(request, f"{provento.get_tipo_display()} de {provento.ativo.ticker} atualizado.")
+            return redirect(f"{reverse('tributario:proventos')}?ano={provento.data_pagamento.year}")
+    else:
+        form = ProventoForm(instance=provento)
+    return render(request, "tributario/provento_editar.html", {"form": form, "provento": provento})
+
+
+@login_required
+@require_POST
+def provento_excluir(request, provento_id):
+    provento = get_object_or_404(Provento, id=provento_id, usuario=request.user)
+    ano = provento.data_pagamento.year
+    excluir_provento(provento)
+    messages.success(request, "Provento excluído (e o crédito na conta corrente, se havia).")
+    return redirect(f"{reverse('tributario:proventos')}?ano={ano}")
+
+
+@login_required
+def eventos_corporativos(request):
+    """Desdobramentos, grupamentos e bonificações cadastrados, com o formulário para registrar um novo."""
+    if request.method == "POST":
+        form = EventoCorporativoForm(request.POST, usuario=request.user)
+        if form.is_valid():
+            evento = form.save(commit=False)
+            evento.usuario = request.user
+            try:
+                with transaction.atomic():
+                    evento.save()
+                    criados = aplicar_evento(evento)
+            except EventoInvalido as exc:
+                form.add_error(None, str(exc))
+            else:
+                ajuste = ", ".join(f"{lote.quantidade} a R$ {lote.preco_unitario}" for lote in criados)
+                messages.success(request, f"{evento} registrado - lote(s) ajustado(s): {ajuste}.")
+                return redirect("tributario:eventos_corporativos")
+    else:
+        form = EventoCorporativoForm(usuario=request.user)
+
+    eventos = EventoCorporativo.objects.filter(usuario=request.user).select_related("ativo").prefetch_related("lotes_gerados")
+    return render(request, "tributario/eventos.html", {"form": form, "eventos": eventos})
+
+
+@login_required
+@require_POST
+def evento_desfazer(request, evento_id):
+    evento = get_object_or_404(EventoCorporativo, id=evento_id, usuario=request.user)
+    descricao = str(evento)
+    try:
+        desfazer_evento(evento)
+    except EventoInvalido as exc:
+        messages.error(request, str(exc))
+    else:
+        messages.success(request, f"{descricao} desfeito - os lotes voltaram ao que eram antes.")
+    return redirect("tributario:eventos_corporativos")
+
+
+def _ano_relatorio(request) -> int:
+    try:
+        return int(request.GET.get("ano", ""))
+    except ValueError:
+        return timezone.localdate().year - 1  # a declaração é sempre do ano anterior
+
+
+@login_required
+def relatorio_anual(request):
+    """Relatório para a declaração de IR: o que preencher em cada ficha no ano-calendário escolhido."""
+    ano = _ano_relatorio(request)
+    hoje = timezone.localdate()
+    return render(request, "tributario/relatorio_anual.html", {
+        "secoes": gerar_relatorio_anual(request.user, ano),
+        "ano": ano,
+        "anos": list(range(hoje.year, hoje.year - 6, -1)),
+        "aviso": AVISO_RELATORIO,
+    })
+
+
+def _download(conteudo: bytes, tipo: str, nome: str) -> HttpResponse:
+    resposta = HttpResponse(conteudo, content_type=tipo)
+    resposta["Content-Disposition"] = f'attachment; filename="{nome}"'
+    return resposta
+
+
+@login_required
+def relatorio_anual_excel(request):
+    ano = _ano_relatorio(request)
+    nome = request.user.first_name or request.user.username
+    conteudo = gerar_excel_relatorio_anual(gerar_relatorio_anual(request.user, ano), ano, nome)
+    return _download(
+        conteudo, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", f"declaracao_ir_{ano}.xlsx",
+    )
+
+
+@login_required
+def relatorio_anual_pdf(request):
+    ano = _ano_relatorio(request)
+    nome = request.user.first_name or request.user.username
+    conteudo = gerar_pdf_relatorio_anual(gerar_relatorio_anual(request.user, ano), ano, nome)
+    return _download(conteudo, "application/pdf", f"declaracao_ir_{ano}.pdf")
 
 
 @login_required

@@ -28,7 +28,11 @@ from .darf import (
     calcular_acrescimos, desfazer_pagamento, notificar_darfs_telegram, obter_taxas_selic, registrar_pagamento,
     situacao_das_darfs, sincronizar_darfs,
 )
-from .models import AvisoLimiteIsencao, Darf, ParametroTributario, SaldoInicialFiscal, TaxaSelicMensal
+from .eventos import EventoInvalido, aplicar_evento, desfazer_evento
+from .models import (
+    AvisoLimiteIsencao, Darf, EventoCorporativo, ParametroTributario, Provento, SaldoInicialFiscal, TaxaSelicMensal,
+)
+from .relatorio import gerar_relatorio_anual
 from .services import (
     COMUM, DAY_TRADE, GRUPO_COMUM, GRUPO_DAY_TRADE, GRUPO_FII, MovimentoDia, ResultadoVenda, apurar_meses,
     apurar_operacoes, calcular_apuracao, calcular_meses, ir_estimado_por_lote,
@@ -377,10 +381,14 @@ class ApuracaoMensalTests(TestCase):
         self.assertEqual(marco.grupos[GRUPO_COMUM].imposto, Decimal("150.00"))
         self.assertEqual(abril.grupos[GRUPO_COMUM].imposto, Decimal("175.00"))
 
-    def test_parametro_padrao_foi_cadastrado_pela_migracao(self):
-        parametro = ParametroTributario.objects.get()
-        self.assertEqual(parametro.limite_isencao_acoes, Decimal("20000.00"))
-        self.assertIsNone(parametro.vigencia_fim)
+    def test_parametros_cadastrados_pelas_migracoes(self):
+        ate_2025, desde_2026 = ParametroTributario.objects.order_by("vigencia_inicio")
+        self.assertEqual(ate_2025.vigencia_fim, date(2025, 12, 31))
+        self.assertIsNone(ate_2025.limite_dividendos_mes)
+        self.assertEqual(desde_2026.vigencia_inicio, date(2026, 1, 1))
+        self.assertIsNone(desde_2026.vigencia_fim)
+        self.assertEqual(desde_2026.limite_dividendos_mes, Decimal("50000.00"))
+        self.assertEqual(desde_2026.limite_isencao_acoes, Decimal("20000.00"))
 
 
 class SemBancoCentralMixin:
@@ -765,3 +773,244 @@ class AvisoLimiteIsencaoTests(SemBancoCentralMixin, TestCase):
         self._vender(100)
         self.assertEqual(enviar.call_count, 2)
         self.assertFalse(AvisoLimiteIsencao.objects.exists())
+
+
+class EventoCorporativoCalculoPuroTests(TestCase):
+    def test_desdobramento_muda_quantidade_e_mantem_custo(self):
+        movimentos = {
+            ("PETR4", D1): MovimentoDia(quantidade_compra=100, custo_compra=Decimal("3000.00")),
+            ("PETR4", D3): MovimentoDia(quantidade_venda=50, valor_venda=Decimal("1000.00")),
+        }
+        evento = EventoCorporativo(tipo=EventoCorporativo.DESDOBRAMENTO, data=D2, proporcao=Decimal("2"))
+        apuracao = calcular_apuracao(movimentos, {}, {"PETR4": [evento]})
+        self.assertEqual(apuracao.resultados[0].resultado, Decimal("250.00"))  # 1000 - 50 x 15 (PM ajustado)
+        self.assertEqual(apuracao.posicoes["PETR4"].quantidade, 150)
+
+    def test_evento_depois_do_ultimo_movimento_ajusta_a_posicao(self):
+        movimentos = {("PETR4", D1): MovimentoDia(quantidade_compra=100, custo_compra=Decimal("3000.00"))}
+        evento = EventoCorporativo(
+            tipo=EventoCorporativo.BONIFICACAO, data=D3, proporcao=Decimal("10"), custo_unitario_bonificacao=Decimal("5"),
+        )
+        posicao = calcular_apuracao(movimentos, {}, {"PETR4": [evento]}).posicoes["PETR4"]
+        self.assertEqual(posicao.quantidade, 110)
+        self.assertEqual(posicao.custo_total, Decimal("3050"))
+
+
+class EventoCorporativoLotesTests(SemBancoCentralMixin, TestCase):
+    """Lote de 100 PETR4 a R$ 30 em 02/03/2026, com 20 vendidas a R$ 35 em 03/03."""
+
+    def setUp(self):
+        super().setUp()
+        self.usuario = User.objects.create_user(username="eventos_corp", password="SenhaForte123!")
+        self.client.login(username="eventos_corp", password="SenhaForte123!")
+        self.ativo = Ativo.objects.create(ticker="PETR4")
+        self.lote = Operacao.objects.create(
+            usuario=self.usuario, ativo=self.ativo, tipo=Operacao.COMPRA,
+            quantidade=100, preco_unitario=Decimal("30.00"), data_operacao=D1, meta_lucro_pct=Decimal("10"),
+        )
+        VendaLote.objects.create(operacao=self.lote, quantidade=20, preco=Decimal("35.00"), data=D2)
+        recalcular_resumo_vendas(self.lote)
+
+    def _evento(self, tipo, proporcao, data=date(2026, 3, 10), custo=None):
+        evento = EventoCorporativo.objects.create(
+            usuario=self.usuario, ativo=self.ativo, tipo=tipo, data=data, proporcao=Decimal(proporcao),
+            custo_unitario_bonificacao=custo,
+        )
+        return evento, aplicar_evento(evento)
+
+    def test_desdobramento_move_o_saldo_para_lote_ajustado(self):
+        _, [novo] = self._evento(EventoCorporativo.DESDOBRAMENTO, "2")
+        self.lote.refresh_from_db()
+        self.assertEqual((novo.quantidade, novo.preco_unitario, novo.data_operacao), (160, Decimal("15.00"), D1))
+        self.assertEqual(novo.meta_lucro_pct, Decimal("10.00"))
+        self.assertEqual((self.lote.quantidade, self.lote.quantidade_original, self.lote.saldo), (20, 100, 0))
+
+        posicao = apurar_operacoes(self.usuario).posicoes["PETR4"]
+        self.assertEqual((posicao.quantidade, posicao.custo_total_centavos), (160, Decimal("2400.00")))
+
+        # venda depois do evento, a partir do lote novo: custo pelo preço médio ajustado (R$ 15)
+        VendaLote.objects.create(operacao=novo, quantidade=40, preco=Decimal("20.00"), data=date(2026, 3, 15))
+        resultados = {r.data: r.resultado for r in apurar_operacoes(self.usuario).resultados}
+        self.assertEqual(resultados[D2], Decimal("100.00"))  # 20 x (35 - 30), antes do evento
+        self.assertEqual(resultados[date(2026, 3, 15)], Decimal("200.00"))  # 800 - 40 x 15
+
+    def test_grupamento(self):
+        _, [novo] = self._evento(EventoCorporativo.GRUPAMENTO, "10")
+        self.assertEqual((novo.quantidade, novo.preco_unitario), (8, Decimal("300.00")))
+
+    def test_bonificacao_cria_lote_ao_custo_informado(self):
+        _, [bonus] = self._evento(EventoCorporativo.BONIFICACAO, "10", custo=Decimal("5"))
+        self.assertEqual((bonus.quantidade, bonus.preco_unitario, bonus.data_operacao), (8, Decimal("5.00"), date(2026, 3, 10)))
+        posicao = apurar_operacoes(self.usuario).posicoes["PETR4"]
+        self.assertEqual(posicao.quantidade, 88)
+        self.assertEqual(posicao.custo_total_centavos, Decimal("2440.00"))  # 80 x 30 + 8 x 5
+
+    def test_lote_do_evento_nao_debita_conta_corrente(self):
+        _, [novo] = self._evento(EventoCorporativo.DESDOBRAMENTO, "2")
+        sincronizar_lancamento_compra(novo)
+        self.assertFalse(LancamentoContaCorrente.objects.filter(operacao=novo).exists())
+
+    def test_desfazer_devolve_os_lotes(self):
+        evento, _ = self._evento(EventoCorporativo.DESDOBRAMENTO, "2")
+        desfazer_evento(evento)
+        self.lote.refresh_from_db()
+        self.assertEqual((self.lote.quantidade, self.lote.quantidade_original), (100, None))
+        self.assertEqual(Operacao.objects.filter(usuario=self.usuario).count(), 1)
+        self.assertFalse(EventoCorporativo.objects.exists())
+
+    def test_nao_desfaz_com_venda_no_lote_novo(self):
+        evento, [novo] = self._evento(EventoCorporativo.DESDOBRAMENTO, "2")
+        VendaLote.objects.create(operacao=novo, quantidade=10, preco=Decimal("20.00"), data=date(2026, 3, 15))
+        with self.assertRaises(EventoInvalido):
+            desfazer_evento(evento)
+
+    def test_nao_aplica_com_venda_registrada_depois_da_data_ex(self):
+        VendaLote.objects.create(operacao=self.lote, quantidade=10, preco=Decimal("35.00"), data=date(2026, 3, 12))
+        evento = EventoCorporativo.objects.create(
+            usuario=self.usuario, ativo=self.ativo, tipo=EventoCorporativo.DESDOBRAMENTO,
+            data=date(2026, 3, 10), proporcao=Decimal("2"),
+        )
+        with self.assertRaises(EventoInvalido):
+            aplicar_evento(evento)
+
+    def test_lote_ajustado_nao_pode_ser_editado_nem_excluido(self):
+        _, [novo] = self._evento(EventoCorporativo.DESDOBRAMENTO, "2")
+        self.assertRedirects(self.client.get(reverse("core:operacao_editar", args=[novo.id])), reverse("core:operacao_lista"))
+        self.client.post(reverse("core:operacao_excluir", args=[self.lote.id]))
+        self.assertTrue(Operacao.objects.filter(id=self.lote.id).exists())
+
+    def test_tela_registra_e_desfaz_evento(self):
+        resposta = self.client.post(reverse("tributario:eventos_corporativos"), {
+            "ticker": "PETR4", "tipo": EventoCorporativo.DESDOBRAMENTO, "data": "2026-03-10", "proporcao": "2",
+        })
+        self.assertRedirects(resposta, reverse("tributario:eventos_corporativos"))
+        evento = EventoCorporativo.objects.get()
+        self.assertEqual(evento.lotes_gerados.get().quantidade, 160)
+
+        self.client.post(reverse("tributario:evento_desfazer", args=[evento.id]))
+        self.assertFalse(EventoCorporativo.objects.exists())
+
+    def test_tela_mostra_erro_e_nao_grava_evento_invalido(self):
+        resposta = self.client.post(reverse("tributario:eventos_corporativos"), {
+            "ticker": "PETR4", "tipo": EventoCorporativo.BONIFICACAO, "data": "2026-03-10", "proporcao": "10",
+        })
+        self.assertEqual(resposta.status_code, 200)
+        self.assertContains(resposta, "custo por ação")
+        self.assertFalse(EventoCorporativo.objects.exists())
+
+
+class ProventoTests(TestCase):
+    def setUp(self):
+        self.usuario = User.objects.create_user(username="proventos_ir", password="SenhaForte123!")
+        self.client.login(username="proventos_ir", password="SenhaForte123!")
+
+    def _registrar(self, ticker, tipo, valor, data="2026-05-15", ir="", lancar=True):
+        dados = {"ticker": ticker, "tipo": tipo, "data_pagamento": data, "valor_bruto": valor, "ir_retido": ir}
+        if lancar:
+            dados["lancar_conta_corrente"] = "on"
+        return self.client.post(reverse("tributario:proventos"), dados)
+
+    def test_jcp_sugere_15_pct_e_credita_o_liquido(self):
+        self._registrar("ITUB4", Provento.JCP, "1000.00")
+        provento = Provento.objects.get()
+        self.assertEqual(provento.ir_retido, Decimal("150.00"))
+        self.assertEqual(provento.lancamento.valor, Decimal("850.00"))
+        self.assertEqual(provento.lancamento.origem, LancamentoContaCorrente.ORIGEM_PROVENTO)
+
+    def test_dividendo_acima_de_50_mil_da_mesma_empresa_no_mes_retem_10_pct(self):
+        self._registrar("PETR3", Provento.DIVIDENDO, "30000.00")
+        self._registrar("PETR4", Provento.DIVIDENDO, "25000.00")
+        primeiro, segundo = Provento.objects.order_by("id")
+        self.assertEqual(primeiro.ir_retido, Decimal("0"))
+        self.assertEqual(segundo.ir_retido, Decimal("2500.00"))
+
+    def test_dividendo_em_2025_nao_tem_retencao(self):
+        self._registrar("PETR4", Provento.DIVIDENDO, "60000.00", data="2025-05-15")
+        self.assertEqual(Provento.objects.get().ir_retido, Decimal("0"))
+
+    def test_fii_e_isento_e_ir_informado_e_respeitado(self):
+        self._registrar("HGLG11", Provento.RENDIMENTO_FII, "80.00")
+        self._registrar("VALE3", Provento.JCP, "100.00", ir="14.00")
+        self.assertEqual(Provento.objects.get(tipo=Provento.RENDIMENTO_FII).ir_retido, Decimal("0"))
+        self.assertEqual(Provento.objects.get(tipo=Provento.JCP).ir_retido, Decimal("14.00"))
+
+    def test_rejeita_ir_maior_que_o_bruto(self):
+        resposta = self._registrar("VALE3", Provento.JCP, "100.00", ir="150.00")
+        self.assertEqual(resposta.status_code, 200)
+        self.assertFalse(Provento.objects.exists())
+
+    def test_editar_sem_lancar_remove_credito_e_excluir_remove_tudo(self):
+        self._registrar("ITUB4", Provento.JCP, "1000.00")
+        provento = Provento.objects.get()
+        self.client.post(reverse("tributario:provento_editar", args=[provento.id]), {
+            "ticker": "ITUB4", "tipo": Provento.JCP, "data_pagamento": "2026-05-15", "valor_bruto": "1000.00", "ir_retido": "150.00",
+        })
+        provento.refresh_from_db()
+        self.assertIsNone(provento.lancamento)
+        self.assertFalse(LancamentoContaCorrente.objects.exists())
+
+        self._registrar("ITUB4", Provento.DIVIDENDO, "200.00")
+        dividendo = Provento.objects.get(tipo=Provento.DIVIDENDO)
+        self.client.post(reverse("tributario:provento_excluir", args=[dividendo.id]))
+        self.assertFalse(LancamentoContaCorrente.objects.exists())
+        self.assertEqual(Provento.objects.count(), 1)
+
+    def test_lista_do_ano(self):
+        self._registrar("ITUB4", Provento.JCP, "1000.00")
+        resposta = self.client.get(reverse("tributario:proventos"), {"ano": "2026"})
+        self.assertContains(resposta, "ITUB4")
+        self.assertContains(resposta, "R$ 850,00")
+
+
+class RelatorioAnualTests(SemBancoCentralMixin, TestCase):
+    def setUp(self):
+        super().setUp()
+        self.usuario = User.objects.create_user(username="declaracao", password="SenhaForte123!")
+        self.client.login(username="declaracao", password="SenhaForte123!")
+        petr = Ativo.objects.create(ticker="PETR4", nome="Petrobras")
+        lote = Operacao.objects.create(
+            usuario=self.usuario, ativo=petr, tipo=Operacao.COMPRA,
+            quantidade=100, preco_unitario=Decimal("10.00"), data_operacao=date(2025, 6, 2),
+        )
+        VendaLote.objects.create(operacao=lote, quantidade=50, preco=Decimal("30.00"), data=date(2026, 3, 3))
+        recalcular_resumo_vendas(lote)
+        Operacao.objects.create(
+            usuario=self.usuario, ativo=Ativo.objects.create(ticker="HGLG11"), tipo=Operacao.COMPRA,
+            quantidade=10, preco_unitario=Decimal("100.00"), data_operacao=date(2026, 2, 2),
+        )
+        Provento.objects.create(usuario=self.usuario, ativo=petr, tipo=Provento.JCP, data_pagamento=date(2026, 4, 1),
+                                valor_bruto=Decimal("1000.00"), ir_retido=Decimal("150.00"))
+        Provento.objects.create(usuario=self.usuario, ativo=petr, tipo=Provento.DIVIDENDO, data_pagamento=date(2026, 4, 1),
+                                valor_bruto=Decimal("500.00"))
+
+    def _secao(self, titulo_inicio):
+        return next(s for s in gerar_relatorio_anual(self.usuario, 2026) if s.titulo.startswith(titulo_inicio))
+
+    def test_bens_e_direitos_com_custo_nos_dois_anos(self):
+        linhas = {linha[1]: linha for linha in self._secao("Bens e Direitos").linhas}
+        self.assertEqual(linhas["PETR4"][0], "03 - 01")
+        self.assertEqual(linhas["PETR4"][3:], [100, "R$ 1.000,00", 50, "R$ 500,00"])
+        self.assertIn("Petrobras", linhas["PETR4"][2])
+        self.assertEqual(linhas["HGLG11"][0], "07 - 03")
+        self.assertEqual(linhas["HGLG11"][3:], [0, "R$ 0,00", 10, "R$ 1.000,00"])
+
+    def test_isentos_e_tributacao_exclusiva(self):
+        isentos = self._secao("Rendimentos isentos").linhas
+        self.assertIn(["Ganhos líquidos com ações - vendas até R$ 20 mil no mês", "", "", "", "R$ 1.000,00"], isentos)
+        self.assertIn(["Lucros e dividendos recebidos", "PETR4", "R$ 500,00", "R$ 0,00", "R$ 500,00"], isentos)
+        exclusiva = self._secao("Rendimentos sujeitos").linhas
+        self.assertEqual(exclusiva, [["Juros sobre capital próprio", "PETR4", "R$ 1.000,00", "R$ 150,00", "R$ 850,00"]])
+
+    def test_tela_e_downloads(self):
+        resposta = self.client.get(reverse("tributario:relatorio_anual"), {"ano": "2026"})
+        self.assertContains(resposta, "Bens e Direitos")
+        self.assertContains(resposta, "R$ 850,00")
+
+        excel = self.client.get(reverse("tributario:relatorio_anual_excel"), {"ano": "2026"})
+        self.assertIn("attachment", excel["Content-Disposition"])
+        from io import BytesIO
+        from openpyxl import load_workbook
+        self.assertEqual(len(load_workbook(BytesIO(excel.content)).sheetnames), 7)
+
+        pdf = self.client.get(reverse("tributario:relatorio_anual_pdf"), {"ano": "2026"})
+        self.assertTrue(pdf.content.startswith(b"%PDF"))

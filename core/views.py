@@ -358,7 +358,8 @@ def _periodo_e_operacoes(request):
     operacoes_vendidas = sorted(
         (
             op for op in todas_operacoes
-            if op.tipo == Operacao.COMPRA and op.saldo <= 0
+            # quantidade zero: lote cujo saldo inteiro foi para um lote novo num desdobramento/grupamento
+            if op.tipo == Operacao.COMPRA and op.saldo <= 0 and op.quantidade > 0
             and no_periodo(op.data_venda, "data_de_venda", "data_ate_venda")
         ),
         key=lambda op: op.data_venda or op.data_operacao,
@@ -831,6 +832,13 @@ def operacao_editar(request, operacao_id):
     operacao = get_object_or_404(
         Operacao, id=operacao_id, usuario=request.user, tipo=Operacao.COMPRA
     )
+    if operacao.evento_id or operacao.quantidade_original is not None:
+        messages.error(
+            request,
+            "Este lote foi ajustado por um evento corporativo (desdobramento, grupamento ou bonificação) - para "
+            "corrigi-lo, desfaça o evento em Imposto de Renda > Eventos corporativos.",
+        )
+        return redirect("core:operacao_lista")
 
     if request.method == "POST":
         form = EditarCompraForm(request.POST, instance=operacao)
@@ -875,6 +883,13 @@ def operacao_excluir(request, operacao_id):
     reserva direto da tela Posições em Carteira).
     """
     operacao = get_object_or_404(Operacao, id=operacao_id, usuario=request.user)
+    if operacao.evento_id or operacao.quantidade_original is not None:
+        messages.error(
+            request,
+            "Este lote foi ajustado por um evento corporativo - desfaça o evento em Imposto de Renda > Eventos "
+            "corporativos antes de excluí-lo.",
+        )
+        return redirect(request.POST.get("next") or "core:operacao_lista")
     ticker = operacao.ativo.ticker
     tipo_label = operacao.get_tipo_display()
     operacao.delete()

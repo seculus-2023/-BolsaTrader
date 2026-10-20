@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% block titulo %}Eventos corporativos - BolsaTrader{% endblock %}
+{% block conteudo %}
+<h1>🔀 Eventos corporativos</h1>
+<a href="{% url 'tributario:imposto_renda' %}" class="btn-futurista btn-secundario">🧾 Imposto de Renda</a>
+<a href="{% url 'tributario:posicao_fiscal' %}" class="btn-futurista btn-secundario">🧮 Posição Fiscal</a>
+<p style="color: var(--text-dim); font-size: .9rem;">
+    Desdobramento, grupamento e bonificação mudam a quantidade de ações (e, na bonificação, o custo). Ao registrar, o
+    saldo dos lotes comprados antes da data ex passa para lotes novos, já na quantidade e no preço ajustados, e o preço
+    médio fiscal é recalculado na data certa. Frações de ação são descartadas (a empresa as vende em leilão e paga
+    o valor). Para corrigir, desfaça o evento e registre de novo.
+</p>
+
+<div class="card-glass" style="max-width: 640px; margin-top: 1rem;">
+    <h3 style="margin-top: 0;">Registrar evento</h3>
+    {% if form.fields.ticker.choices %}
+    <form method="post" class="form-futurista">
+        {% csrf_token %}
+        {{ form.non_field_errors }}
+        {% for field in form %}
+            <label for="{{ field.id_for_label }}">{{ field.label }}</label>
+            {{ field }}
+            {% if field.help_text %}<small style="color: var(--text-dim);">{{ field.help_text }}</small>{% endif %}
+            {{ field.errors }}
+        {% endfor %}
+        <button type="submit" class="btn-futurista" style="margin-top: 1.2rem;">Registrar evento</button>
+    </form>
+    {% else %}
+    <p style="color: var(--text-dim);">Nenhuma compra cadastrada.</p>
+    {% endif %}
+</div>
+
+{% if eventos %}
+<div class="card-glass" style="margin-top: 1.5rem;">
+    <div class="tabela-scroll">
+    <table class="tabela-futurista">
+        <thead><tr><th>Ações</th><th>Data ex</th><th>Ativo</th><th>Evento</th><th>Proporção</th><th>Lotes gerados</th></tr></thead>
+        <tbody>
+            {% for evento in eventos %}
+            <tr>
+                <td>
+                    <form method="post" action="{% url 'tributario:evento_desfazer' evento.id %}" onsubmit="return confirm('Desfazer {{ evento }}? Os lotes voltam ao que eram antes.');">
+                        {% csrf_token %}
+                        <button type="submit" class="btn-futurista btn-secundario btn-icone" style="color: var(--neon-red); border-color: rgba(255, 56, 96, .4);" title="Desfazer" aria-label="Desfazer">↩️</button>
+                    </form>
+                </td>
+                <td>{{ evento.data|date:"d/m/Y" }}</td>
+                <td>{{ evento.ativo.ticker }}</td>
+                <td>{{ evento.get_tipo_display }}</td>
+                <td>
+                    {% if evento.tipo == "DESDOBRAMENTO" %}1 para {{ evento.proporcao|floatformat:-6 }}
+                    {% elif evento.tipo == "GRUPAMENTO" %}{{ evento.proporcao|floatformat:-6 }} para 1
+                    {% else %}{{ evento.proporcao|floatformat:-6 }}% a R$ {{ evento.custo_unitario_bonificacao|floatformat:-6 }}/ação{% endif %}
+                </td>
+                <td>{% for lote in evento.lotes_gerados.all %}{{ lote.quantidade }} a R$ {{ lote.preco_unitario }}{% if not forloop.last %}; {% endif %}{% endfor %}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    </div>
+</div>
+{% endif %}
+{% endblock %}

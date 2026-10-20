@@ -3,7 +3,90 @@ from decimal import Decimal
 from django import forms
 from django.utils import timezone
 
-from .models import SaldoInicialFiscal
+from core.models import Ativo, Operacao
+
+from .models import EventoCorporativo, Provento, SaldoInicialFiscal
+
+
+def _estilizar(form):
+    for field in form.fields.values():
+        if not isinstance(field.widget, forms.CheckboxInput):
+            field.widget.attrs["class"] = (field.widget.attrs.get("class", "") + " form-control-futurista").strip()
+
+
+class ProventoForm(forms.ModelForm):
+    """Dividendo, JCP ou rendimento de FII recebido. IR retido em branco = o sistema sugere pela regra vigente."""
+
+    ticker = forms.CharField(label="Ticker (ex: PETR4, HGLG11)", max_length=12)
+    lancar_conta_corrente = forms.BooleanField(
+        label="Lançar o valor líquido como crédito na conta corrente", required=False, initial=True,
+    )
+
+    class Meta:
+        model = Provento
+        fields = ["tipo", "data_pagamento", "valor_bruto", "ir_retido", "observacao"]
+        widgets = {"data_pagamento": forms.DateInput(attrs={"type": "date"}, format="%Y-%m-%d")}
+        labels = {"ir_retido": "IR retido na fonte (R$) - em branco, o sistema calcula pela regra vigente"}
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["ir_retido"].required = False
+        self.order_fields(["ticker", "tipo", "data_pagamento", "valor_bruto", "ir_retido", "observacao", "lancar_conta_corrente"])
+        if self.instance.pk:
+            self.initial.setdefault("ticker", self.instance.ativo.ticker)
+            self.initial.setdefault("lancar_conta_corrente", self.instance.lancamento_id is not None)
+        elif not self.initial.get("data_pagamento"):
+            self.initial["data_pagamento"] = timezone.localdate()
+        _estilizar(self)
+
+    def clean_ticker(self):
+        return self.cleaned_data["ticker"].strip().upper()
+
+    def clean_valor_bruto(self):
+        valor = self.cleaned_data["valor_bruto"]
+        if valor <= 0:
+            raise forms.ValidationError("Informe um valor maior que zero.")
+        return valor
+
+    def clean(self):
+        dados = super().clean()
+        ir, bruto = dados.get("ir_retido"), dados.get("valor_bruto")
+        if ir is not None and bruto is not None and not (0 <= ir <= bruto):
+            self.add_error("ir_retido", "O IR retido deve ficar entre zero e o valor bruto.")
+        return dados
+
+
+class EventoCorporativoForm(forms.ModelForm):
+    ticker = forms.ChoiceField(label="Ativo")
+
+    class Meta:
+        model = EventoCorporativo
+        fields = ["tipo", "data", "proporcao", "custo_unitario_bonificacao"]
+        widgets = {"data": forms.DateInput(attrs={"type": "date"}, format="%Y-%m-%d")}
+
+    def __init__(self, *args, usuario, **kwargs):
+        super().__init__(*args, **kwargs)
+        tickers = (
+            Operacao.objects.filter(usuario=usuario, tipo=Operacao.COMPRA)
+            .order_by("ativo__ticker").values_list("ativo__ticker", flat=True).distinct()
+        )
+        self.fields["ticker"].choices = [(t, t) for t in tickers]
+        self.order_fields(["ticker", "tipo", "data", "proporcao", "custo_unitario_bonificacao"])
+        _estilizar(self)
+
+    def clean(self):
+        dados = super().clean()
+        tipo, proporcao = dados.get("tipo"), dados.get("proporcao")
+        if proporcao is not None:
+            if proporcao <= 0:
+                self.add_error("proporcao", "Informe uma proporção maior que zero.")
+            elif tipo in (EventoCorporativo.DESDOBRAMENTO, EventoCorporativo.GRUPAMENTO) and proporcao <= 1:
+                self.add_error("proporcao", "Desdobramento e grupamento usam proporção maior que 1 (ex: 1 para 2 = 2).")
+        if tipo == EventoCorporativo.BONIFICACAO and not dados.get("custo_unitario_bonificacao"):
+            self.add_error("custo_unitario_bonificacao", "Informe o custo por ação atribuído pela empresa na bonificação.")
+        if "ticker" in dados:
+            self.instance.ativo = Ativo.objects.get(ticker=dados["ticker"])
+        return dados
 
 
 class PagamentoDarfForm(forms.Form):

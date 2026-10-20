@@ -43,7 +43,9 @@ from .models import (
     CriptoAtivo, OperacaoCripto, CotacaoCripto, RegistroAtualizacaoCarteiraCripto, PrevisaoAnalista,
     FundamentosAtivo, VendaLote,
 )
-from tributario.models import AvisoLimiteIsencao, Darf, ParametroTributario, SaldoInicialFiscal, TaxaSelicMensal
+from tributario.models import (
+    AvisoLimiteIsencao, Darf, EventoCorporativo, ParametroTributario, Provento, SaldoInicialFiscal, TaxaSelicMensal,
+)
 
 
 # --------------------------------------------------------------------------
@@ -6046,7 +6048,8 @@ def sincronizar_lancamento_compra(operacao: Operacao) -> None:
     (Operacao.RESERVAR) não geram lançamento, já que ainda não é dinheiro
     comprometido de fato.
     """
-    if operacao.tipo != Operacao.COMPRA:
+    # lote gerado por evento corporativo (desdobramento etc.) não é dinheiro saindo
+    if operacao.tipo != Operacao.COMPRA or operacao.evento_id:
         return
 
     conta = obter_ou_criar_conta_corrente(operacao.usuario)
@@ -6056,7 +6059,7 @@ def sincronizar_lancamento_compra(operacao: Operacao) -> None:
         defaults={
             "conta": conta,
             "tipo": LancamentoContaCorrente.DEBITO,
-            "valor": operacao.valor_total + (operacao.taxas_compra or Decimal("0")),
+            "valor": operacao.quantidade_comprada * operacao.preco_unitario + (operacao.taxas_compra or Decimal("0")),
             "descricao": f"Compra de {operacao.quantidade}x {operacao.ativo.ticker}",
             "data": operacao.data_operacao,
         },
@@ -6757,6 +6760,8 @@ MODELOS_LIMPOS_NA_LIMPEZA_GERAL = [
     CriptoAtivo,
     Alerta,
     Operacao,
+    EventoCorporativo,  # depois dos lotes (que o protegem) e antes dos ativos
+    Provento,
     Cotacao,
     RegistroCotacao,
     PrevisaoAnalista,
@@ -6804,6 +6809,8 @@ MODELOS_LIMPOS_NA_LIMPEZA_USUARIO = {
     RegistroAtualizacaoCarteiraCripto: "usuario",
     Alerta: "usuario",
     Operacao: "usuario",
+    EventoCorporativo: "usuario",  # depois dos lotes (que o protegem) e antes dos ativos
+    Provento: "usuario",
     RegistroCotacao: "usuario",
     PrevisaoAnalista: "usuario",
     RegistroAtualizacaoCarteira: "usuario",

@@ -32,7 +32,7 @@ from core.classificacao import ACAO, FII, UNIT
 from core.models import Operacao
 
 from .calendario import ultimo_dia_util
-from .models import ParametroTributario, SaldoInicialFiscal
+from .models import EventoCorporativo, ParametroTributario, SaldoInicialFiscal
 
 COMUM = "COMUM"
 DAY_TRADE = "DAY_TRADE"
@@ -114,17 +114,43 @@ class ApuracaoFiscal:
         return sorted({r.data.year for r in self.resultados}, reverse=True)
 
 
-def calcular_apuracao(movimentos: dict[tuple[str, date], MovimentoDia], classes: dict[str, str]) -> ApuracaoFiscal:
+def _aplicar_evento_na_posicao(posicao: PosicaoFiscal, evento) -> None:
+    """
+    Desdobramento/grupamento mudam só a quantidade (o custo total é o mesmo);
+    bonificação soma as ações recebidas ao custo unitário informado pela empresa.
+    """
+    nova_quantidade = evento.nova_quantidade(posicao.quantidade)
+    if evento.tipo == evento.BONIFICACAO:
+        bonus = nova_quantidade - posicao.quantidade
+        posicao.custo_total += bonus * (evento.custo_unitario_bonificacao or Decimal("0"))
+    posicao.quantidade = nova_quantidade
+
+
+def calcular_apuracao(
+    movimentos: dict[tuple[str, date], MovimentoDia],
+    classes: dict[str, str],
+    eventos: dict[str, list] | None = None,
+) -> ApuracaoFiscal:
     """
     Processa os movimentos (por ativo e dia) em ordem cronológica e devolve
     as posições com preço médio, o resultado de cada venda e os avisos de
-    dados inconsistentes (ex: venda maior que a posição na data).
+    dados inconsistentes (ex: venda maior que a posição na data). Os eventos
+    corporativos de cada ativo são aplicados à posição na data ex, antes dos
+    movimentos daquele dia.
     """
     apuracao = ApuracaoFiscal()
+    pendentes = {ticker: sorted(lista, key=lambda e: e.data) for ticker, lista in (eventos or {}).items()}
+
+    def aplicar_eventos_ate(ticker: str, dia: date | None) -> None:
+        fila = pendentes.get(ticker, [])
+        while fila and (dia is None or fila[0].data <= dia):
+            posicao = apuracao.posicoes.setdefault(ticker, PosicaoFiscal(ticker=ticker, classe=classes.get(ticker, "")))
+            _aplicar_evento_na_posicao(posicao, fila.pop(0))
 
     for ticker, dia in sorted(movimentos, key=lambda chave: (chave[1], chave[0])):
         mov = movimentos[(ticker, dia)]
         classe = classes.get(ticker, "")
+        aplicar_eventos_ate(ticker, dia)
         posicao = apuracao.posicoes.setdefault(ticker, PosicaoFiscal(ticker=ticker, classe=classe))
 
         quantidade_day_trade = min(mov.quantidade_compra, mov.quantidade_venda)
@@ -163,6 +189,9 @@ def calcular_apuracao(movimentos: dict[tuple[str, date], MovimentoDia], classes:
                 custo_aquisicao=custo_baixa,
             ))
 
+    # eventos depois do último movimento do ativo também ajustam a posição atual
+    for ticker in list(pendentes):
+        aplicar_eventos_ate(ticker, None)
     return apuracao
 
 
@@ -192,10 +221,11 @@ def apurar_operacoes(usuario, ate: date | None = None, simulacao=None) -> Apurac
     for lote in lotes:
         ticker = lote.ativo.ticker
         classes[ticker] = lote.ativo.classe
-        if ate is None or lote.data_operacao <= ate:
+        # lote gerado por evento corporativo não é aquisição - o evento é aplicado direto na posição
+        if lote.evento_id is None and (ate is None or lote.data_operacao <= ate):
             mov = movimentos[(ticker, lote.data_operacao)]
-            mov.quantidade_compra += lote.quantidade
-            mov.custo_compra += lote.valor_total + (lote.taxas_compra or Decimal("0"))
+            mov.quantidade_compra += lote.quantidade_comprada
+            mov.custo_compra += lote.quantidade_comprada * lote.preco_unitario + (lote.taxas_compra or Decimal("0"))
         for venda in lote.vendas_registradas():
             if simulacao is not None and simulacao.pk and venda.pk == simulacao.pk:
                 continue
@@ -204,7 +234,13 @@ def apurar_operacoes(usuario, ate: date | None = None, simulacao=None) -> Apurac
     if simulacao is not None:
         somar_venda(simulacao.operacao.ativo.ticker, simulacao)
 
-    return calcular_apuracao(movimentos, classes)
+    eventos: dict[str, list[EventoCorporativo]] = defaultdict(list)
+    for evento in EventoCorporativo.objects.filter(usuario=usuario).select_related("ativo"):
+        if ate is None or evento.data <= ate:
+            eventos[evento.ativo.ticker].append(evento)
+            classes.setdefault(evento.ativo.ticker, evento.ativo.classe)
+
+    return calcular_apuracao(movimentos, classes, eventos)
 
 
 # --------------------------------------------------------------------------

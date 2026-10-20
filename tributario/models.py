@@ -42,6 +42,18 @@ class ParametroTributario(models.Model):
     irrf_day_trade_pct = models.DecimalField(
         "IRRF - day trade (% sobre o ganho)", max_digits=7, decimal_places=4, default=Decimal("1"),
     )
+    irrf_jcp_pct = models.DecimalField(
+        "IRRF - juros sobre capital próprio (%)", max_digits=5, decimal_places=2, default=Decimal("15"),
+    )
+    irrf_dividendos_pct = models.DecimalField(
+        "IRRF - dividendos acima do limite (%)", max_digits=5, decimal_places=2, default=Decimal("10"),
+    )
+    limite_dividendos_mes = models.DecimalField(
+        "Limite mensal de dividendos sem retenção, por empresa (R$)", max_digits=14, decimal_places=2,
+        null=True, blank=True,
+        help_text="Vazio = dividendos sem retenção (regra até 2025). Lei 15.270/2025: R$ 50 mil por mês da mesma "
+        "empresa; acima disso, a retenção incide sobre o total pago no mês.",
+    )
     darf_minimo = models.DecimalField(
         "Valor mínimo de DARF (R$)", max_digits=8, decimal_places=2, default=Decimal("10"),
         help_text="Imposto abaixo disso não é pago no mês - acumula para os meses seguintes.",
@@ -98,6 +110,104 @@ class Darf(models.Model):
     @property
     def paga(self) -> bool:
         return self.data_pagamento is not None
+
+
+class Provento(models.Model):
+    """
+    Dividendo, juros sobre capital próprio (JCP) ou rendimento de FII recebido
+    pelo usuário - entra no relatório anual da declaração e, opcionalmente,
+    como crédito na conta corrente (valor líquido).
+    """
+
+    DIVIDENDO = "DIVIDENDO"
+    JCP = "JCP"
+    RENDIMENTO_FII = "FII"
+    TIPO_CHOICES = [
+        (DIVIDENDO, "Dividendo"),
+        (JCP, "Juros sobre capital próprio (JCP)"),
+        (RENDIMENTO_FII, "Rendimento de FII"),
+    ]
+
+    usuario = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="proventos")
+    ativo = models.ForeignKey("core.Ativo", on_delete=models.PROTECT, related_name="proventos")
+    tipo = models.CharField("Tipo", max_length=9, choices=TIPO_CHOICES)
+    data_pagamento = models.DateField("Data do pagamento")
+    valor_bruto = models.DecimalField("Valor bruto (R$)", max_digits=14, decimal_places=2)
+    ir_retido = models.DecimalField(
+        "IR retido na fonte (R$)", max_digits=14, decimal_places=2, default=Decimal("0"),
+        help_text="Está no informe da corretora. JCP: 15%. Dividendos: 10% quando a mesma empresa paga mais de "
+        "R$ 50 mil no mês (Lei 15.270/2025). Rendimento de FII: isento.",
+    )
+    observacao = models.CharField("Observação", max_length=255, blank=True)
+    lancamento = models.OneToOneField(
+        "core.LancamentoContaCorrente", on_delete=models.SET_NULL, null=True, blank=True, related_name="provento",
+    )
+    criado_em = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = "Provento"
+        verbose_name_plural = "Proventos"
+        ordering = ["-data_pagamento", "-criado_em"]
+
+    def __str__(self):
+        return f"{self.get_tipo_display()} {self.ativo.ticker} {self.data_pagamento:%d/%m/%Y} - R$ {self.valor_bruto}"
+
+    @property
+    def valor_liquido(self) -> Decimal:
+        return self.valor_bruto - (self.ir_retido or Decimal("0"))
+
+
+class EventoCorporativo(models.Model):
+    """
+    Desdobramento, grupamento ou bonificação de um ativo que o usuário tem em
+    carteira. Ao cadastrar (tributario.eventos.aplicar_evento), o saldo de
+    cada lote anterior à data passa para um lote NOVO, já na quantidade e no
+    preço ajustados (para metas, preço alvo e vendas futuras), e o lote
+    original fica só com o que já tinha sido vendido. O cálculo fiscal ignora
+    esses lotes novos e aplica o evento direto no preço médio, na data certa.
+    """
+
+    DESDOBRAMENTO = "DESDOBRAMENTO"
+    GRUPAMENTO = "GRUPAMENTO"
+    BONIFICACAO = "BONIFICACAO"
+    TIPO_CHOICES = [
+        (DESDOBRAMENTO, "Desdobramento (split)"),
+        (GRUPAMENTO, "Grupamento (inplit)"),
+        (BONIFICACAO, "Bonificação em ações"),
+    ]
+
+    usuario = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="eventos_corporativos")
+    ativo = models.ForeignKey("core.Ativo", on_delete=models.PROTECT, related_name="eventos_corporativos")
+    tipo = models.CharField("Tipo", max_length=13, choices=TIPO_CHOICES)
+    data = models.DateField(
+        "Data ex", help_text="Primeiro dia em que o papel é negociado já ajustado - vale para as ações compradas antes dela.",
+    )
+    proporcao = models.DecimalField(
+        "Proporção", max_digits=12, decimal_places=6,
+        help_text="Desdobramento: ações novas para cada 1 (ex: 1 para 2 = 2). Grupamento: quantas viram 1 (ex: 10 "
+        "para 1 = 10). Bonificação: percentual (ex: 10% = 10).",
+    )
+    custo_unitario_bonificacao = models.DecimalField(
+        "Custo unitário da bonificação (R$)", max_digits=12, decimal_places=6, null=True, blank=True,
+        help_text="Só bonificação: valor por ação atribuído pela empresa (está no fato relevante/aviso aos acionistas).",
+    )
+    criado_em = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = "Evento corporativo"
+        verbose_name_plural = "Eventos corporativos"
+        ordering = ["-data", "-criado_em"]
+
+    def __str__(self):
+        return f"{self.get_tipo_display()} {self.ativo.ticker} em {self.data:%d/%m/%Y}"
+
+    def nova_quantidade(self, quantidade: int) -> int:
+        """Quantidade depois do evento (frações são descartadas - a empresa as vende em leilão)."""
+        if self.tipo == self.DESDOBRAMENTO:
+            return int(quantidade * self.proporcao)
+        if self.tipo == self.GRUPAMENTO:
+            return int(quantidade / self.proporcao)
+        return quantidade + int(quantidade * self.proporcao / 100)
 
 
 class AvisoLimiteIsencao(models.Model):

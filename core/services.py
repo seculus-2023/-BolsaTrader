@@ -43,6 +43,7 @@ from .models import (
     CriptoAtivo, OperacaoCripto, CotacaoCripto, RegistroAtualizacaoCarteiraCripto, PrevisaoAnalista,
     FundamentosAtivo, VendaLote,
 )
+from tributario.models import ParametroTributario, SaldoInicialFiscal
 
 
 # --------------------------------------------------------------------------
@@ -6752,9 +6753,11 @@ MODELOS_LIMPOS_NA_LIMPEZA_GERAL = [
     FonteNoticia,
     MensagemWhatsapp,
     PostIt,
+    SaldoInicialFiscal,
 ]
-# FundamentosAtivo: dado público das empresas (como o catálogo Ações da B3), não do usuário
-MODELOS_PRESERVADOS_NA_LIMPEZA_GERAL = [AcaoB3, ConsumoApiBrapi, FundamentosAtivo]
+# FundamentosAtivo: dado público das empresas (como o catálogo Ações da B3), não do usuário;
+# ParametroTributario: alíquotas e limites da lei, configuração do sistema
+MODELOS_PRESERVADOS_NA_LIMPEZA_GERAL = [AcaoB3, ConsumoApiBrapi, FundamentosAtivo, ParametroTributario]
 
 
 @transaction.atomic
@@ -6789,6 +6792,7 @@ MODELOS_LIMPOS_NA_LIMPEZA_USUARIO = {
     PrevisaoAnalista: "usuario",
     RegistroAtualizacaoCarteira: "usuario",
     PostIt: "usuario",
+    SaldoInicialFiscal: "usuario",
 }
 MODELOS_COMPARTILHADOS_NA_LIMPEZA_USUARIO = [
     CotacaoCripto,

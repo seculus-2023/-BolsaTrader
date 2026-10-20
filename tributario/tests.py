@@ -1,5 +1,5 @@
 """
-Testes do módulo tributário (preço médio fiscal, day trade e classe dos ativos).
+Testes do módulo tributário (preço médio fiscal, day trade, classe dos ativos e apuração mensal).
 
 Executar com:
     python manage.py test tributario
@@ -15,9 +15,13 @@ from django.urls import reverse
 
 from core.classificacao import ACAO, BDR, ETF, FII, UNIT, inferir_classe_ativo
 from core.models import Ativo, LancamentoContaCorrente, Operacao, VendaLote
-from core.services import obter_ou_criar_conta_corrente, sincronizar_lancamento_compra
+from core.services import obter_ou_criar_conta_corrente, recalcular_resumo_vendas, sincronizar_lancamento_compra
 
-from .services import COMUM, DAY_TRADE, MovimentoDia, apurar_operacoes, calcular_apuracao
+from .models import ParametroTributario, SaldoInicialFiscal
+from .services import (
+    COMUM, DAY_TRADE, GRUPO_COMUM, GRUPO_DAY_TRADE, GRUPO_FII, MovimentoDia, ResultadoVenda, apurar_meses,
+    apurar_operacoes, calcular_apuracao, calcular_meses, ir_estimado_por_lote,
+)
 
 D1 = date(2026, 3, 2)
 D2 = date(2026, 3, 3)
@@ -260,4 +264,173 @@ class PosicaoFiscalViewTests(TestCase):
         self.assertContains(resposta, "Nenhum ativo em carteira")
 
     def test_menu_tem_link(self):
-        self.assertContains(self.client.get(reverse("core:menu")), reverse("tributario:posicao_fiscal"))
+        self.assertContains(self.client.get(reverse("core:menu")), reverse("tributario:imposto_renda"))
+
+
+def _venda(data, valor_venda, ganho, classe=ACAO, modalidade=COMUM, quantidade=100):
+    """Resultado de venda pronto para calcular_meses: ganho = valor de venda - custo de aquisição."""
+    return ResultadoVenda(
+        data=data, ticker="TEST3", classe=classe, modalidade=modalidade, quantidade=quantidade,
+        valor_venda=Decimal(valor_venda), custos_venda=Decimal("0"),
+        custo_aquisicao=Decimal(valor_venda) - Decimal(ganho),
+    )
+
+
+MAR = date(2026, 3, 10)
+ABR = date(2026, 4, 10)
+
+
+class ApuracaoMensalTests(TestCase):
+    """Regras da apuração mensal direto em calcular_meses (parâmetro padrão cadastrado pela migração)."""
+
+    def test_vendas_ate_20_mil_deixam_o_ganho_com_acoes_isento(self):
+        [mes] = calcular_meses([_venda(MAR, "15000", "3000")])
+        self.assertTrue(mes.isento)
+        self.assertEqual(mes.grupos[GRUPO_COMUM].isento, Decimal("3000"))
+        self.assertEqual(mes.imposto_bruto, Decimal("0"))
+        self.assertEqual(mes.disponivel_isencao, Decimal("5000.00"))
+        self.assertEqual(mes.irrf_mes, Decimal("0"))  # 0,75 de dedo-duro: abaixo de R$ 1, não é retido
+
+    def test_acima_do_limite_tributa_o_ganho_inteiro_e_abate_o_irrf(self):
+        [mes] = calcular_meses([_venda(MAR, "25000", "5000")])
+        self.assertFalse(mes.isento)
+        self.assertEqual(mes.grupos[GRUPO_COMUM].imposto, Decimal("750.00"))  # 15% de 5.000, não só do excedente
+        self.assertEqual(mes.irrf_mes, Decimal("1.25"))  # 0,005% de 25.000
+        self.assertEqual(mes.valor_darf, Decimal("748.75"))
+        self.assertEqual(mes.vencimento, date(2026, 4, 30))
+
+    def test_vendas_em_day_trade_contam_para_o_limite(self):
+        [mes] = calcular_meses([
+            _venda(MAR, "15000", "2000"),
+            _venda(MAR, "6000", "500", modalidade=DAY_TRADE),
+        ])
+        self.assertFalse(mes.isento)
+        self.assertEqual(mes.grupos[GRUPO_COMUM].imposto, Decimal("300.00"))
+        self.assertEqual(mes.grupos[GRUPO_DAY_TRADE].imposto, Decimal("100.00"))  # 20%
+        self.assertEqual(mes.irrf_mes, Decimal("5.00"))  # 1% do ganho em day trade (o comum, 0,75, não é retido)
+        self.assertEqual(mes.valor_darf, Decimal("395.00"))
+
+    def test_prejuizo_de_um_mes_compensa_o_ganho_dos_seguintes(self):
+        marco, abril = calcular_meses([_venda(MAR, "30000", "-1000"), _venda(ABR, "30000", "3000")])
+        self.assertEqual(marco.grupos[GRUPO_COMUM].prejuizo_a_compensar, Decimal("1000"))
+        self.assertEqual(abril.grupos[GRUPO_COMUM].prejuizo_compensado, Decimal("1000"))
+        self.assertEqual(abril.grupos[GRUPO_COMUM].imposto, Decimal("300.00"))
+        # IR retido em março (sem imposto) abate abril
+        self.assertEqual(marco.irrf_saldo_final, Decimal("1.50"))
+        self.assertEqual(abril.valor_darf, Decimal("297.00"))
+
+    def test_prejuizo_em_mes_isento_continua_compensavel(self):
+        marco, abril = calcular_meses([_venda(MAR, "10000", "-500"), _venda(ABR, "30000", "1000")])
+        self.assertTrue(marco.isento)
+        self.assertEqual(marco.grupos[GRUPO_COMUM].prejuizo_a_compensar, Decimal("500"))
+        self.assertEqual(abril.grupos[GRUPO_COMUM].imposto, Decimal("75.00"))
+
+    def test_prejuizo_em_day_trade_nao_abate_operacao_comum(self):
+        [mes] = calcular_meses([
+            _venda(MAR, "30000", "2000"),
+            _venda(MAR, "5000", "-1000", modalidade=DAY_TRADE),
+        ])
+        self.assertEqual(mes.grupos[GRUPO_COMUM].imposto, Decimal("300.00"))
+        self.assertEqual(mes.grupos[GRUPO_DAY_TRADE].prejuizo_a_compensar, Decimal("1000"))
+
+    def test_fii_e_etf_nao_tem_isencao(self):
+        [mes] = calcular_meses([
+            _venda(MAR, "5000", "1000", classe=FII),
+            _venda(MAR, "3000", "200", classe=ETF),
+        ])
+        self.assertEqual(mes.vendas_acoes, Decimal("0.00"))
+        self.assertEqual(mes.grupos[GRUPO_FII].imposto, Decimal("200.00"))  # 20%
+        self.assertEqual(mes.grupos[GRUPO_COMUM].imposto, Decimal("30.00"))  # ETF: 15%, mesmo com mês "isento"
+
+    def test_imposto_abaixo_de_10_reais_acumula_para_o_mes_seguinte(self):
+        marco, abril = calcular_meses([_venda(MAR, "25000", "40"), _venda(ABR, "25000", "100")])
+        self.assertEqual(marco.valor_darf, Decimal("0"))
+        self.assertEqual(marco.imposto_acumulado_proximo, Decimal("4.75"))  # 6,00 - 1,25 de IRRF
+        self.assertEqual(abril.valor_darf, Decimal("18.50"))  # 15,00 - 1,25 + 4,75
+
+    def test_saldo_de_irrf_nao_passa_para_outro_ano(self):
+        dezembro, janeiro = calcular_meses([
+            _venda(date(2025, 12, 10), "30000", "-100"),
+            _venda(date(2026, 1, 10), "30000", "1000"),
+        ])
+        self.assertEqual(dezembro.irrf_saldo_final, Decimal("1.50"))
+        self.assertEqual(janeiro.irrf_saldo_anterior, Decimal("0"))
+        self.assertEqual(janeiro.vencimento, date(2026, 2, 27))  # 28/02/2026 é sábado
+
+    def test_parametro_novo_vale_a_partir_da_vigencia(self):
+        parametros = [
+            ParametroTributario(vigencia_inicio=date(2005, 1, 1), vigencia_fim=date(2026, 3, 31)),
+            ParametroTributario(vigencia_inicio=date(2026, 4, 1), aliquota_comum_pct=Decimal("17.5")),
+        ]
+        marco, abril = calcular_meses([_venda(MAR, "30000", "1000"), _venda(ABR, "30000", "1000")], parametros=parametros)
+        self.assertEqual(marco.grupos[GRUPO_COMUM].imposto, Decimal("150.00"))
+        self.assertEqual(abril.grupos[GRUPO_COMUM].imposto, Decimal("175.00"))
+
+    def test_parametro_padrao_foi_cadastrado_pela_migracao(self):
+        parametro = ParametroTributario.objects.get()
+        self.assertEqual(parametro.limite_isencao_acoes, Decimal("20000.00"))
+        self.assertIsNone(parametro.vigencia_fim)
+
+
+class ApuracaoMensalComBancoTests(TestCase):
+    def setUp(self):
+        self.usuario = User.objects.create_user(username="apuracao_mensal", password="SenhaForte123!")
+        self.client.login(username="apuracao_mensal", password="SenhaForte123!")
+        self.ativo = Ativo.objects.create(ticker="PETR4")
+
+    def _lote_vendido(self, quantidade, preco_compra, preco_venda, compra=D1, venda=D2):
+        lote = Operacao.objects.create(
+            usuario=self.usuario, ativo=self.ativo, tipo=Operacao.COMPRA,
+            quantidade=quantidade, preco_unitario=Decimal(preco_compra), data_operacao=compra,
+        )
+        VendaLote.objects.create(operacao=lote, quantidade=quantidade, preco=Decimal(preco_venda), data=venda)
+        recalcular_resumo_vendas(lote)
+        return lote
+
+    def test_prejuizo_anterior_informado_entra_na_compensacao(self):
+        SaldoInicialFiscal.objects.create(usuario=self.usuario, prejuizo_comum=Decimal("4000"))
+        self._lote_vendido(100, "100.00", "300.00")  # vende 30.000, ganha 20.000
+        [mes] = apurar_meses(self.usuario)
+        self.assertEqual(mes.grupos[GRUPO_COMUM].prejuizo_compensado, Decimal("4000"))
+        self.assertEqual(mes.grupos[GRUPO_COMUM].imposto, Decimal("2400.00"))  # 15% de 16.000
+
+    def test_ir_estimado_do_lote_usa_a_aliquota_efetiva_do_mes(self):
+        tributado = self._lote_vendido(100, "100.00", "300.00")
+        estimativas = ir_estimado_por_lote(self.usuario, [tributado])
+        self.assertEqual(estimativas[tributado.id], Decimal("3000.00"))
+
+    def test_ir_estimado_e_zero_em_mes_isento(self):
+        isento = self._lote_vendido(10, "100.00", "150.00")  # vende 1.500
+        self.assertEqual(ir_estimado_por_lote(self.usuario, [isento])[isento.id], Decimal("0.00"))
+
+    def test_painel_mostra_isencao_e_apuracao(self):
+        self._lote_vendido(100, "100.00", "300.00")
+        resposta = self.client.get(reverse("tributario:imposto_renda"), {"ano": "2026"})
+        self.assertEqual(resposta.status_code, 200)
+        self.assertContains(resposta, "03/2026")
+        self.assertContains(resposta, "R$ 2998,50")  # 3.000 - 1,50 de IR retido
+
+    def test_painel_sem_vendas_nao_quebra(self):
+        resposta = self.client.get(reverse("tributario:imposto_renda"))
+        self.assertEqual(resposta.status_code, 200)
+        self.assertContains(resposta, "Ainda pode vender")
+
+    def test_salvar_prejuizos_anteriores(self):
+        resposta = self.client.post(reverse("tributario:saldo_inicial_salvar"), {
+            "prejuizo_comum": "1500.00", "prejuizo_day_trade": "", "prejuizo_fii": "200",
+        })
+        self.assertRedirects(resposta, reverse("tributario:imposto_renda"))
+        saldo = SaldoInicialFiscal.objects.get(usuario=self.usuario)
+        self.assertEqual((saldo.prejuizo_comum, saldo.prejuizo_day_trade, saldo.prejuizo_fii),
+                         (Decimal("1500.00"), Decimal("0"), Decimal("200.00")))
+
+    def test_rejeita_prejuizo_negativo(self):
+        self.client.post(reverse("tributario:saldo_inicial_salvar"), {"prejuizo_comum": "-10"})
+        self.assertFalse(SaldoInicialFiscal.objects.filter(usuario=self.usuario, prejuizo_comum=Decimal("-10")).exists())
+
+    def test_minhas_operacoes_mostra_lucro_apos_ir(self):
+        self._lote_vendido(100, "100.00", "300.00")
+        resposta = self.client.get(reverse("core:operacao_lista"), {"data_de_venda": "", "data_ate_venda": ""})
+        self.assertContains(resposta, "Lucro após IR")
+        self.assertContains(resposta, "R$ 3000,00 (15,0% do lucro)")
+        self.assertContains(resposta, "R$ 17000,00")

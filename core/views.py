@@ -22,6 +22,7 @@ from django.views.decorators.clickjacking import xframe_options_sameorigin
 from django.views.decorators.http import require_GET, require_POST
 
 from accounts.models import PerfilUsuario
+from tributario.services import ir_estimado_por_lote
 
 from .forms import (
     OperacaoForm,
@@ -419,6 +420,17 @@ def operacao_lista(request):
                 (lucro_total / total_comprado * 100).quantize(Decimal("0.01")) if total_comprado else None
             ),
         }
+
+    # IR estimado de cada lote vendido (rateio da apuração mensal - ver tributario.services.ir_estimado_por_lote)
+    if operacoes_vendidas:
+        ir_por_lote = ir_estimado_por_lote(request.user, operacoes_vendidas)
+        for op in operacoes_vendidas:
+            op.ir_estimado = ir_por_lote.get(op.id, Decimal("0"))
+            lucro = op.lucro_perda_realizado
+            op.lucro_apos_ir = lucro - op.ir_estimado if lucro is not None else None
+            op.ir_pct_do_lucro = (
+                (op.ir_estimado / lucro * 100).quantize(Decimal("0.1")) if lucro and lucro > 0 else None
+            )
 
     return render(
         request, "core/operacao_lista.html",

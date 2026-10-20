@@ -10,6 +10,7 @@
 {% endif %}
 <a href="{% url 'core:historico_atualizacoes' %}" class="btn-futurista btn-secundario">🗂️ Histórico de Atualizações</a>
 <a href="{% url 'core:criptomoedas' %}" class="btn-futurista btn-secundario">🪙 Criptomoedas</a>
+<a href="{% url 'tributario:imposto_renda' %}" class="btn-futurista btn-secundario">🧾 Imposto de Renda</a>
 <p class="badge-horario-b3 {% if b3_mercado_aberto %}aberto{% else %}fechado{% endif %}">
     {% if b3_mercado_aberto %}🟢{% else %}⚪{% endif %} B3: {{ b3_horario_abertura }} - {{ b3_horario_fechamento }} &middot; {% if b3_mercado_aberto %}Mercado aberto{% else %}Mercado fechado{% endif %}
 </p>
@@ -290,6 +291,8 @@
                 <th>Corretora (%)</th>
                 <th>Valor líquido a receber</th>
                 <th>Lucro/Perda realizado</th>
+                <th title="Rateio do imposto apurado no mês (preço médio, isenção de R$ 20 mil, prejuízos compensados) - ver Imposto de Renda">IR estimado</th>
+                <th>Lucro após IR</th>
                 <th>Lucro/Perda por dia em carteira</th>
                 <th>Metas (lucro / perda)</th>
                 <th>Ação</th>
@@ -315,6 +318,14 @@
                     {% if op.lucro_perda_realizado is not None %}
                         R$ {{ op.lucro_perda_realizado }} ({{ op.lucro_perda_pct_realizado }}%)
                     {% else %}&mdash;{% endif %}
+                </td>
+                <td>
+                    {% if op.ir_pct_do_lucro is not None %}
+                        R$ {{ op.ir_estimado }} ({{ op.ir_pct_do_lucro }}% do lucro)
+                    {% elif op.lucro_perda_realizado is not None %}R$ 0,00{% else %}&mdash;{% endif %}
+                </td>
+                <td class="{% if op.lucro_apos_ir > 0 %}valor-positivo{% elif op.lucro_apos_ir < 0 %}valor-negativo{% endif %}">
+                    {% if op.lucro_apos_ir is not None %}R$ {{ op.lucro_apos_ir }}{% else %}&mdash;{% endif %}
                 </td>
                 <td class="{% if op.lucro_perda_por_dia > 0 %}valor-positivo{% elif op.lucro_perda_por_dia < 0 %}valor-negativo{% endif %}">
                     {% if op.lucro_perda_por_dia is not None %}

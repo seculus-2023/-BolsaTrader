@@ -1,0 +1,143 @@
+{% extends "base.html" %}
+{% block titulo %}Imposto de Renda - BolsaTrader{% endblock %}
+{% block conteudo %}
+<h1>🧾 Imposto de Renda na Bolsa</h1>
+<a href="{% url 'tributario:posicao_fiscal' %}" class="btn-futurista btn-secundario">🧮 Posição Fiscal (preço médio)</a>
+<a href="{% url 'core:operacao_lista' %}" class="btn-futurista btn-secundario">Minhas Operações</a>
+<p style="color: var(--text-dim); font-size: .9rem;">
+    ⚠️ Valores estimados a partir das operações cadastradas (preço médio, taxas e IR retido calculado pelo sistema) -
+    confira com as notas de corretagem e, se precisar, com um contador. Vencimento sem considerar feriados.
+</p>
+
+{% if inconsistencias %}
+<div class="card-glass" style="margin-top: 1rem; border-color: rgba(255, 56, 96, .5);">
+    <h3 style="margin-top: 0;">Dados a conferir</h3>
+    <ul>{% for aviso in inconsistencias %}<li>{{ aviso }}</li>{% endfor %}</ul>
+</div>
+{% endif %}
+
+<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 1rem; margin-top: 1.5rem;">
+    <div class="card-glass">
+        <h3 style="margin-top: 0;">Isenção de {{ hoje|date:"F/Y" }}</h3>
+        <p style="margin: .2rem 0;">Vendas de ações no mês: <strong>R$ {{ vendas_acoes_mes }}</strong> de R$ {{ limite_isencao }}</p>
+        <div style="height: 12px; border-radius: 6px; background: rgba(255,255,255,.08); overflow: hidden; margin: .6rem 0;" role="progressbar" aria-valuenow="{{ percentual_limite }}" aria-valuemin="0" aria-valuemax="100">
+            <div style="height: 100%; width: {{ percentual_limite }}%; background: {% if vendas_acoes_mes > limite_isencao %}var(--neon-red){% elif percentual_limite >= 80 %}var(--neon-yellow){% else %}var(--neon-green){% endif %};"></div>
+        </div>
+        {% if vendas_acoes_mes > limite_isencao %}
+            <p class="valor-negativo" style="margin: 0;">Limite ultrapassado: o ganho com ações em operação comum deste mês é tributado ({{ parametro.aliquota_comum_pct|floatformat:0 }}%).</p>
+        {% else %}
+            <p style="margin: 0;">Ainda pode vender <strong class="valor-positivo">R$ {{ disponivel_isencao }}</strong> em ações neste mês sem pagar IR sobre o ganho (operação comum).</p>
+        {% endif %}
+        <p style="color: var(--text-dim); font-size: .8rem; margin-bottom: 0;">A soma é das vendas (não do lucro) e inclui day trade. Day trade, FIIs, ETFs e BDRs não têm isenção.</p>
+    </div>
+
+    <div class="card-glass">
+        <h3 style="margin-top: 0;">Imposto do mês</h3>
+        {% if mes_atual %}
+            <p style="margin: .2rem 0;">IR estimado: <strong>R$ {{ mes_atual.imposto_bruto }}</strong></p>
+            <p style="margin: .2rem 0;">IR retido na fonte: R$ {{ mes_atual.irrf_utilizado }}</p>
+            <p style="margin: .2rem 0;">A pagar (DARF 6015): <strong>R$ {{ mes_atual.valor_darf }}</strong>{% if mes_atual.imposto_acumulado_proximo %} &middot; R$ {{ mes_atual.imposto_acumulado_proximo }} acumulado (abaixo de R$ {{ parametro.darf_minimo }}){% endif %}</p>
+            <p style="margin: .2rem 0;">Vencimento: {{ mes_atual.vencimento|date:"d/m/Y" }}</p>
+        {% else %}
+            <p style="color: var(--text-dim);">Nenhuma venda neste mês.</p>
+        {% endif %}
+        {% if proximo_darf and proximo_darf != mes_atual %}
+            <p style="margin-bottom: 0;">⏰ DARF de {{ proximo_darf.competencia }}: <strong>R$ {{ proximo_darf.valor_darf }}</strong> até {{ proximo_darf.vencimento|date:"d/m/Y" }}</p>
+        {% endif %}
+    </div>
+
+    <div class="card-glass">
+        <h3 style="margin-top: 0;">Prejuízo a compensar</h3>
+        {% for item in prejuizos %}
+            <p style="margin: .2rem 0;">{{ item.label }}: <strong>R$ {{ item.valor }}</strong></p>
+        {% endfor %}
+        <p style="color: var(--text-dim); font-size: .8rem; margin-bottom: 0;">Prejuízo de um grupo só abate ganho do mesmo grupo, sem prazo para usar.</p>
+    </div>
+</div>
+
+<div class="card-glass" style="margin-top: 1.5rem;">
+    <div style="display: flex; justify-content: space-between; align-items: flex-end; gap: 1rem; flex-wrap: wrap;">
+        <h2 style="margin: 0;">Apuração mês a mês</h2>
+        <form method="get" class="form-futurista">
+            <label for="id_ano" style="margin-top: 0;">Ano</label>
+            <select id="id_ano" name="ano" class="form-control-futurista" onchange="this.form.submit()">
+                {% for opcao in anos %}<option value="{{ opcao }}" {% if opcao == ano %}selected{% endif %}>{{ opcao }}</option>{% endfor %}
+            </select>
+        </form>
+    </div>
+
+    {% if meses %}
+    <div style="display: flex; gap: 1.5rem; flex-wrap: wrap; margin-top: 1rem;">
+        <div><span style="color: var(--text-dim);">IR do ano:</span> R$ {{ total_imposto_ano }}</div>
+        <div><span style="color: var(--text-dim);">IR retido:</span> R$ {{ total_irrf_ano }}</div>
+        <div><span style="color: var(--text-dim);">DARFs:</span> R$ {{ total_darf_ano }}</div>
+        <div><span style="color: var(--text-dim);">Ganho isento (ações dentro do limite):</span> R$ {{ total_isento_ano }}</div>
+    </div>
+    <div class="tabela-scroll" style="margin-top: 1rem;">
+    <table class="tabela-futurista">
+        <thead>
+            <tr>
+                <th>Mês</th>
+                <th>Vendas de ações</th>
+                <th>Grupo</th>
+                <th>Resultado</th>
+                <th>Isento</th>
+                <th>Prejuízo compensado</th>
+                <th>Base de cálculo</th>
+                <th>Alíquota</th>
+                <th>IR</th>
+                <th>Prejuízo a compensar</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for mes in meses %}
+                {% for grupo in mes.grupos.values %}
+                {% if grupo.resultado or grupo.prejuizo_anterior %}
+                <tr>
+                    <td>{{ mes.competencia }}</td>
+                    <td>R$ {{ mes.vendas_acoes }}{% if mes.isento %} <span title="Dentro do limite de isenção">✅</span>{% endif %}</td>
+                    <td>{{ grupo.label }}</td>
+                    <td class="{% if grupo.resultado > 0 %}valor-positivo{% elif grupo.resultado < 0 %}valor-negativo{% endif %}">R$ {{ grupo.resultado }}</td>
+                    <td>{% if grupo.isento %}R$ {{ grupo.isento }}{% else %}&mdash;{% endif %}</td>
+                    <td>{% if grupo.prejuizo_compensado %}R$ {{ grupo.prejuizo_compensado }}{% else %}&mdash;{% endif %}</td>
+                    <td>R$ {{ grupo.base_calculo }}</td>
+                    <td>{{ grupo.aliquota_pct|floatformat:0 }}%</td>
+                    <td>R$ {{ grupo.imposto }}</td>
+                    <td>R$ {{ grupo.prejuizo_a_compensar }}</td>
+                </tr>
+                {% endif %}
+                {% endfor %}
+                <tr style="background: rgba(255,255,255,.03);">
+                    <td>{{ mes.competencia }}</td>
+                    <td colspan="7" style="text-align: right; color: var(--text-dim);">
+                        IR R$ {{ mes.imposto_bruto }} &minus; retido R$ {{ mes.irrf_utilizado }}{% if mes.imposto_acumulado_anterior %} + acumulado R$ {{ mes.imposto_acumulado_anterior }}{% endif %}
+                        &middot; vence {{ mes.vencimento|date:"d/m/Y" }}
+                    </td>
+                    <td colspan="2"><strong>DARF: R$ {{ mes.valor_darf }}</strong>{% if mes.imposto_acumulado_proximo %} <span style="color: var(--text-dim);">(acumula R$ {{ mes.imposto_acumulado_proximo }})</span>{% endif %}</td>
+                </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    </div>
+    {% else %}
+    <p style="color: var(--text-dim); margin-top: 1rem;">Nenhuma venda em {{ ano }}.</p>
+    {% endif %}
+</div>
+
+<div class="card-glass" style="margin-top: 1.5rem; max-width: 640px;">
+    <h3 style="margin-top: 0;">Prejuízos anteriores ao sistema</h3>
+    <p style="color: var(--text-dim); font-size: .9rem;">
+        Se você tinha prejuízo acumulado de antes das operações cadastradas aqui (está na ficha Renda Variável da
+        última declaração), informe abaixo para ele entrar na compensação.
+    </p>
+    <form method="post" action="{% url 'tributario:saldo_inicial_salvar' %}" class="form-futurista">
+        {% csrf_token %}
+        {% for field in form_saldo %}
+            <label for="{{ field.id_for_label }}">{{ field.label }}</label>
+            {{ field }}
+            {{ field.errors }}
+        {% endfor %}
+        <button type="submit" class="btn-futurista" style="margin-top: 1.2rem;">Salvar prejuízos anteriores</button>
+    </form>
+</div>
+{% endblock %}

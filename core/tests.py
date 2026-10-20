@@ -6836,10 +6836,14 @@ class LimparDadosSistemaTests(TestCase):
         self.assertEqual(User.objects.count(), 2)
         self.assertEqual(PerfilUsuario.objects.get(usuario=self.usuario).numero_whatsapp, "5565999998888")
 
-    def test_todo_model_do_core_esta_classificado(self):
+    def test_todo_model_do_core_e_do_tributario_esta_classificado(self):
         from core.services import MODELOS_LIMPOS_NA_LIMPEZA_GERAL, MODELOS_PRESERVADOS_NA_LIMPEZA_GERAL
         classificados = set(MODELOS_LIMPOS_NA_LIMPEZA_GERAL) | set(MODELOS_PRESERVADOS_NA_LIMPEZA_GERAL)
-        self.assertEqual(set(django_apps.get_app_config("core").get_models()), classificados)
+        modelos = {
+            *django_apps.get_app_config("core").get_models(),
+            *django_apps.get_app_config("tributario").get_models(),
+        }
+        self.assertEqual(modelos, classificados)
 
     def test_combo_lista_os_usuarios(self):
         resposta = self.client.get(reverse("accounts:minha_conta"))

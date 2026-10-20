@@ -2,6 +2,7 @@
 {% block titulo %}Posição Fiscal - BolsaTrader{% endblock %}
 {% block conteudo %}
 <h1>🧮 Posição Fiscal (Imposto de Renda)</h1>
+<a href="{% url 'tributario:imposto_renda' %}" class="btn-futurista btn-secundario">🧾 Apuração mensal e DARF</a>
 <p style="color: var(--text-dim);">
     Para o imposto de renda, a Receita exige o <strong>preço médio ponderado</strong> de cada ativo: toda compra se
     mistura ao custo da posição e cada venda dá baixa por esse preço médio, não pelo preço do lote escolhido em

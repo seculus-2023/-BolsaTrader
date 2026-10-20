@@ -36,7 +36,7 @@ from .models import (
     Ativo, Cotacao, Operacao, Alerta, MensagemWhatsapp, FonteNoticia, CotacaoIndice, RegistroAtualizacaoCarteira,
     ContaCorrente, LancamentoContaCorrente, PostIt,
     CriptoAtivo, OperacaoCripto, CotacaoCripto, RegistroAtualizacaoCarteiraCripto, RegistroCotacao,
-    PrevisaoAnalista,
+    PrevisaoAnalista, VendaLote,
 )
 from .services import (
     calcular_posicoes, analisar_tendencia, gerar_alertas_para_usuario, construir_comparativo_valores,
@@ -189,52 +189,113 @@ class VendaValidacaoELucroTests(TestCase):
             data_operacao=date.today() - timedelta(days=dias_atras),
         )
 
-    def _dados_venda(self, quantidade, preco="40.00"):
+    def _dados_venda(self, quantidade, preco="40.00", data=None):
         return {
-            "quantidade_vendida": str(quantidade), "preco_venda": preco,
-            "data_venda": date.today().isoformat(),
+            "quantidade": str(quantidade), "preco": preco,
+            "data": (data or date.today()).isoformat(),
         }
 
     def test_form_rejeita_venda_maior_que_a_quantidade_do_lote(self):
         compra = self._compra(quantidade=10)
-        form = VendaLoteForm(data=self._dados_venda(11), instance=compra)
+        form = VendaLoteForm(data=self._dados_venda(11), operacao=compra)
         self.assertFalse(form.is_valid())
-        self.assertIn("quantidade_vendida", form.errors)
-        self.assertIn("10 unidade(s)", form.errors["quantidade_vendida"][0])
+        self.assertIn("quantidade", form.errors)
+        self.assertIn("10 unidade(s)", form.errors["quantidade"][0])
 
     def test_form_aceita_venda_de_exatamente_o_que_foi_comprado(self):
         compra = self._compra(quantidade=10)
-        form = VendaLoteForm(data=self._dados_venda(10), instance=compra)
+        form = VendaLoteForm(data=self._dados_venda(10), operacao=compra)
         self.assertTrue(form.is_valid(), form.errors)
 
-    def test_form_exige_preco_de_venda_quando_ha_quantidade_vendida(self):
+    def test_form_exige_preco_de_venda(self):
         compra = self._compra(quantidade=10)
         form = VendaLoteForm(
-            data={"quantidade_vendida": "5", "preco_venda": "", "data_venda": date.today().isoformat()},
-            instance=compra,
+            data={"quantidade": "5", "preco": "", "data": date.today().isoformat()}, operacao=compra,
         )
         self.assertFalse(form.is_valid())
-        self.assertIn("preco_venda", form.errors)
+        self.assertIn("preco", form.errors)
+
+    def test_form_rejeita_venda_antes_da_data_da_compra(self):
+        compra = self._compra(quantidade=10)
+        form = VendaLoteForm(data=self._dados_venda(5, data=date.today() - timedelta(days=1)), operacao=compra)
+        self.assertFalse(form.is_valid())
+        self.assertIn("data", form.errors)
 
     def test_form_sugere_preco_alvo_da_meta_do_lote_como_preco_de_venda(self):
         compra = self._compra(preco="30.00")
         compra.meta_lucro_pct = Decimal("10")
         compra.save()
-        form = VendaLoteForm(instance=compra)
-        self.assertEqual(form.initial["preco_venda"], Decimal("33.00"))
+        form = VendaLoteForm(operacao=compra)
+        self.assertEqual(form.initial["preco"], Decimal("33.00"))
 
     @override_settings(META_LUCRO_PADRAO=5)
     def test_form_sugere_preco_alvo_da_meta_padrao_sem_meta_no_lote(self):
-        form = VendaLoteForm(instance=self._compra(preco="30.00"))
-        self.assertEqual(form.initial["preco_venda"], Decimal("31.50"))
+        form = VendaLoteForm(operacao=self._compra(preco="30.00"))
+        self.assertEqual(form.initial["preco"], Decimal("31.50"))
 
-    def test_form_mantem_preco_de_venda_ja_registrado(self):
-        compra = self._compra(preco="30.00")
-        compra.quantidade_vendida = 10
-        compra.preco_venda = Decimal("35.00")
-        compra.save()
-        form = VendaLoteForm(instance=compra)
-        self.assertEqual(form.initial["preco_venda"], Decimal("35.00"))
+    def test_form_de_correcao_mantem_preco_ja_registrado_e_libera_a_propria_quantidade(self):
+        compra = self._compra(quantidade=10, preco="30.00")
+        self.client.post(reverse("core:operacao_vender", args=[compra.id]), self._dados_venda(10, preco="35.00"))
+        compra.refresh_from_db()
+        venda = compra.vendas.get()
+        form = VendaLoteForm(instance=venda, operacao=compra)
+        self.assertEqual(form.initial["preco"], Decimal("35.00"))
+        self.assertEqual(form.saldo_disponivel, 10)
+
+    def test_segunda_venda_parcial_nao_apaga_a_primeira(self):
+        compra = self._compra(quantidade=10, preco="20.00", dias_atras=5)
+        url = reverse("core:operacao_vender", args=[compra.id])
+        self.client.post(url, self._dados_venda(4, preco="30.00", data=date.today() - timedelta(days=2)))
+        self.client.post(url, self._dados_venda(6, preco="25.00"))
+        compra.refresh_from_db()
+        self.assertEqual(compra.vendas.count(), 2)
+        self.assertEqual(compra.saldo, 0)
+        self.assertEqual(compra.data_venda, date.today())
+        self.assertEqual(compra.valor_total_vendido, Decimal("270.00"))  # 4x30 + 6x25
+        self.assertEqual(compra.lucro_perda_realizado, Decimal("70.00"))  # 270 - 10x20
+        self.assertEqual(compra.preco_venda, Decimal("27.00"))  # preço médio de venda
+
+    def test_lote_totalmente_vendido_nao_aceita_nova_venda(self):
+        compra = self._compra(quantidade=10)
+        url = reverse("core:operacao_vender", args=[compra.id])
+        self.client.post(url, self._dados_venda(10))
+        resposta = self.client.post(url, self._dados_venda(1))
+        self.assertRedirects(resposta, url)
+        self.assertEqual(compra.vendas.count(), 1)
+
+    def test_corrigir_e_excluir_venda_recalculam_lote_e_conta_corrente(self):
+        compra = self._compra(quantidade=10, preco="20.00")
+        self.client.post(reverse("core:operacao_vender", args=[compra.id]), self._dados_venda(4, preco="30.00"))
+        venda = compra.vendas.get()
+
+        self.client.post(reverse("core:venda_lote_editar", args=[venda.id]), self._dados_venda(5, preco="31.00"))
+        compra.refresh_from_db()
+        self.assertEqual(compra.quantidade_vendida, 5)
+        lancamento = LancamentoContaCorrente.objects.get(venda_lote=venda)
+        self.assertEqual(lancamento.valor, Decimal("155.00"))
+
+        self.client.post(reverse("core:venda_lote_excluir", args=[venda.id]))
+        compra.refresh_from_db()
+        self.assertEqual(compra.quantidade_vendida, 0)
+        self.assertIsNone(compra.preco_venda)
+        self.assertFalse(LancamentoContaCorrente.objects.filter(operacao=compra, origem="VENDA").exists())
+
+    def test_nao_corrige_venda_de_outro_usuario(self):
+        outro = User.objects.create_user(username="outro_vendedor", password="SenhaForte123!")
+        lote = Operacao.objects.create(
+            usuario=outro, ativo=self.ativo, tipo=Operacao.COMPRA,
+            quantidade=10, preco_unitario=Decimal("30.00"), data_operacao=date.today(),
+        )
+        venda = VendaLote.objects.create(operacao=lote, quantidade=5, preco=Decimal("35.00"), data=date.today())
+        self.assertEqual(self.client.get(reverse("core:venda_lote_editar", args=[venda.id])).status_code, 404)
+        self.assertEqual(self.client.post(reverse("core:venda_lote_excluir", args=[venda.id])).status_code, 404)
+
+    def test_taxas_da_venda_reduzem_o_valor_liquido(self):
+        compra = self._compra(quantidade=10, preco="20.00")
+        dados = {**self._dados_venda(10, preco="30.00"), "percentual_corretora": "1.00", "taxas": "2.50"}
+        self.client.post(reverse("core:operacao_vender", args=[compra.id]), dados)
+        compra.refresh_from_db()
+        self.assertEqual(compra.valor_liquido_vendido, Decimal("294.50"))  # 300 - 3 (1%) - 2,50
 
     def test_tela_de_venda_mostra_preco_alvo(self):
         compra = self._compra(preco="30.00")
@@ -4923,8 +4984,8 @@ class ContaCorrenteViewsTests(TestCase):
             quantidade=10, preco_unitario=Decimal("30.00"), data_operacao=date.today(),
         )
         resposta = self.client.post(reverse("core:operacao_vender", args=[operacao.id]), {
-            "quantidade_vendida": "10", "preco_venda": "35.00",
-            "data_venda": date.today().isoformat(), "percentual_corretora": "0",
+            "quantidade": "10", "preco": "35.00",
+            "data": date.today().isoformat(), "percentual_corretora": "0",
         })
         self.assertEqual(resposta.status_code, 302)
 
@@ -6911,7 +6972,7 @@ class RegistroCotacaoTests(TestCase):
     def _vender_tudo(self):
         return self.client.post(
             reverse("core:operacao_vender", args=[self.compra.id]),
-            {"quantidade_vendida": "10", "preco_venda": "35.00", "data_venda": date.today().isoformat()},
+            {"quantidade": "10", "preco": "35.00", "data": date.today().isoformat()},
         )
 
     def test_venda_pergunta_se_exclui_registros_e_sim_exclui_todos_do_ativo(self):

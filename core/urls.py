@@ -17,6 +17,8 @@ urlpatterns = [
     path("operacoes/nova/", views.operacao_nova, name="operacao_nova"),
     path("operacoes/risco/", views.risco_compra, name="risco_compra"),
     path("operacoes/<int:operacao_id>/vender/", views.operacao_vender, name="operacao_vender"),
+    path("operacoes/vendas/<int:venda_id>/editar/", views.venda_lote_editar, name="venda_lote_editar"),
+    path("operacoes/vendas/<int:venda_id>/excluir/", views.venda_lote_excluir, name="venda_lote_excluir"),
     path("operacoes/<int:operacao_id>/comprar/", views.operacao_comprar, name="operacao_comprar"),
     path("operacoes/<int:operacao_id>/editar/", views.operacao_editar, name="operacao_editar"),
     path(

@@ -25,6 +25,11 @@
         <h3>Posições em Carteira</h3>
         <p>Ações compradas, preço médio e percentual de lucro ou perda.</p>
     </a>
+    <a class="menu-card" href="{% url 'tributario:posicao_fiscal' %}">
+        <div class="icone">🧮</div>
+        <h3>Posição Fiscal (IR)</h3>
+        <p>Preço médio ponderado para o imposto de renda, custo para a declaração e ganho de cada venda (comum e day trade).</p>
+    </a>
     <a class="menu-card" href="{% url 'core:analise_mercado' %}">
         <div class="icone">🛰️</div>
         <h3>Análise de Mercado</h3>

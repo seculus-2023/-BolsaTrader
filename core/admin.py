@@ -2,13 +2,15 @@ from django.contrib import admin
 
 from .models import (
     Ativo, Operacao, Cotacao, Alerta, MensagemWhatsapp, FonteNoticia, Noticia, CotacaoIndice,
-    ContaCorrente, LancamentoContaCorrente, RegistroCotacao, PrevisaoAnalista,
+    ContaCorrente, LancamentoContaCorrente, RegistroCotacao, PrevisaoAnalista, VendaLote,
 )
 
 
 @admin.register(Ativo)
 class AtivoAdmin(admin.ModelAdmin):
-    list_display = ("ticker", "nome", "setor", "criado_em")
+    list_display = ("ticker", "nome", "classe", "setor", "criado_em")
+    list_editable = ("classe",)
+    list_filter = ("classe",)
     search_fields = ("ticker", "nome", "setor")
 
 
@@ -18,9 +20,22 @@ class CotacaoIndiceAdmin(admin.ModelAdmin):
     list_filter = ("indice",)
 
 
+class VendaLoteInline(admin.TabularInline):
+    model = VendaLote
+    extra = 0
+
+
 @admin.register(Operacao)
 class OperacaoAdmin(admin.ModelAdmin):
     list_display = ("usuario", "ativo", "tipo", "quantidade", "preco_unitario", "data_operacao")
+    inlines = [VendaLoteInline]
+
+    def save_related(self, request, form, formsets, change):
+        super().save_related(request, form, formsets, change)
+        # vendas alteradas pelo admin também precisam refletir no resumo do lote e na conta corrente
+        from .services import recalcular_resumo_vendas
+        if form.instance.tipo == Operacao.COMPRA and any(formset.has_changed() for formset in formsets):
+            recalcular_resumo_vendas(form.instance)
     list_filter = ("tipo", "data_operacao")
     search_fields = ("ativo__ticker", "usuario__username")
 

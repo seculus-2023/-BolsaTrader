@@ -41,7 +41,7 @@ from .forms import (
 from .models import (
     Operacao, Alerta, Ativo, Cotacao, MensagemWhatsapp, FonteNoticia, Noticia, AcaoB3, RegistroAtualizacaoCarteira,
     LancamentoContaCorrente, CriptoAtivo, OperacaoCripto, RegistroAtualizacaoCarteiraCripto, RegistroCotacao,
-    PrevisaoAnalista, FundamentosAtivo,
+    PrevisaoAnalista, FundamentosAtivo, VendaLote,
 )
 from .services import (
     calcular_posicoes,
@@ -106,6 +106,7 @@ from .services import (
     saldo_conta_corrente,
     sincronizar_lancamento_compra,
     sincronizar_lancamento_venda,
+    recalcular_resumo_vendas,
     sincronizar_lancamento_compra_cripto,
     sincronizar_lancamento_venda_cripto,
     registrar_transferencia_conta_corrente,
@@ -322,7 +323,9 @@ def _periodo_e_operacoes(request):
     datas = {chave: (parse_date(valor) if valor else None) for chave, valor in valores.items()}
     ativo_selecionado = request.GET.get("ativo", "").strip().upper()
 
-    todas_operacoes = Operacao.objects.filter(usuario=request.user).select_related("ativo")
+    todas_operacoes = (
+        Operacao.objects.filter(usuario=request.user).select_related("ativo").prefetch_related("vendas")
+    )
     existe_alguma_operacao = todas_operacoes.exists()
     tickers_disponiveis = list(
         todas_operacoes.order_by("ativo__ticker").values_list("ativo__ticker", flat=True).distinct()
@@ -406,9 +409,7 @@ def operacao_lista(request):
         total_comprado = sum(
             (op.preco_unitario * op.quantidade_vendida for op in lotes_com_venda), Decimal("0")
         )
-        total_vendido = sum(
-            (op.preco_venda * op.quantidade_vendida for op in lotes_com_venda), Decimal("0")
-        )
+        total_vendido = sum((op.valor_total_vendido for op in lotes_com_venda), Decimal("0"))
         lucro_total = total_vendido - total_comprado
         resumo_vendas = {
             "total_comprado": total_comprado.quantize(Decimal("0.01")),
@@ -695,39 +696,85 @@ def risco_compra(request):
     return JsonResponse(resultado)
 
 
+def _mensagem_venda_salva(venda: VendaLote, acao: str) -> str:
+    """Texto de confirmação de uma venda, com o lucro/perda (visão do lote) só desta venda."""
+    lote = venda.operacao
+    lucro = ((venda.preco - lote.preco_unitario) * venda.quantidade).quantize(Decimal("0.01"))
+    resultado = "Lucro" if lucro >= 0 else "Perda"
+    return (
+        f"Venda de {venda.quantidade}x {lote.ativo.ticker} {acao} com sucesso. "
+        f"{resultado} realizado nesta venda: R$ {lucro}."
+    )
+
+
 @login_required
 def operacao_vender(request, operacao_id):
     """
-    Registra a venda (total ou parcial) de um lote de compra existente, ou
-    corrige os dados de uma venda já registrada (o mesmo formulário serve
-    para os dois casos - só muda o texto exibido).
+    Registra uma nova venda (total ou parcial) de um lote de compra e lista
+    as vendas já feitas dele, com links para corrigir ou excluir cada uma -
+    um lote pode ser vendido aos poucos, em datas e preços diferentes.
     """
     operacao = get_object_or_404(
         Operacao, id=operacao_id, usuario=request.user, tipo=Operacao.COMPRA
     )
-    ja_estava_vendido = operacao.quantidade_vendida > 0
 
     if request.method == "POST":
-        form = VendaLoteForm(request.POST, instance=operacao)
+        if operacao.saldo <= 0:
+            messages.error(request, "Este lote já foi totalmente vendido - corrija uma das vendas abaixo, se precisar.")
+            return redirect("core:operacao_vender", operacao_id=operacao.id)
+        form = VendaLoteForm(request.POST, operacao=operacao)
         if form.is_valid():
-            operacao = form.save()
-            sincronizar_lancamento_venda(operacao)
-
-            acao = "atualizada" if ja_estava_vendido else "registrada"
-            mensagem = (
-                f"Venda de {operacao.quantidade_vendida}x {operacao.ativo.ticker} {acao} com sucesso."
-            )
-            if operacao.lucro_perda_realizado is not None:
-                resultado = "lucro" if operacao.lucro_perda_realizado >= 0 else "perda"
-                mensagem += f" {resultado.capitalize()} realizado: R$ {operacao.lucro_perda_realizado}."
-            messages.success(request, mensagem)
+            venda = form.save()
+            recalcular_resumo_vendas(operacao)
+            messages.success(request, _mensagem_venda_salva(venda, "registrada"))
             if RegistroCotacao.objects.filter(usuario=request.user, ativo=operacao.ativo).exists():
                 return redirect("core:registros_cotacao_excluir", ticker=operacao.ativo.ticker)
             return redirect("core:operacao_lista")
     else:
-        form = VendaLoteForm(instance=operacao)
+        form = VendaLoteForm(operacao=operacao) if operacao.saldo > 0 else None
 
-    return render(request, "core/operacao_vender.html", {"form": form, "operacao": operacao})
+    return render(request, "core/operacao_vender.html", {
+        "form": form, "operacao": operacao, "vendas": operacao.vendas.order_by("data", "pk"),
+    })
+
+
+@login_required
+def venda_lote_editar(request, venda_id):
+    """Corrige uma venda já registrada de um lote (quantidade, preço, data, corretora e taxas)."""
+    venda = get_object_or_404(
+        VendaLote.objects.select_related("operacao__ativo"), id=venda_id, operacao__usuario=request.user
+    )
+    operacao = venda.operacao
+
+    if request.method == "POST":
+        form = VendaLoteForm(request.POST, instance=venda, operacao=operacao)
+        if form.is_valid():
+            venda = form.save()
+            recalcular_resumo_vendas(operacao)
+            messages.success(request, _mensagem_venda_salva(venda, "atualizada"))
+            return redirect("core:operacao_vender", operacao_id=operacao.id)
+    else:
+        form = VendaLoteForm(instance=venda, operacao=operacao)
+
+    return render(request, "core/operacao_vender.html", {
+        "form": form, "operacao": operacao, "vendas": operacao.vendas.order_by("data", "pk"),
+        "venda_em_edicao": venda,
+    })
+
+
+@login_required
+@require_POST
+def venda_lote_excluir(request, venda_id):
+    """Exclui uma venda registrada por engano - a quantidade volta para o saldo do lote."""
+    venda = get_object_or_404(
+        VendaLote.objects.select_related("operacao__ativo"), id=venda_id, operacao__usuario=request.user
+    )
+    operacao = venda.operacao
+    descricao = f"{venda.quantidade}x {operacao.ativo.ticker} de {venda.data:%d/%m/%Y}"
+    venda.delete()
+    recalcular_resumo_vendas(operacao)
+    messages.success(request, f"Venda de {descricao} excluída - a quantidade voltou para o saldo do lote.")
+    return redirect("core:operacao_vender", operacao_id=operacao.id)
 
 
 @login_required

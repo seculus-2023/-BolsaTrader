@@ -6,6 +6,7 @@ from django.utils import timezone
 
 from .models import (
     Operacao, Ativo, FonteNoticia, ContaCorrente, LancamentoContaCorrente, CriptoAtivo, OperacaoCripto, PrevisaoAnalista,
+    VendaLote,
 )
 from .services import ativos_distintos_comprados
 
@@ -32,7 +33,20 @@ class MetasValidacaoMixin:
         return valor
 
 
-class OperacaoForm(MetasValidacaoMixin, forms.ModelForm):
+class TaxasCompraMixin:
+    """Deixa "Taxas da compra" opcional nos formulários de compra (vazio = R$ 0,00)."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if "taxas_compra" in self.fields:
+            self.fields["taxas_compra"].required = False
+            self.fields["taxas_compra"].label = "Taxas da compra (R$) - opcional, emolumentos B3, corretagem, ISS"
+
+    def clean_taxas_compra(self):
+        return self.cleaned_data.get("taxas_compra") or Decimal("0")
+
+
+class OperacaoForm(MetasValidacaoMixin, TaxasCompraMixin, forms.ModelForm):
     ticker = forms.CharField(
         label="Ticker do ativo (ex: PETR4, VALE3, ITUB4)",
         max_length=12,
@@ -52,6 +66,7 @@ class OperacaoForm(MetasValidacaoMixin, forms.ModelForm):
             "quantidade",
             "preco_unitario",
             "data_operacao",
+            "taxas_compra",
             "meta_lucro_pct",
             "meta_perda_pct",
             "observacao",
@@ -118,7 +133,7 @@ class OperacaoForm(MetasValidacaoMixin, forms.ModelForm):
         return operacao
 
 
-class ConfirmarCompraForm(MetasValidacaoMixin, forms.ModelForm):
+class ConfirmarCompraForm(MetasValidacaoMixin, TaxasCompraMixin, forms.ModelForm):
     """
     Efetiva uma reserva (intenção de compra) como uma compra real: converte o
     mesmo registro de tipo Reservar para Compra, com a quantidade e o preço
@@ -127,7 +142,7 @@ class ConfirmarCompraForm(MetasValidacaoMixin, forms.ModelForm):
 
     class Meta:
         model = Operacao
-        fields = ["quantidade", "preco_unitario", "data_operacao", "meta_lucro_pct", "meta_perda_pct"]
+        fields = ["quantidade", "preco_unitario", "data_operacao", "taxas_compra", "meta_lucro_pct", "meta_perda_pct"]
         widgets = {
             "data_operacao": forms.DateInput(attrs={"type": "date"}, format="%Y-%m-%d"),
         }
@@ -174,7 +189,7 @@ class ConfirmarCompraForm(MetasValidacaoMixin, forms.ModelForm):
         return cleaned_data
 
 
-class EditarCompraForm(MetasValidacaoMixin, forms.ModelForm):
+class EditarCompraForm(MetasValidacaoMixin, TaxasCompraMixin, forms.ModelForm):
     """Corrige os dados de uma compra já registrada (ticker, nome, quantidade, preço, data e metas)."""
 
     ticker = forms.CharField(
@@ -191,7 +206,10 @@ class EditarCompraForm(MetasValidacaoMixin, forms.ModelForm):
 
     class Meta:
         model = Operacao
-        fields = ["quantidade", "preco_unitario", "data_operacao", "meta_lucro_pct", "meta_perda_pct", "observacao"]
+        fields = [
+            "quantidade", "preco_unitario", "data_operacao", "taxas_compra", "meta_lucro_pct", "meta_perda_pct",
+            "observacao",
+        ]
         widgets = {
             "data_operacao": forms.DateInput(attrs={"type": "date"}, format="%Y-%m-%d"),
             "observacao": forms.Textarea(attrs={"rows": 2}),
@@ -495,48 +513,65 @@ class VendaLoteCriptoForm(forms.ModelForm):
 
 
 class VendaLoteForm(forms.ModelForm):
-    """Registra a venda (total ou parcial) de um lote de compra já existente."""
+    """
+    Registra uma nova venda (total ou parcial) de um lote de compra, ou
+    corrige uma venda já registrada (instance). A quantidade não pode passar
+    do saldo do lote - na correção, a quantidade da própria venda volta a
+    contar como disponível.
+    """
 
     class Meta:
-        model = Operacao
-        fields = ["quantidade_vendida", "preco_venda", "data_venda", "percentual_corretora"]
+        model = VendaLote
+        fields = ["quantidade", "preco", "data", "percentual_corretora", "taxas"]
         widgets = {
-            "data_venda": forms.DateInput(attrs={"type": "date"}, format="%Y-%m-%d"),
+            "data": forms.DateInput(attrs={"type": "date"}, format="%Y-%m-%d"),
         }
         labels = {
-            "quantidade_vendida": "Quantidade vendida",
-            "preco_venda": "Preço de venda (R$)",
-            "data_venda": "Data da venda",
-            "percentual_corretora": "Percentual da corretora (%)",
+            "taxas": "Outras taxas da venda (R$) - emolumentos B3, corretagem fixa, ISS",
         }
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, operacao: Operacao, **kwargs):
+        self.operacao = operacao
         super().__init__(*args, **kwargs)
+        self.instance.operacao = operacao
+        self.fields["taxas"].required = False
 
-        if not self.initial.get("data_venda"):
-            self.initial["data_venda"] = timezone.localdate()
-        # venda ainda não registrada: sugere o preço alvo (meta de lucro) do lote
-        if not self.initial.get("preco_venda") and self.instance.preco_alvo:
-            self.initial["preco_venda"] = self.instance.preco_alvo
+        if not self.initial.get("data"):
+            self.initial["data"] = timezone.localdate()
+        # venda nova: sugere o preço alvo (meta de lucro) do lote e a corretora da última venda
+        if not self.instance.pk:
+            if operacao.preco_alvo:
+                self.initial["preco"] = operacao.preco_alvo
+            if operacao.percentual_corretora is not None:
+                self.initial["percentual_corretora"] = operacao.percentual_corretora
 
         for name, field in self.fields.items():
             css = field.widget.attrs.get("class", "")
             field.widget.attrs["class"] = (css + " form-control-futurista").strip()
 
-    def clean_quantidade_vendida(self):
-        quantidade_vendida = self.cleaned_data["quantidade_vendida"]
-        if quantidade_vendida > self.instance.quantidade:
-            raise forms.ValidationError(
-                f"Este lote tem {self.instance.quantidade} unidade(s) compradas - "
-                f"não é possível vender {quantidade_vendida}."
-            )
-        return quantidade_vendida
+    @property
+    def saldo_disponivel(self) -> int:
+        return self.operacao.saldo + (self.instance.quantidade if self.instance.pk else 0)
 
-    def clean(self):
-        cleaned_data = super().clean()
-        if cleaned_data.get("quantidade_vendida") and not cleaned_data.get("preco_venda"):
-            self.add_error("preco_venda", "Informe o preço de venda para calcular o lucro/perda.")
-        return cleaned_data
+    def clean_quantidade(self):
+        quantidade = self.cleaned_data["quantidade"]
+        if quantidade < 1:
+            raise forms.ValidationError("Informe a quantidade vendida.")
+        if quantidade > self.saldo_disponivel:
+            raise forms.ValidationError(
+                f"Este lote tem {self.saldo_disponivel} unidade(s) disponíveis para venda - "
+                f"não é possível vender {quantidade}."
+            )
+        return quantidade
+
+    def clean_taxas(self):
+        return self.cleaned_data.get("taxas") or Decimal("0")
+
+    def clean_data(self):
+        data = self.cleaned_data["data"]
+        if data < self.operacao.data_operacao:
+            raise forms.ValidationError("A data da venda não pode ser anterior à data da compra do lote.")
+        return data
 
 
 class FonteNoticiaForm(forms.ModelForm):

@@ -1,0 +1,135 @@
+{% extends "base.html" %}
+{% block titulo %}Posição Fiscal - BolsaTrader{% endblock %}
+{% block conteudo %}
+<h1>🧮 Posição Fiscal (Imposto de Renda)</h1>
+<p style="color: var(--text-dim);">
+    Para o imposto de renda, a Receita exige o <strong>preço médio ponderado</strong> de cada ativo: toda compra se
+    mistura ao custo da posição e cada venda dá baixa por esse preço médio, não pelo preço do lote escolhido em
+    Minhas Operações. Compra e venda do mesmo ativo no mesmo dia são <strong>day trade</strong>, com regra própria.
+    As taxas da compra entram no custo; corretora e taxas da venda reduzem o ganho.
+</p>
+<p style="color: var(--text-dim); font-size: .9rem;">
+    ⚠️ Valores estimados para conferência, calculados a partir das operações cadastradas - não substituem a
+    orientação de um contador.
+</p>
+
+{% if inconsistencias %}
+<div class="card-glass" style="margin-top: 1.5rem; border-color: rgba(255, 56, 96, .5);">
+    <h3 style="margin-top: 0;">Dados a conferir</h3>
+    <ul>
+        {% for aviso in inconsistencias %}<li>{{ aviso }}</li>{% endfor %}
+    </ul>
+</div>
+{% endif %}
+
+<div class="card-glass" style="margin-top: 1.5rem;">
+    <h2 style="margin-top: 0;">Posição em {{ data_referencia|date:"d/m/Y" }}</h2>
+    {% if posicoes %}
+    <div class="tabela-scroll">
+    <table class="tabela-futurista">
+        <thead>
+            <tr>
+                <th>Ativo</th>
+                <th>Classe</th>
+                <th>Quantidade</th>
+                <th>Preço médio fiscal</th>
+                <th>Custo de aquisição (Bens e Direitos)</th>
+                <th>Preço médio dos lotes</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for item in posicoes %}
+            <tr>
+                <td>{{ item.posicao.ticker }}</td>
+                <td>{{ item.posicao.classe|default:"—" }}</td>
+                <td>{{ item.posicao.quantidade }}</td>
+                <td>R$ {{ item.posicao.preco_medio|floatformat:4 }}</td>
+                <td>R$ {{ item.posicao.custo_total_centavos }}</td>
+                <td>{% if item.preco_medio_lotes is not None %}R$ {{ item.preco_medio_lotes }}{% else %}&mdash;{% endif %}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+        <tfoot>
+            <tr>
+                <th colspan="4">Total</th>
+                <th>R$ {{ custo_total_carteira }}</th>
+                <th></th>
+            </tr>
+        </tfoot>
+    </table>
+    </div>
+    <p style="color: var(--text-dim); font-size: .85rem;">
+        "Preço médio dos lotes" é a média dos lotes ainda em carteira em Minhas Operações. A diferença para o preço
+        médio fiscal vem das vendas: lá cada venda sai de um lote específico; aqui sai sempre pelo preço médio.
+        {% if user.is_staff %}Classe errada? Corrija no Admin, em Ativos.{% endif %}
+    </p>
+    {% else %}
+    <p style="color: var(--text-dim);">Nenhum ativo em carteira.</p>
+    {% endif %}
+</div>
+
+<div class="card-glass" style="margin-top: 1.5rem;">
+    <div style="display: flex; justify-content: space-between; align-items: flex-end; gap: 1rem; flex-wrap: wrap;">
+        <h2 style="margin: 0;">Ganhos e perdas nas vendas</h2>
+        <form method="get" class="form-futurista" style="display: flex; gap: .6rem; align-items: flex-end;">
+            <div>
+                <label for="id_ano" style="margin-top: 0;">Ano</label>
+                <select id="id_ano" name="ano" class="form-control-futurista" onchange="this.form.submit()">
+                    {% for opcao in anos %}
+                    <option value="{{ opcao }}" {% if opcao == ano %}selected{% endif %}>{{ opcao }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+        </form>
+    </div>
+
+    {% if totais %}
+    <div style="display: flex; gap: 1.5rem; flex-wrap: wrap; margin-top: 1rem;">
+        {% for total in totais %}
+        <div>
+            <div style="color: var(--text-dim); font-size: .85rem;">{{ total.label }} em {{ ano }}</div>
+            <div>Vendido: R$ {{ total.vendido }}</div>
+            <div class="{% if total.resultado > 0 %}valor-positivo{% elif total.resultado < 0 %}valor-negativo{% endif %}">
+                Resultado: R$ {{ total.resultado }}
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+    {% endif %}
+
+    {% if resultados %}
+    <div class="tabela-scroll" style="margin-top: 1rem;">
+    <table class="tabela-futurista">
+        <thead>
+            <tr>
+                <th>Data</th>
+                <th>Ativo</th>
+                <th>Modalidade</th>
+                <th>Quantidade</th>
+                <th>Valor de venda</th>
+                <th>Corretora + taxas</th>
+                <th>Custo (preço médio)</th>
+                <th>Resultado</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for r in resultados %}
+            <tr>
+                <td>{{ r.data|date:"d/m/Y" }}</td>
+                <td>{{ r.ticker }}</td>
+                <td>{{ r.modalidade_label }}</td>
+                <td>{{ r.quantidade }}</td>
+                <td>R$ {{ r.valor_venda|floatformat:2 }}</td>
+                <td>R$ {{ r.custos_venda|floatformat:2 }}</td>
+                <td>R$ {{ r.custo_aquisicao|floatformat:2 }}</td>
+                <td class="{% if r.resultado > 0 %}valor-positivo{% elif r.resultado < 0 %}valor-negativo{% endif %}">R$ {{ r.resultado }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    </div>
+    {% else %}
+    <p style="color: var(--text-dim); margin-top: 1rem;">Nenhuma venda em {{ ano }}.</p>
+    {% endif %}
+</div>
+{% endblock %}

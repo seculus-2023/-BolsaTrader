@@ -111,6 +111,7 @@ INSTALLED_APPS = [
     # apps do projeto
     "accounts",
     "core",
+    "tributario",
 ]
 
 MIDDLEWARE = [

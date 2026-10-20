@@ -8,6 +8,7 @@ from core.views import offline_view, saude_view, service_worker_view, whatsapp_w
 urlpatterns = [
     path("admin/", admin.site.urls),
     path("contas/", include("accounts.urls")),
+    path("tributario/", include("tributario.urls")),
     # Infraestrutura do PWA: precisam ficar na raiz do site (fora dos apps),
     # pois o Service Worker só controla URLs dentro do diretório onde é servido.
     path("sw.js", service_worker_view, name="service_worker"),

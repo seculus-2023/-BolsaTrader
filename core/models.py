@@ -6,6 +6,8 @@ from django.core.exceptions import ValidationError
 from django.db import models
 from django.utils import timezone
 
+from .classificacao import CLASSE_CHOICES, inferir_classe_ativo
+
 
 class Ativo(models.Model):
     """
@@ -26,6 +28,11 @@ class Ativo(models.Model):
         "Setor", max_length=150, blank=True,
         help_text="Preenchido automaticamente pela API de cotações ou pelo catálogo Ações da B3, "
         "quando disponível - usado para a análise de concentração por setor da carteira.",
+    )
+    classe = models.CharField(
+        "Classe do ativo", max_length=4, choices=CLASSE_CHOICES, blank=True,
+        help_text="Define a regra de imposto de renda (alíquota e isenção). Inferida pelo ticker ao "
+        "cadastrar - corrija aqui quando a inferência errar (ex: um sufixo 11 que é unit, não FII).",
     )
 
     maxima_dia = models.DecimalField("Máxima do dia (R$)", max_digits=12, decimal_places=2, null=True, blank=True)
@@ -60,6 +67,13 @@ class Ativo(models.Model):
     def __str__(self):
         return self.ticker.upper()
 
+    def save(self, *args, **kwargs):
+        if not self.classe:
+            self.classe = inferir_classe_ativo(self.ticker, self.nome)
+            if kwargs.get("update_fields") is not None:
+                kwargs["update_fields"] = {*kwargs["update_fields"], "classe"}
+        super().save(*args, **kwargs)
+
     def ultima_cotacao(self):
         return self.cotacoes.order_by("-data").first()
 
@@ -68,12 +82,12 @@ class Operacao(models.Model):
     """
     Uma compra ou uma reserva de um ativo, feita por um usuário.
 
-    Uma compra funciona como um "lote": a venda (total ou parcial) desse lote
-    é registrada nos próprios campos quantidade_vendida/preco_venda/data_venda
-    do MESMO registro (ver core.views.operacao_vender), em vez de criar uma
-    operação de venda separada. Isso deixa o lucro/perda de cada lote como
-    uma simples comparação entre o preço de compra e o preço de venda dele
-    mesmo, sem precisar de custo médio entre vários registros.
+    Uma compra funciona como um "lote": cada venda (total ou parcial) desse
+    lote é um VendaLote ligado a ele, e o lucro/perda do lote é uma simples
+    comparação entre o preço de compra e os preços de venda dele mesmo, sem
+    custo médio entre vários lotes - é a visão gerencial (metas, preço alvo).
+    O imposto de renda usa o preço médio ponderado por ativo, calculado à
+    parte em tributario.services a partir destes mesmos registros.
     """
 
     COMPRA = "COMPRA"
@@ -92,6 +106,11 @@ class Operacao(models.Model):
     quantidade = models.PositiveIntegerField("Quantidade")
     preco_unitario = models.DecimalField("Preço unitário (R$)", max_digits=12, decimal_places=2)
     data_operacao = models.DateField("Data da operação", default=timezone.now)
+    taxas_compra = models.DecimalField(
+        "Taxas da compra (R$)", max_digits=12, decimal_places=2, default=Decimal("0"),
+        help_text="Corretagem, emolumentos e taxa de liquidação da B3 e ISS pagos nesta compra "
+        "(estão na nota de corretagem). Entram no custo de aquisição para o imposto de renda.",
+    )
 
     # metas individuais (percentual) para gerar avisos de lucro/perda
     meta_lucro_pct = models.DecimalField(
@@ -101,8 +120,12 @@ class Operacao(models.Model):
         "Meta de perda (%) - use valor negativo", max_digits=6, decimal_places=2, null=True, blank=True
     )
 
-    # venda (total ou parcial) deste lote de compra - ficam vazios/zerados
-    # enquanto o lote não foi vendido, e não se aplicam ao tipo Reservar.
+    # resumo das vendas deste lote - cada venda de verdade fica em VendaLote
+    # (um lote pode ser vendido aos poucos, em datas diferentes) e estes
+    # campos são só um espelho mantido por core.services.recalcular_resumo_vendas:
+    # quantidade vendida somada, preço médio de venda, data da última venda e
+    # percentual da corretora da última venda. Ficam vazios/zerados enquanto o
+    # lote não foi vendido, e não se aplicam ao tipo Reservar.
     quantidade_vendida = models.PositiveIntegerField("Quantidade vendida", default=0)
     preco_venda = models.DecimalField("Preço de venda (R$)", max_digits=12, decimal_places=2, null=True, blank=True)
     data_venda = models.DateField("Data da venda", null=True, blank=True)
@@ -142,21 +165,40 @@ class Operacao(models.Model):
     def valor_total(self):
         return self.quantidade * self.preco_unitario
 
+    def vendas_registradas(self):
+        """
+        Vendas deste lote, da mais antiga para a mais recente. Usa o
+        prefetch_related("vendas") quando houver. Lotes sem nenhum VendaLote
+        mas com os campos de resumo preenchidos (dados gravados direto nesses
+        campos, ex: em testes) viram uma venda única, não salva, montada a
+        partir do resumo - assim todo cálculo passa por aqui, sem dois caminhos.
+        """
+        if self.pk:
+            vendas = sorted(self.vendas.all(), key=lambda v: (v.data, v.pk or 0))
+            if vendas:
+                return vendas
+        if self.quantidade_vendida and self.preco_venda is not None:
+            return [VendaLote(
+                operacao=self, quantidade=self.quantidade_vendida, preco=self.preco_venda,
+                data=self.data_venda or self.data_operacao, percentual_corretora=self.percentual_corretora,
+            )]
+        return []
+
     @property
     def valor_total_vendido(self):
-        """Total recebido na venda deste lote (preço de venda x quantidade vendida)."""
-        if not self.quantidade_vendida or self.preco_venda is None:
+        """Total bruto recebido nas vendas deste lote (soma de preço de venda x quantidade de cada venda)."""
+        vendas = self.vendas_registradas()
+        if not vendas:
             return None
-        return self.preco_venda * self.quantidade_vendida
+        return sum((venda.valor_bruto for venda in vendas), Decimal("0"))
 
     @property
     def valor_liquido_vendido(self):
-        """Valor líquido a receber pela venda deste lote, já descontado o percentual da corretora."""
-        total = self.valor_total_vendido
-        if total is None:
+        """Valor líquido a receber pelas vendas deste lote, já descontados corretora e taxas de cada venda."""
+        vendas = self.vendas_registradas()
+        if not vendas:
             return None
-        percentual = self.percentual_corretora or Decimal("0")
-        return (total * (1 - percentual / 100)).quantize(Decimal("0.01"))
+        return sum((venda.valor_liquido for venda in vendas), Decimal("0"))
 
     @property
     def dias_desde_operacao(self):
@@ -182,9 +224,11 @@ class Operacao(models.Model):
     @property
     def lucro_perda_realizado(self):
         """Lucro/perda em R$ da parte já vendida deste lote (compra x venda do próprio lote)."""
-        if not self.quantidade_vendida or self.preco_venda is None:
+        total_vendido = self.valor_total_vendido
+        if total_vendido is None:
             return None
-        return ((self.preco_venda - self.preco_unitario) * self.quantidade_vendida).quantize(Decimal("0.01"))
+        quantidade = sum(venda.quantidade for venda in self.vendas_registradas())
+        return (total_vendido - self.preco_unitario * quantidade).quantize(Decimal("0.01"))
 
     @property
     def lucro_perda_pct_realizado(self):
@@ -309,6 +353,53 @@ class Operacao(models.Model):
         # tenha sido salva como positiva (dado antigo, de antes da validação)
         meta = -abs(meta_bruta)
         return variacao <= meta
+
+
+class VendaLote(models.Model):
+    """
+    Uma venda (total ou parcial) de um lote de compra (Operacao). Um lote pode
+    ter várias vendas, em datas e preços diferentes - o imposto de renda é
+    apurado por mês, então cada venda precisa da própria data e do próprio
+    valor. Os campos de resumo do lote (Operacao.quantidade_vendida etc.)
+    são recalculados a partir daqui por core.services.recalcular_resumo_vendas.
+    """
+
+    operacao = models.ForeignKey(Operacao, on_delete=models.CASCADE, related_name="vendas")
+    quantidade = models.PositiveIntegerField("Quantidade vendida")
+    preco = models.DecimalField("Preço de venda (R$)", max_digits=12, decimal_places=2)
+    data = models.DateField("Data da venda", default=timezone.localdate)
+    percentual_corretora = models.DecimalField(
+        "Percentual da corretora (%)", max_digits=5, decimal_places=2, null=True, blank=True,
+        help_text="Taxa cobrada pela corretora sobre o total vendido - usada para calcular o valor líquido a receber.",
+    )
+    taxas = models.DecimalField(
+        "Outras taxas da venda (R$)", max_digits=12, decimal_places=2, default=Decimal("0"),
+        help_text="Emolumentos e taxa de liquidação da B3, corretagem fixa e ISS desta venda (estão na nota "
+        "de corretagem). Descontados do valor líquido e do ganho para o imposto de renda.",
+    )
+    criado_em = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = "Venda de lote"
+        verbose_name_plural = "Vendas de lotes"
+        ordering = ["data", "criado_em"]
+
+    def __str__(self):
+        return f"Venda {self.quantidade}x {self.operacao.ativo.ticker} @ R$ {self.preco} em {self.data:%d/%m/%Y}"
+
+    @property
+    def valor_bruto(self):
+        return self.preco * self.quantidade
+
+    @property
+    def custos(self):
+        """Corretagem percentual mais as outras taxas - tudo que sai do valor bruto desta venda."""
+        percentual = self.percentual_corretora or Decimal("0")
+        return (self.valor_bruto * percentual / 100 + (self.taxas or Decimal("0"))).quantize(Decimal("0.01"))
+
+    @property
+    def valor_liquido(self):
+        return (self.valor_bruto - self.custos).quantize(Decimal("0.01"))
 
 
 class Cotacao(models.Model):
@@ -674,6 +765,10 @@ class LancamentoContaCorrente(models.Model):
         Operacao, on_delete=models.CASCADE, null=True, blank=True, related_name="lancamentos_conta_corrente",
         help_text="Preenchido só nos lançamentos automáticos de compra/venda de ações - nulo nos de cripto e nas transferências manuais.",
     )
+    venda_lote = models.ForeignKey(
+        VendaLote, on_delete=models.CASCADE, null=True, blank=True, related_name="lancamentos_conta_corrente",
+        help_text="Preenchido só nos lançamentos de venda de ações - um por venda, já que um lote pode ser vendido aos poucos.",
+    )
     operacao_cripto = models.ForeignKey(
         "OperacaoCripto", on_delete=models.CASCADE, null=True, blank=True,
         related_name="lancamentos_conta_corrente",
@@ -687,8 +782,12 @@ class LancamentoContaCorrente(models.Model):
         ordering = ["-data", "-criado_em"]
         constraints = [
             models.UniqueConstraint(
-                fields=["operacao", "origem"], condition=models.Q(operacao__isnull=False),
+                fields=["operacao", "origem"], condition=models.Q(operacao__isnull=False, venda_lote__isnull=True),
                 name="um_lancamento_por_operacao_e_origem",
+            ),
+            models.UniqueConstraint(
+                fields=["venda_lote"], condition=models.Q(venda_lote__isnull=False),
+                name="um_lancamento_por_venda_lote",
             ),
             models.UniqueConstraint(
                 fields=["operacao_cripto", "origem"], condition=models.Q(operacao_cripto__isnull=False),

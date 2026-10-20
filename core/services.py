@@ -41,7 +41,7 @@ from .models import (
     Ativo, Cotacao, Operacao, Alerta, FonteNoticia, Noticia, AcaoB3, CotacaoIndice,
     RegistroAtualizacaoCarteira, RegistroCotacao, ContaCorrente, LancamentoContaCorrente, PostIt,
     CriptoAtivo, OperacaoCripto, CotacaoCripto, RegistroAtualizacaoCarteiraCripto, PrevisaoAnalista,
-    FundamentosAtivo,
+    FundamentosAtivo, VendaLote,
 )
 
 
@@ -6041,42 +6041,87 @@ def sincronizar_lancamento_compra(operacao: Operacao) -> None:
         defaults={
             "conta": conta,
             "tipo": LancamentoContaCorrente.DEBITO,
-            "valor": operacao.valor_total,
+            "valor": operacao.valor_total + (operacao.taxas_compra or Decimal("0")),
             "descricao": f"Compra de {operacao.quantidade}x {operacao.ativo.ticker}",
             "data": operacao.data_operacao,
         },
     )
 
 
+def recalcular_resumo_vendas(operacao: Operacao) -> None:
+    """
+    Atualiza os campos de resumo do lote (quantidade vendida, preço médio de
+    venda, data e percentual da corretora da última venda) a partir dos
+    VendaLote dele, e sincroniza os lançamentos da conta corrente - chamar
+    sempre depois de registrar, corrigir ou excluir uma venda.
+    """
+    vendas = list(operacao.vendas.order_by("data", "pk"))
+    if vendas:
+        quantidade = sum(venda.quantidade for venda in vendas)
+        total = sum((venda.valor_bruto for venda in vendas), Decimal("0"))
+        operacao.quantidade_vendida = quantidade
+        operacao.preco_venda = (total / quantidade).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        operacao.data_venda = vendas[-1].data
+        operacao.percentual_corretora = vendas[-1].percentual_corretora
+    else:
+        operacao.quantidade_vendida = 0
+        operacao.preco_venda = None
+        operacao.data_venda = None
+        operacao.percentual_corretora = None
+    operacao.save(update_fields=["quantidade_vendida", "preco_venda", "data_venda", "percentual_corretora"])
+    sincronizar_lancamento_venda(operacao)
+
+
 def sincronizar_lancamento_venda(operacao: Operacao) -> None:
     """
-    Cria/atualiza o lançamento de CRÉDITO (venda) da conta corrente do usuário
-    com a venda (total ou parcial) já registrada neste lote de compra - chamar
-    sempre depois de registrar ou corrigir uma venda (core.views.
-    operacao_vender). Usa o valor líquido (já descontada a corretora), que é o
-    que realmente entra na conta. Sem venda registrada (quantidade_vendida
-    zerada, ex: venda desfeita ao editar o lote), remove o lançamento se
-    existir.
+    Cria/atualiza um lançamento de CRÉDITO na conta corrente para cada venda
+    (VendaLote) deste lote de compra, com o valor líquido (já descontadas
+    corretora e taxas), que é o que realmente entra na conta, na data da
+    própria venda. Remove os lançamentos de vendas que não existem mais (ex:
+    venda excluída). Lote sem VendaLote mas com o resumo preenchido (dados
+    antigos/gravados direto no lote) ganha um lançamento único, sem venda_lote.
     """
-    if not operacao.quantidade_vendida or operacao.preco_venda is None:
-        LancamentoContaCorrente.objects.filter(
-            operacao=operacao, origem=LancamentoContaCorrente.ORIGEM_VENDA
-        ).delete()
+    existentes = LancamentoContaCorrente.objects.filter(
+        operacao=operacao, origem=LancamentoContaCorrente.ORIGEM_VENDA
+    )
+    vendas = operacao.vendas_registradas()
+    if not vendas:
+        existentes.delete()
         return
 
     conta = obter_ou_criar_conta_corrente(operacao.usuario)
-    valor = operacao.valor_liquido_vendido
-    LancamentoContaCorrente.objects.update_or_create(
-        operacao=operacao,
-        origem=LancamentoContaCorrente.ORIGEM_VENDA,
-        defaults={
-            "conta": conta,
-            "tipo": LancamentoContaCorrente.CREDITO,
-            "valor": valor,
-            "descricao": f"Venda de {operacao.quantidade_vendida}x {operacao.ativo.ticker}",
-            "data": operacao.data_venda or timezone.localdate(),
-        },
-    )
+    vendas_salvas = [venda for venda in vendas if venda.pk]
+    if not vendas_salvas:
+        existentes.exclude(venda_lote__isnull=True).delete()
+        venda = vendas[0]
+        LancamentoContaCorrente.objects.update_or_create(
+            operacao=operacao,
+            origem=LancamentoContaCorrente.ORIGEM_VENDA,
+            venda_lote=None,
+            defaults={
+                "conta": conta,
+                "tipo": LancamentoContaCorrente.CREDITO,
+                "valor": venda.valor_liquido,
+                "descricao": f"Venda de {venda.quantidade}x {operacao.ativo.ticker}",
+                "data": venda.data or timezone.localdate(),
+            },
+        )
+        return
+
+    existentes.exclude(venda_lote__in=vendas_salvas).delete()
+    for venda in vendas_salvas:
+        LancamentoContaCorrente.objects.update_or_create(
+            venda_lote=venda,
+            defaults={
+                "conta": conta,
+                "operacao": operacao,
+                "origem": LancamentoContaCorrente.ORIGEM_VENDA,
+                "tipo": LancamentoContaCorrente.CREDITO,
+                "valor": venda.valor_liquido,
+                "descricao": f"Venda de {venda.quantidade}x {operacao.ativo.ticker}",
+                "data": venda.data,
+            },
+        )
 
 
 def sincronizar_lancamento_compra_cripto(operacao: OperacaoCripto) -> None:
@@ -6689,6 +6734,7 @@ def usuarios_logados_agora() -> list[dict]:
 # numa das duas listas - core.tests.LimparDadosSistemaTests confere isso.
 MODELOS_LIMPOS_NA_LIMPEZA_GERAL = [
     LancamentoContaCorrente,
+    VendaLote,
     ContaCorrente,
     OperacaoCripto,
     CotacaoCripto,
@@ -6733,6 +6779,7 @@ def limpar_dados_sistema() -> int:
 # usuários e ficam intactos - ver MODELOS_COMPARTILHADOS_NA_LIMPEZA_USUARIO.
 MODELOS_LIMPOS_NA_LIMPEZA_USUARIO = {
     LancamentoContaCorrente: "conta__usuario",
+    VendaLote: "operacao__usuario",
     ContaCorrente: "usuario",
     OperacaoCripto: "usuario",
     RegistroAtualizacaoCarteiraCripto: "usuario",

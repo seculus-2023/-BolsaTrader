@@ -13,6 +13,7 @@ import requests
 
 from django.apps import apps as django_apps
 from django.contrib.auth.models import User
+from django.contrib.messages import get_messages
 from django.test import TestCase
 from django.urls import reverse
 
@@ -27,7 +28,7 @@ from .darf import (
     calcular_acrescimos, desfazer_pagamento, notificar_darfs_telegram, obter_taxas_selic, registrar_pagamento,
     situacao_das_darfs, sincronizar_darfs,
 )
-from .models import Darf, ParametroTributario, SaldoInicialFiscal, TaxaSelicMensal
+from .models import AvisoLimiteIsencao, Darf, ParametroTributario, SaldoInicialFiscal, TaxaSelicMensal
 from .services import (
     COMUM, DAY_TRADE, GRUPO_COMUM, GRUPO_DAY_TRADE, GRUPO_FII, MovimentoDia, ResultadoVenda, apurar_meses,
     apurar_operacoes, calcular_apuracao, calcular_meses, ir_estimado_por_lote,
@@ -644,3 +645,123 @@ class LembreteDarfTelegramTests(SemBancoCentralMixin, TestCase):
         [darf] = sincronizar_darfs(self.usuario)
         registrar_pagamento(darf, date(2026, 4, 29), Decimal("2998.50"))
         self.assertFalse(self._notificar_em(date(2026, 5, 10)))
+
+
+class SimuladorVendaTests(SemBancoCentralMixin, TestCase):
+    """Lote de 100 PETR4 a R$ 100 com 50 já vendidas a R$ 300 em março/2026 (R$ 15.000 vendidos, R$ 10.000 de ganho isento)."""
+
+    def setUp(self):
+        super().setUp()
+        self.usuario = User.objects.create_user(username="simulador_ir", password="SenhaForte123!")
+        self.client.login(username="simulador_ir", password="SenhaForte123!")
+        self.lote = Operacao.objects.create(
+            usuario=self.usuario, ativo=Ativo.objects.create(ticker="PETR4"), tipo=Operacao.COMPRA,
+            quantidade=100, preco_unitario=Decimal("100.00"), data_operacao=D1,
+        )
+        self.venda = VendaLote.objects.create(operacao=self.lote, quantidade=50, preco=Decimal("300.00"), data=D2)
+        recalcular_resumo_vendas(self.lote)
+
+    def _simular(self, quantidade, preco, data=D3, venda=None, operacao=None):
+        params = {"operacao": (operacao or self.lote).id, "quantidade": quantidade, "preco": preco, "data": data.isoformat()}
+        if venda:
+            params["venda"] = venda.id
+        return self.client.get(reverse("tributario:simular_venda"), params).json()
+
+    def test_venda_que_passa_do_limite_avisa_perda_da_isencao(self):
+        dados = self._simular(30, "200.00")
+        self.assertTrue(dados["ok"])
+        self.assertTrue(dados["perde_isencao"])
+        self.assertEqual(Decimal(dados["vendas_acoes_antes"]), Decimal("15000.00"))
+        self.assertEqual(Decimal(dados["vendas_acoes_depois"]), Decimal("21000.00"))
+        self.assertEqual(Decimal(dados["ganho_isento_antes"]), Decimal("10000.00"))
+        self.assertEqual(Decimal(dados["ganho_fiscal"]), Decimal("3000.00"))
+        # 15% sobre o ganho do mês inteiro (10.000 que eram isentos + 3.000 desta venda)
+        self.assertEqual(Decimal(dados["ir_adicional"]), Decimal("1950.00"))
+        self.assertEqual(Decimal(dados["lucro_apos_ir"]), Decimal("1050.00"))
+
+    def test_venda_dentro_do_limite_nao_tem_ir(self):
+        dados = self._simular(10, "200.00")
+        self.assertFalse(dados["perde_isencao"])
+        self.assertTrue(dados["isento_depois"])
+        self.assertEqual(Decimal(dados["ir_adicional"]), Decimal("0"))
+        self.assertEqual(Decimal(dados["disponivel_depois"]), Decimal("3000.00"))
+
+    def test_correcao_compara_com_o_mes_sem_a_venda_original(self):
+        dados = self._simular(50, "400.00", data=D2, venda=self.venda)
+        self.assertEqual(Decimal(dados["vendas_acoes_antes"]), Decimal("0"))
+        self.assertEqual(Decimal(dados["vendas_acoes_depois"]), Decimal("20000.00"))
+        self.assertTrue(dados["isento_depois"])
+        self.assertEqual(Decimal(dados["ganho_fiscal"]), Decimal("15000.00"))
+
+    def test_fii_nao_tem_isencao(self):
+        lote_fii = Operacao.objects.create(
+            usuario=self.usuario, ativo=Ativo.objects.create(ticker="HGLG11"), tipo=Operacao.COMPRA,
+            quantidade=10, preco_unitario=Decimal("100.00"), data_operacao=D1,
+        )
+        dados = self._simular(10, "120.00", operacao=lote_fii)
+        self.assertFalse(dados["classe_com_isencao"])
+        self.assertEqual(Decimal(dados["ir_adicional"]), Decimal("40.00"))  # 20% de 200
+
+    def test_dados_incompletos_e_lote_de_outro_usuario(self):
+        self.assertFalse(self._simular(10, "")["ok"])
+        outro = User.objects.create_user(username="outro_simulador", password="SenhaForte123!")
+        lote_alheio = Operacao.objects.create(
+            usuario=outro, ativo=self.lote.ativo, tipo=Operacao.COMPRA,
+            quantidade=10, preco_unitario=Decimal("10.00"), data_operacao=D1,
+        )
+        resposta = self.client.get(reverse("tributario:simular_venda"), {"operacao": lote_alheio.id, "quantidade": 1, "preco": "10"})
+        self.assertEqual(resposta.status_code, 404)
+
+    def test_simulacao_nao_grava_nada(self):
+        self._simular(30, "200.00")
+        self.assertEqual(VendaLote.objects.count(), 1)
+
+    def test_tela_de_venda_tem_o_simulador(self):
+        resposta = self.client.get(reverse("core:operacao_vender", args=[self.lote.id]))
+        self.assertContains(resposta, 'id="simulacao-ir"')
+        self.assertContains(resposta, reverse("tributario:simular_venda"))
+
+
+class AvisoLimiteIsencaoTests(SemBancoCentralMixin, TestCase):
+    def setUp(self):
+        super().setUp()
+        self.usuario = User.objects.create_user(username="limite_isencao", password="SenhaForte123!")
+        self.client.login(username="limite_isencao", password="SenhaForte123!")
+        self.lote = Operacao.objects.create(
+            usuario=self.usuario, ativo=Ativo.objects.create(ticker="ITUB4"), tipo=Operacao.COMPRA,
+            quantidade=1000, preco_unitario=Decimal("10.00"), data_operacao=D1,
+        )
+
+    def _vender(self, quantidade, preco="30.00"):
+        resposta = self.client.post(reverse("core:operacao_vender", args=[self.lote.id]), {
+            "quantidade": str(quantidade), "preco": preco, "data": D2.isoformat(),
+        })
+        return [str(m) for m in get_messages(resposta.wsgi_request)]
+
+    def test_avisa_na_tela_perto_do_limite(self):
+        mensagens = self._vender(550)  # 16.500 = 82,5% do limite
+        self.assertTrue(any("restam R$ 3500.00" in m for m in mensagens), mensagens)
+
+    def test_avisa_na_tela_quando_passa_do_limite(self):
+        mensagens = self._vender(700)  # 21.000
+        self.assertTrue(any("acima do limite" in m for m in mensagens), mensagens)
+
+    def test_sem_aviso_com_folga(self):
+        mensagens = self._vender(100)  # 3.000
+        self.assertFalse(any("limite" in m for m in mensagens), mensagens)
+
+    @patch("tributario.avisos.enviar_notificacao_telegram", return_value=True)
+    def test_telegram_avisa_uma_vez_por_mes_e_situacao(self, enviar):
+        PerfilUsuario.objects.create(usuario=self.usuario, telegram_bot_token="123:abc", telegram_chat_id="999")
+        self._vender(700)
+        self._vender(100)
+        self.assertEqual(enviar.call_count, 1)
+        self.assertTrue(AvisoLimiteIsencao.objects.filter(usuario=self.usuario, tipo=AvisoLimiteIsencao.EXCEDIDO).exists())
+
+    @patch("tributario.avisos.enviar_notificacao_telegram", return_value=False)
+    def test_falha_no_telegram_tenta_de_novo_na_proxima_venda(self, enviar):
+        PerfilUsuario.objects.create(usuario=self.usuario, telegram_bot_token="123:abc", telegram_chat_id="999")
+        self._vender(700)
+        self._vender(100)
+        self.assertEqual(enviar.call_count, 2)
+        self.assertFalse(AvisoLimiteIsencao.objects.exists())

@@ -22,6 +22,8 @@ from django.views.decorators.clickjacking import xframe_options_sameorigin
 from django.views.decorators.http import require_GET, require_POST
 
 from accounts.models import PerfilUsuario
+from tributario.avisos import verificar_limite_isencao
+from tributario.models import AvisoLimiteIsencao
 from tributario.services import ir_estimado_por_lote
 
 from .forms import (
@@ -719,6 +721,15 @@ def _mensagem_venda_salva(venda: VendaLote, acao: str) -> str:
     )
 
 
+def _avisar_limite_isencao(request, venda: VendaLote) -> None:
+    """Depois de salvar uma venda, avisa na tela (e no Telegram) se o mês chegou perto ou passou do limite de isenção."""
+    situacao, texto = verificar_limite_isencao(request.user, venda.data)
+    if situacao == AvisoLimiteIsencao.EXCEDIDO:
+        messages.warning(request, f"⚠️ {texto}")
+    elif situacao == AvisoLimiteIsencao.PERTO:
+        messages.info(request, f"ℹ️ {texto}")
+
+
 @login_required
 def operacao_vender(request, operacao_id):
     """
@@ -739,6 +750,7 @@ def operacao_vender(request, operacao_id):
             venda = form.save()
             recalcular_resumo_vendas(operacao)
             messages.success(request, _mensagem_venda_salva(venda, "registrada"))
+            _avisar_limite_isencao(request, venda)
             if RegistroCotacao.objects.filter(usuario=request.user, ativo=operacao.ativo).exists():
                 return redirect("core:registros_cotacao_excluir", ticker=operacao.ativo.ticker)
             return redirect("core:operacao_lista")
@@ -764,6 +776,7 @@ def venda_lote_editar(request, venda_id):
             venda = form.save()
             recalcular_resumo_vendas(operacao)
             messages.success(request, _mensagem_venda_salva(venda, "atualizada"))
+            _avisar_limite_isencao(request, venda)
             return redirect("core:operacao_vender", operacao_id=operacao.id)
     else:
         form = VendaLoteForm(instance=venda, operacao=operacao)

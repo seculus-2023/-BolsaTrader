@@ -100,6 +100,31 @@ class Darf(models.Model):
         return self.data_pagamento is not None
 
 
+class AvisoLimiteIsencao(models.Model):
+    """Registro de aviso já enviado pelo Telegram sobre o limite de isenção de um mês - um de cada tipo por mês."""
+
+    PERTO = "PERTO"
+    EXCEDIDO = "EXCEDIDO"
+    TIPO_CHOICES = [(PERTO, "Perto do limite"), (EXCEDIDO, "Limite ultrapassado")]
+
+    usuario = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="avisos_limite_isencao"
+    )
+    competencia = models.DateField("Mês", help_text="Sempre o dia 1 do mês.")
+    tipo = models.CharField("Tipo", max_length=8, choices=TIPO_CHOICES)
+    criado_em = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = "Aviso de limite de isenção"
+        verbose_name_plural = "Avisos de limite de isenção"
+        constraints = [
+            models.UniqueConstraint(fields=["usuario", "competencia", "tipo"], name="um_aviso_por_usuario_mes_tipo"),
+        ]
+
+    def __str__(self):
+        return f"{self.get_tipo_display()} - {self.competencia:%m/%Y} - {self.usuario}"
+
+
 class TaxaSelicMensal(models.Model):
     """Selic acumulada de cada mês (série 4390 do Banco Central) - base dos juros de DARF paga em atraso."""
 

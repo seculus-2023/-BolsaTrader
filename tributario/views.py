@@ -1,19 +1,21 @@
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
+from django.http import JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
-from django.views.decorators.http import require_POST
+from django.utils.dateparse import parse_date
+from django.views.decorators.http import require_GET, require_POST
 
-from core.models import Operacao
+from core.models import Operacao, VendaLote
 
 from .darf import URL_SICALC, acrescimos_ate, desfazer_pagamento, registrar_pagamento, situacao_das_darfs
 from .forms import PagamentoDarfForm, SaldoInicialFiscalForm
 from .models import Darf, SaldoInicialFiscal
 from .services import (
     COMUM, DAY_TRADE, GRUPO_COMUM, GRUPO_LABELS, GRUPOS, MODALIDADE_LABELS, apurar_meses, apurar_operacoes,
-    parametro_vigente, prejuizos_iniciais_do_usuario,
+    parametro_vigente, prejuizos_iniciais_do_usuario, simular_venda,
 )
 
 
@@ -75,6 +77,43 @@ def imposto_renda(request):
         "inconsistencias": apuracao.inconsistencias,
         "form_saldo": SaldoInicialFiscalForm(instance=saldo_inicial),
     })
+
+
+def _decimal_do_get(request, nome: str, padrao: str | None = None) -> Decimal:
+    valor = (request.GET.get(nome) or padrao or "").strip().replace(",", ".")
+    return Decimal(valor)
+
+
+@login_required
+@require_GET
+def simular_venda_view(request):
+    """
+    Efeito de uma venda no imposto ANTES de salvar (chamado pela tela de
+    venda enquanto o usuário digita): vendas de ações do mês com e sem ela,
+    se perde a isenção, ganho pelo preço médio, IR adicional e lucro após IR.
+    """
+    operacao = get_object_or_404(
+        Operacao, id=request.GET.get("operacao") or 0, usuario=request.user, tipo=Operacao.COMPRA
+    )
+    try:
+        quantidade = int(request.GET.get("quantidade") or 0)
+        preco = _decimal_do_get(request, "preco")
+        percentual = _decimal_do_get(request, "percentual_corretora", "0")
+        taxas = _decimal_do_get(request, "taxas", "0")
+        data = parse_date(request.GET.get("data") or "") or timezone.localdate()
+    except (ValueError, InvalidOperation):
+        return JsonResponse({"ok": False, "erro": "Preencha quantidade e preço para simular o imposto."})
+    if quantidade <= 0 or preco <= 0:
+        return JsonResponse({"ok": False, "erro": "Preencha quantidade e preço para simular o imposto."})
+
+    venda = VendaLote(
+        operacao=operacao, quantidade=quantidade, preco=preco, data=data,
+        percentual_corretora=percentual, taxas=taxas,
+    )
+    venda_id = request.GET.get("venda")
+    if venda_id:
+        venda.pk = get_object_or_404(VendaLote, id=venda_id, operacao=operacao).pk
+    return JsonResponse({"ok": True, **simular_venda(request.user, venda).como_dict()})
 
 
 @login_required

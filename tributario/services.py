@@ -166,14 +166,28 @@ def calcular_apuracao(movimentos: dict[tuple[str, date], MovimentoDia], classes:
     return apuracao
 
 
-def apurar_operacoes(usuario, ate: date | None = None) -> ApuracaoFiscal:
-    """Apuração fiscal de todas as compras e vendas de ações do usuário (até a data informada, se houver)."""
+def apurar_operacoes(usuario, ate: date | None = None, simulacao=None) -> ApuracaoFiscal:
+    """
+    Apuração fiscal de todas as compras e vendas de ações do usuário (até a
+    data informada, se houver). `simulacao` é um VendaLote NÃO salvo (ligado
+    ao lote) que entra no cálculo como se existisse - se tiver pk, substitui
+    a venda gravada de mesmo id (correção). Serve para o simulador da tela de
+    venda mostrar o efeito no imposto antes de confirmar.
+    """
     lotes = (
         Operacao.objects.filter(usuario=usuario, tipo=Operacao.COMPRA)
         .select_related("ativo").prefetch_related("vendas")
     )
     movimentos: dict[tuple[str, date], MovimentoDia] = defaultdict(MovimentoDia)
     classes: dict[str, str] = {}
+
+    def somar_venda(ticker, venda):
+        if ate is not None and venda.data > ate:
+            return
+        mov = movimentos[(ticker, venda.data)]
+        mov.quantidade_venda += venda.quantidade
+        mov.valor_venda += venda.valor_bruto
+        mov.custos_venda += venda.custos
 
     for lote in lotes:
         ticker = lote.ativo.ticker
@@ -183,12 +197,12 @@ def apurar_operacoes(usuario, ate: date | None = None) -> ApuracaoFiscal:
             mov.quantidade_compra += lote.quantidade
             mov.custo_compra += lote.valor_total + (lote.taxas_compra or Decimal("0"))
         for venda in lote.vendas_registradas():
-            if ate is not None and venda.data > ate:
+            if simulacao is not None and simulacao.pk and venda.pk == simulacao.pk:
                 continue
-            mov = movimentos[(ticker, venda.data)]
-            mov.quantidade_venda += venda.quantidade
-            mov.valor_venda += venda.valor_bruto
-            mov.custos_venda += venda.custos
+            somar_venda(ticker, venda)
+
+    if simulacao is not None:
+        somar_venda(simulacao.operacao.ativo.ticker, simulacao)
 
     return calcular_apuracao(movimentos, classes)
 
@@ -485,3 +499,105 @@ def ir_estimado_por_lote(usuario, lotes) -> dict[int, Decimal]:
             total += lucro * taxa
         estimativas[lote.id] = _centavos(total)
     return estimativas
+
+
+# --------------------------------------------------------------------------
+# Simulador da tela de venda: efeito de uma venda no imposto antes de salvar
+# --------------------------------------------------------------------------
+@dataclass
+class SimulacaoVenda:
+    ano: int
+    mes: int
+    classe: str
+    limite_isencao: Decimal
+    vendas_acoes_antes: Decimal
+    vendas_acoes_depois: Decimal
+    isento_antes: bool
+    isento_depois: bool
+    ganho_isento_antes: Decimal  # ganho com ações já isento no mês, antes desta venda
+    ganho_fiscal: Decimal  # resultado desta venda pelo preço médio (menos custos)
+    ir_adicional: Decimal  # quanto o imposto total sobe (ou desce) com esta venda
+    lucro_lote: Decimal  # lucro desta venda na visão do lote (preço de venda - preço do lote)
+    classe_com_isencao: bool
+
+    @property
+    def competencia(self) -> str:
+        return f"{self.mes:02d}/{self.ano}"
+
+    @property
+    def perde_isencao(self) -> bool:
+        return self.isento_antes and not self.isento_depois
+
+    @property
+    def disponivel_depois(self) -> Decimal:
+        return max(ZERO, self.limite_isencao - self.vendas_acoes_depois)
+
+    @property
+    def lucro_apos_ir(self) -> Decimal:
+        return self.lucro_lote - self.ir_adicional
+
+    def como_dict(self) -> dict:
+        return {
+            "competencia": self.competencia,
+            "classe": self.classe,
+            "classe_com_isencao": self.classe_com_isencao,
+            "limite_isencao": str(self.limite_isencao),
+            "vendas_acoes_antes": str(self.vendas_acoes_antes),
+            "vendas_acoes_depois": str(self.vendas_acoes_depois),
+            "disponivel_depois": str(self.disponivel_depois),
+            "isento_antes": self.isento_antes,
+            "isento_depois": self.isento_depois,
+            "perde_isencao": self.perde_isencao,
+            "ganho_isento_antes": str(self.ganho_isento_antes),
+            "ganho_fiscal": str(self.ganho_fiscal),
+            "ir_adicional": str(self.ir_adicional),
+            "lucro_lote": str(self.lucro_lote),
+            "lucro_apos_ir": str(self.lucro_apos_ir),
+        }
+
+
+def simular_venda(usuario, venda) -> SimulacaoVenda:
+    """
+    Compara a apuração SEM esta venda com a apuração COM ela (`venda` é um
+    VendaLote não salvo; com pk, é a correção de uma venda gravada, que fica
+    de fora do "sem" - ver apurar_operacoes). O IR adicional é a diferença do
+    imposto de TODOS os meses, porque uma venda pode consumir prejuízo que
+    abateria meses seguintes.
+    """
+    prejuizos = prejuizos_iniciais_do_usuario(usuario)
+    parametros = list(ParametroTributario.objects.all())
+    if venda.pk:
+        # quantidade zero não gera movimento: equivale a tirar a venda gravada do cálculo
+        sem_a_venda = type(venda)(pk=venda.pk, operacao=venda.operacao, quantidade=0, preco=ZERO, data=venda.data)
+        antes = apurar_operacoes(usuario, simulacao=sem_a_venda)
+    else:
+        antes = apurar_operacoes(usuario)
+    depois = apurar_operacoes(usuario, simulacao=venda)
+    meses_antes = calcular_meses(antes.resultados, prejuizos, parametros)
+    meses_depois = calcular_meses(depois.resultados, prejuizos, parametros)
+
+    chave = (venda.data.year, venda.data.month)
+    mes_antes = next((m for m in meses_antes if (m.ano, m.mes) == chave), None)
+    mes_depois = next((m for m in meses_depois if (m.ano, m.mes) == chave), None)
+    parametro = parametro_vigente(date(*chave, 1), parametros)
+    lote = venda.operacao
+
+    def imposto_total(meses):
+        return sum((m.imposto_bruto for m in meses), ZERO)
+
+    return SimulacaoVenda(
+        ano=chave[0], mes=chave[1],
+        classe=lote.ativo.classe,
+        limite_isencao=parametro.limite_isencao_acoes,
+        vendas_acoes_antes=mes_antes.vendas_acoes if mes_antes else ZERO,
+        vendas_acoes_depois=mes_depois.vendas_acoes if mes_depois else ZERO,
+        isento_antes=mes_antes.isento if mes_antes else True,
+        isento_depois=mes_depois.isento if mes_depois else True,
+        ganho_isento_antes=mes_antes.grupos[GRUPO_COMUM].isento if mes_antes else ZERO,
+        ganho_fiscal=(
+            sum((r.resultado for r in depois.resultados), ZERO) - sum((r.resultado for r in antes.resultados), ZERO)
+        ),
+        ir_adicional=imposto_total(meses_depois) - imposto_total(meses_antes),
+        lucro_lote=_centavos((venda.preco - lote.preco_unitario) * venda.quantidade),
+        classe_com_isencao=lote.ativo.classe in classes_com_isencao(parametro),
+    )

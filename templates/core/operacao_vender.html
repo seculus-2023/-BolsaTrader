@@ -70,9 +70,102 @@
             {{ field }}
             {{ field.errors }}
         {% endfor %}
+        <div id="simulacao-ir" class="card-glass" style="margin-top: 1.4rem; padding: .9rem 1rem;" aria-live="polite"
+             data-url="{% url 'tributario:simular_venda' %}" data-operacao="{{ operacao.id }}" data-venda="{{ venda_em_edicao.id|default:'' }}">
+            <strong>🧾 Imposto de renda desta venda</strong>
+            <div id="simulacao-ir-conteudo" style="color: var(--text-dim); margin-top: .4rem;">Preencha quantidade e preço para simular.</div>
+        </div>
         <button type="submit" class="btn-futurista" style="margin-top: 1.6rem;">{% if venda_em_edicao %}Salvar alterações{% else %}Salvar venda{% endif %}</button>
         <a href="{% if venda_em_edicao %}{% url 'core:operacao_vender' operacao.id %}{% else %}{% url 'core:operacao_lista' %}{% endif %}" class="btn-futurista btn-secundario">Cancelar</a>
     </form>
+    <script>
+        (function () {
+            // Simula o efeito da venda no IR enquanto o usuário digita (tributario:simular_venda) - nada é salvo.
+            var caixa = document.getElementById("simulacao-ir");
+            var conteudo = document.getElementById("simulacao-ir-conteudo");
+            var campos = ["quantidade", "preco", "data", "percentual_corretora", "taxas"];
+            var timer = null;
+            var ultimaRequisicao = 0;
+
+            function reais(valor) {
+                return "R$ " + Number(valor).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+            }
+            function linha(texto, classe) {
+                var p = document.createElement("div");
+                p.textContent = texto;
+                if (classe) p.className = classe;
+                return p;
+            }
+
+            function mostrar(d) {
+                conteudo.textContent = "";
+                conteudo.style.color = "";
+                if (!d.ok) {
+                    conteudo.style.color = "var(--text-dim)";
+                    conteudo.textContent = d.erro;
+                    return;
+                }
+                if (d.classe_com_isencao) {
+                    conteudo.appendChild(linha(
+                        "Vendas de ações em " + d.competencia + ": " + reais(d.vendas_acoes_antes) + " → " +
+                        reais(d.vendas_acoes_depois) + " (limite de isenção " + reais(d.limite_isencao) + ")"
+                    ));
+                    if (d.perde_isencao) {
+                        var aviso = "⚠️ Esta venda faz o mês PERDER A ISENÇÃO: o ganho com ações do mês inteiro passa a ser tributado";
+                        if (Number(d.ganho_isento_antes) > 0) aviso += " (inclusive " + reais(d.ganho_isento_antes) + " de ganho que hoje está isento)";
+                        conteudo.appendChild(linha(aviso + ".", "valor-negativo"));
+                        conteudo.appendChild(linha("Vender até " + reais(d.limite_isencao) + " no mês mantém a isenção - considere deixar parte para o mês que vem."));
+                    } else if (d.isento_depois) {
+                        conteudo.appendChild(linha("✅ Continua dentro da isenção - ainda sobram " + reais(d.disponivel_depois) + " para vender no mês.", "valor-positivo"));
+                    } else {
+                        conteudo.appendChild(linha("O mês já passou do limite: o ganho desta venda é tributado."));
+                    }
+                } else {
+                    conteudo.appendChild(linha("Este ativo (" + (d.classe || "sem classe") + ") não tem isenção: todo ganho é tributado."));
+                }
+                conteudo.appendChild(linha("Ganho pelo preço médio fiscal (já sem taxas): " + reais(d.ganho_fiscal)));
+                var ir = Number(d.ir_adicional);
+                conteudo.appendChild(linha(
+                    ir > 0 ? "IR estimado desta venda: " + reais(ir) : (ir < 0 ? "Esta venda reduz o IR do período em " + reais(-ir) : "IR estimado desta venda: R$ 0,00"),
+                    ir > 0 ? "valor-negativo" : ""
+                ));
+                var lucro = Number(d.lucro_lote);
+                conteudo.appendChild(linha(
+                    "Lucro do lote: " + reais(lucro) + " · após IR: " + reais(d.lucro_apos_ir) +
+                    (lucro > 0 && ir > 0 ? " (" + (ir / lucro * 100).toLocaleString("pt-BR", { maximumFractionDigits: 1 }) + "% do lucro vai para o imposto)" : ""),
+                    Number(d.lucro_apos_ir) >= 0 ? "valor-positivo" : "valor-negativo"
+                ));
+            }
+
+            function simular() {
+                var params = new URLSearchParams({ operacao: caixa.dataset.operacao });
+                if (caixa.dataset.venda) params.set("venda", caixa.dataset.venda);
+                campos.forEach(function (nome) {
+                    var campo = document.getElementById("id_" + nome);
+                    if (campo) params.set(nome, campo.value);
+                });
+                var numero = ++ultimaRequisicao;
+                conteudo.style.color = "var(--text-dim)";
+                conteudo.textContent = "Calculando...";
+                fetch(caixa.dataset.url + "?" + params.toString(), { credentials: "same-origin" })
+                    .then(function (r) { return r.json(); })
+                    .then(function (d) { if (numero === ultimaRequisicao) mostrar(d); })
+                    .catch(function () {
+                        if (numero === ultimaRequisicao) conteudo.textContent = "Não foi possível simular o imposto agora.";
+                    });
+            }
+
+            campos.forEach(function (nome) {
+                var campo = document.getElementById("id_" + nome);
+                if (!campo) return;
+                campo.addEventListener("input", function () {
+                    clearTimeout(timer);
+                    timer = setTimeout(simular, 400);
+                });
+            });
+            simular();
+        })();
+    </script>
     {% else %}
     <a href="{% url 'core:operacao_lista' %}" class="btn-futurista btn-secundario" style="margin-top: 1rem;">Voltar para Minhas Operações</a>
     {% endif %}

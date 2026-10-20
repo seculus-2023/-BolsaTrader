@@ -43,7 +43,7 @@ from .models import (
     CriptoAtivo, OperacaoCripto, CotacaoCripto, RegistroAtualizacaoCarteiraCripto, PrevisaoAnalista,
     FundamentosAtivo, VendaLote,
 )
-from tributario.models import Darf, ParametroTributario, SaldoInicialFiscal, TaxaSelicMensal
+from tributario.models import AvisoLimiteIsencao, Darf, ParametroTributario, SaldoInicialFiscal, TaxaSelicMensal
 
 
 # --------------------------------------------------------------------------
@@ -6769,6 +6769,7 @@ MODELOS_LIMPOS_NA_LIMPEZA_GERAL = [
     PostIt,
     SaldoInicialFiscal,
     Darf,
+    AvisoLimiteIsencao,
 ]
 # FundamentosAtivo: dado público das empresas (como o catálogo Ações da B3), não do usuário;
 # ParametroTributario e TaxaSelicMensal: regras da lei e taxa pública do Banco Central
@@ -6809,6 +6810,7 @@ MODELOS_LIMPOS_NA_LIMPEZA_USUARIO = {
     PostIt: "usuario",
     SaldoInicialFiscal: "usuario",
     Darf: "usuario",
+    AvisoLimiteIsencao: "usuario",
 }
 MODELOS_COMPARTILHADOS_NA_LIMPEZA_USUARIO = [
     CotacaoCripto,

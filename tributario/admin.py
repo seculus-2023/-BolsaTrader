@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import Darf, ParametroTributario, SaldoInicialFiscal, TaxaSelicMensal
+from .models import AvisoLimiteIsencao, Darf, ParametroTributario, SaldoInicialFiscal, TaxaSelicMensal
 
 
 @admin.register(ParametroTributario)
@@ -27,3 +27,8 @@ class DarfAdmin(admin.ModelAdmin):
 @admin.register(TaxaSelicMensal)
 class TaxaSelicMensalAdmin(admin.ModelAdmin):
     list_display = ("mes", "taxa_pct")
+
+
+@admin.register(AvisoLimiteIsencao)
+class AvisoLimiteIsencaoAdmin(admin.ModelAdmin):
+    list_display = ("usuario", "competencia", "tipo", "criado_em")

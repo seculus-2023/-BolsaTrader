@@ -43,7 +43,7 @@ from .models import (
     CriptoAtivo, OperacaoCripto, CotacaoCripto, RegistroAtualizacaoCarteiraCripto, PrevisaoAnalista,
     FundamentosAtivo, VendaLote,
 )
-from tributario.models import ParametroTributario, SaldoInicialFiscal
+from tributario.models import Darf, ParametroTributario, SaldoInicialFiscal, TaxaSelicMensal
 
 
 # --------------------------------------------------------------------------
@@ -553,6 +553,7 @@ def executar_ciclo_atualizacao_cotacoes() -> dict:
         notificar_compras_scanner_telegram(usuario)
         notificar_reservas_atingidas_telegram(usuario)
         enviar_ia_diaria_telegram(usuario, cache_ia_diaria)
+        _lembrar_darfs(usuario)
         registrar_atualizacao_carteira(usuario)
         registrar_cotacoes_compradas(usuario, RegistroCotacao.AUTOMATICA)
 
@@ -563,6 +564,19 @@ def executar_ciclo_atualizacao_cotacoes() -> dict:
         "alertas_gerados": total_alertas,
         "sinais_robo_gerados": total_sinais_robo,
     }
+
+
+def _lembrar_darfs(usuario) -> None:
+    """
+    Lembrete de DARF a vencer/vencida pelo Telegram (ver tributario.darf).
+    Importado aqui dentro porque tributario.darf importa este módulo; e uma
+    falha na apuração de um usuário não pode interromper o ciclo dos outros.
+    """
+    from tributario.darf import notificar_darfs_telegram
+    try:
+        notificar_darfs_telegram(usuario)
+    except Exception:
+        logger.exception("Falha ao verificar as DARFs de %s.", usuario.get_username())
 
 
 _agendador_cotacoes_lock = threading.Lock()
@@ -6754,10 +6768,11 @@ MODELOS_LIMPOS_NA_LIMPEZA_GERAL = [
     MensagemWhatsapp,
     PostIt,
     SaldoInicialFiscal,
+    Darf,
 ]
 # FundamentosAtivo: dado público das empresas (como o catálogo Ações da B3), não do usuário;
-# ParametroTributario: alíquotas e limites da lei, configuração do sistema
-MODELOS_PRESERVADOS_NA_LIMPEZA_GERAL = [AcaoB3, ConsumoApiBrapi, FundamentosAtivo, ParametroTributario]
+# ParametroTributario e TaxaSelicMensal: regras da lei e taxa pública do Banco Central
+MODELOS_PRESERVADOS_NA_LIMPEZA_GERAL = [AcaoB3, ConsumoApiBrapi, FundamentosAtivo, ParametroTributario, TaxaSelicMensal]
 
 
 @transaction.atomic
@@ -6793,6 +6808,7 @@ MODELOS_LIMPOS_NA_LIMPEZA_USUARIO = {
     RegistroAtualizacaoCarteira: "usuario",
     PostIt: "usuario",
     SaldoInicialFiscal: "usuario",
+    Darf: "usuario",
 }
 MODELOS_COMPARTILHADOS_NA_LIMPEZA_USUARIO = [
     CotacaoCripto,

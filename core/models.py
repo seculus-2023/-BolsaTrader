@@ -747,12 +747,14 @@ class LancamentoContaCorrente(models.Model):
     ORIGEM_COMPRA_CRIPTO = "COMPRA_CRIPTO"
     ORIGEM_VENDA_CRIPTO = "VENDA_CRIPTO"
     ORIGEM_TRANSFERENCIA = "TRANSFERENCIA"
+    ORIGEM_IMPOSTO = "IMPOSTO"
     ORIGEM_CHOICES = [
         (ORIGEM_COMPRA, "Compra de ações"),
         (ORIGEM_VENDA, "Venda de ações"),
         (ORIGEM_COMPRA_CRIPTO, "Compra de criptomoeda"),
         (ORIGEM_VENDA_CRIPTO, "Venda de criptomoeda"),
         (ORIGEM_TRANSFERENCIA, "Transferência"),
+        (ORIGEM_IMPOSTO, "Imposto (DARF)"),
     ]
 
     conta = models.ForeignKey(ContaCorrente, on_delete=models.CASCADE, related_name="lancamentos")

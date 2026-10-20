@@ -1,8 +1,29 @@
 from decimal import Decimal
 
 from django import forms
+from django.utils import timezone
 
 from .models import SaldoInicialFiscal
+
+
+class PagamentoDarfForm(forms.Form):
+    """Data e valor efetivamente pagos (com multa e juros, se pagou em atraso)."""
+
+    data_pagamento = forms.DateField(
+        label="Data do pagamento", widget=forms.DateInput(attrs={"type": "date"}, format="%Y-%m-%d"),
+    )
+    valor_pago = forms.DecimalField(label="Valor pago (R$)", max_digits=14, decimal_places=2, min_value=Decimal("0.01"))
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        for field in self.fields.values():
+            field.widget.attrs["class"] = "form-control-futurista"
+
+    def clean_data_pagamento(self):
+        data = self.cleaned_data["data_pagamento"]
+        if data > timezone.localdate():
+            raise forms.ValidationError("A data do pagamento não pode ser no futuro.")
+        return data
 
 
 class SaldoInicialFiscalForm(forms.ModelForm):

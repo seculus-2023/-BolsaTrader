@@ -2,14 +2,15 @@ from decimal import Decimal
 
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
-from django.shortcuts import redirect, render
+from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
 from django.views.decorators.http import require_POST
 
 from core.models import Operacao
 
-from .forms import SaldoInicialFiscalForm
-from .models import SaldoInicialFiscal
+from .darf import URL_SICALC, acrescimos_ate, desfazer_pagamento, registrar_pagamento, situacao_das_darfs
+from .forms import PagamentoDarfForm, SaldoInicialFiscalForm
+from .models import Darf, SaldoInicialFiscal
 from .services import (
     COMUM, DAY_TRADE, GRUPO_COMUM, GRUPO_LABELS, GRUPOS, MODALIDADE_LABELS, apurar_meses, apurar_operacoes,
     parametro_vigente, prejuizos_iniciais_do_usuario,
@@ -36,6 +37,7 @@ def imposto_renda(request):
     hoje = timezone.localdate()
     apuracao = apurar_operacoes(request.user)
     meses = apurar_meses(request.user, apuracao)
+    situacoes = situacao_das_darfs(request.user, meses)
     ano, anos = _ano_escolhido(request, sorted({m.ano for m in meses}, reverse=True))
 
     mes_atual = next((m for m in meses if (m.ano, m.mes) == (hoje.year, hoje.month)), None)
@@ -64,12 +66,72 @@ def imposto_renda(request):
         "total_darf_ano": sum((m.valor_darf for m in meses_do_ano), Decimal("0")),
         "total_isento_ano": sum((m.grupos[GRUPO_COMUM].isento for m in meses_do_ano), Decimal("0")),
         "prejuizos": [{"label": GRUPO_LABELS[g], "valor": prejuizos[g]} for g in GRUPOS],
-        "proximo_darf": next((m for m in meses if m.valor_darf and m.vencimento >= hoje), None),
+        "proximo_darf": next(
+            iter(sorted((s for s in situacoes if s.status != "PAGA"), key=lambda s: s.darf.vencimento)), None
+        ),
+        "darfs_vencidas": sum(1 for s in situacoes if s.status == "VENCIDA"),
         "ano": ano,
         "anos": anos,
         "inconsistencias": apuracao.inconsistencias,
         "form_saldo": SaldoInicialFiscalForm(instance=saldo_inicial),
     })
+
+
+@login_required
+def darf_lista(request):
+    """Guias DARF de cada mês com imposto: em aberto, vencidas (com multa e juros até hoje) e pagas."""
+    situacoes = situacao_das_darfs(request.user)
+    return render(request, "tributario/darfs.html", {
+        "situacoes": situacoes,
+        "em_aberto": sum((s.total_hoje for s in situacoes if s.status != "PAGA"), Decimal("0")),
+        "vencidas": sum(1 for s in situacoes if s.status == "VENCIDA"),
+        "url_sicalc": URL_SICALC,
+        "hoje": timezone.localdate(),
+    })
+
+
+@login_required
+def darf_pagar(request, darf_id):
+    """Registra o pagamento de uma guia (data e valor pagos) e lança o débito na conta corrente."""
+    darf = get_object_or_404(Darf, id=darf_id, usuario=request.user)
+    hoje = timezone.localdate()
+
+    if request.method == "POST":
+        form = PagamentoDarfForm(request.POST)
+        if form.is_valid():
+            registrar_pagamento(darf, form.cleaned_data["data_pagamento"], form.cleaned_data["valor_pago"])
+            messages.success(
+                request,
+                f"DARF de {darf.competencia:%m/%Y} marcada como paga - débito de R$ {darf.valor_pago} "
+                "lançado na conta corrente.",
+            )
+            return redirect("tributario:darf_lista")
+    else:
+        data_inicial = darf.data_pagamento or hoje
+        acrescimos = acrescimos_ate(darf, data_inicial)
+        form = PagamentoDarfForm(initial={
+            "data_pagamento": data_inicial,
+            "valor_pago": darf.valor_pago or darf.valor_principal + acrescimos.multa + acrescimos.juros,
+        })
+
+    acrescimos_hoje = acrescimos_ate(darf, hoje)
+    return render(request, "tributario/darf_pagar.html", {
+        "darf": darf,
+        "form": form,
+        "acrescimos": acrescimos_hoje,
+        "total_hoje": darf.valor_principal + acrescimos_hoje.multa + acrescimos_hoje.juros,
+        "url_sicalc": URL_SICALC,
+    })
+
+
+@login_required
+@require_POST
+def darf_desfazer_pagamento(request, darf_id):
+    """Volta uma guia marcada como paga por engano para "em aberto" e remove o débito da conta corrente."""
+    darf = get_object_or_404(Darf, id=darf_id, usuario=request.user, data_pagamento__isnull=False)
+    desfazer_pagamento(darf)
+    messages.success(request, f"Pagamento da DARF de {darf.competencia:%m/%Y} desfeito - o débito saiu da conta corrente.")
+    return redirect("tributario:darf_lista")
 
 
 @login_required

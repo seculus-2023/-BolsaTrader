@@ -58,6 +58,63 @@ class ParametroTributario(models.Model):
         return f"Vigente a partir de {self.vigencia_inicio:%d/%m/%Y}{fim}"
 
 
+class Darf(models.Model):
+    """
+    A guia (DARF 6015) de um mês de apuração. Nasce e é atualizada a partir
+    da apuração mensal (tributario.darf.sincronizar_darfs) enquanto estiver
+    em aberto - se uma operação antiga for corrigida, o valor da guia em
+    aberto acompanha. Depois de paga, fica congelada: se a apuração mudar, a
+    tela mostra a diferença (DARF complementar).
+    """
+
+    usuario = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="darfs")
+    competencia = models.DateField("Mês de apuração", help_text="Sempre o dia 1 do mês.")
+    codigo_receita = models.CharField("Código da receita", max_length=4, default="6015")
+    valor_principal = models.DecimalField("Valor principal (R$)", max_digits=14, decimal_places=2)
+    vencimento = models.DateField("Vencimento")
+    data_pagamento = models.DateField("Data do pagamento", null=True, blank=True)
+    valor_pago = models.DecimalField("Valor pago (R$)", max_digits=14, decimal_places=2, null=True, blank=True)
+    multa_paga = models.DecimalField("Multa paga (R$)", max_digits=14, decimal_places=2, default=Decimal("0"))
+    juros_pagos = models.DecimalField("Juros pagos (R$)", max_digits=14, decimal_places=2, default=Decimal("0"))
+    lancamento = models.OneToOneField(
+        "core.LancamentoContaCorrente", on_delete=models.SET_NULL, null=True, blank=True, related_name="darf",
+        help_text="Débito na conta corrente gerado ao marcar a guia como paga.",
+    )
+    ultimo_lembrete = models.DateField("Último lembrete enviado", null=True, blank=True)
+    criado_em = models.DateTimeField(auto_now_add=True)
+    atualizado_em = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "DARF"
+        verbose_name_plural = "DARFs"
+        ordering = ["-competencia"]
+        constraints = [
+            models.UniqueConstraint(fields=["usuario", "competencia"], name="uma_darf_por_usuario_e_mes"),
+        ]
+
+    def __str__(self):
+        return f"DARF {self.codigo_receita} {self.competencia:%m/%Y} - R$ {self.valor_principal}"
+
+    @property
+    def paga(self) -> bool:
+        return self.data_pagamento is not None
+
+
+class TaxaSelicMensal(models.Model):
+    """Selic acumulada de cada mês (série 4390 do Banco Central) - base dos juros de DARF paga em atraso."""
+
+    mes = models.DateField("Mês", unique=True, help_text="Sempre o dia 1 do mês.")
+    taxa_pct = models.DecimalField("Taxa no mês (%)", max_digits=7, decimal_places=4)
+
+    class Meta:
+        verbose_name = "Taxa Selic mensal"
+        verbose_name_plural = "Taxas Selic mensais"
+        ordering = ["-mes"]
+
+    def __str__(self):
+        return f"Selic {self.mes:%m/%Y}: {self.taxa_pct}%"
+
+
 class SaldoInicialFiscal(models.Model):
     """
     Prejuízos de renda variável acumulados ANTES das operações cadastradas no

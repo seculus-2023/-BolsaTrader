@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block titulo %}Pagamento da DARF {{ darf.competencia|date:"m/Y" }} - BolsaTrader{% endblock %}
+{% block conteudo %}
+<h1>💰 DARF de {{ darf.competencia|date:"m/Y" }}</h1>
+
+<div class="card-glass" style="max-width: 640px;">
+    <h3 style="margin-top: 0;">Dados para emitir a guia no Sicalc</h3>
+    <p style="margin: .2rem 0;">Código da receita: <strong>{{ darf.codigo_receita }}</strong> (ganhos líquidos em operações em bolsa)</p>
+    <p style="margin: .2rem 0;">Período de apuração: <strong>{{ darf.competencia|date:"m/Y" }}</strong></p>
+    <p style="margin: .2rem 0;">Vencimento: <strong>{{ darf.vencimento|date:"d/m/Y" }}</strong></p>
+    <p style="margin: .2rem 0;">Valor principal: <strong>R$ {{ darf.valor_principal }}</strong></p>
+    {% if acrescimos.dias_atraso %}
+        <p class="valor-negativo" style="margin: .6rem 0 .2rem;">
+            Vencida há {{ acrescimos.dias_atraso }} dia(s): multa R$ {{ acrescimos.multa }} + juros R$ {{ acrescimos.juros }}
+            = <strong>R$ {{ total_hoje }}</strong> pagando hoje.
+        </p>
+        {% if not acrescimos.selic_completa %}
+        <p style="color: var(--text-dim); font-size: .85rem;">⚠️ Faltou a Selic de algum mês (sem conexão com o Banco Central) - confira o valor no Sicalc.</p>
+        {% endif %}
+    {% endif %}
+    <a href="{{ url_sicalc }}" target="_blank" rel="noopener" class="btn-futurista btn-secundario" style="margin-top: .8rem;">Abrir o Sicalc ↗</a>
+
+    <h3>{% if darf.paga %}Corrigir pagamento{% else %}Marcar como paga{% endif %}</h3>
+    <p style="color: var(--text-dim); font-size: .9rem;">Informe o que foi pago de fato (está no comprovante) - o valor vira um débito na conta corrente, na data do pagamento.</p>
+    <form method="post" class="form-futurista">
+        {% csrf_token %}
+        {{ form.non_field_errors }}
+        {% for field in form %}
+            <label for="{{ field.id_for_label }}">{{ field.label }}</label>
+            {{ field }}
+            {{ field.errors }}
+        {% endfor %}
+        <button type="submit" class="btn-futurista" style="margin-top: 1.4rem;">Salvar pagamento</button>
+        <a href="{% url 'tributario:darf_lista' %}" class="btn-futurista btn-secundario">Cancelar</a>
+    </form>
+</div>
+{% endblock %}

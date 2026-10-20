@@ -7,6 +7,9 @@ Executar com:
 import importlib
 from datetime import date, timedelta
 from decimal import Decimal
+from unittest.mock import Mock, patch
+
+import requests
 
 from django.apps import apps as django_apps
 from django.contrib.auth.models import User
@@ -17,7 +20,14 @@ from core.classificacao import ACAO, BDR, ETF, FII, UNIT, inferir_classe_ativo
 from core.models import Ativo, LancamentoContaCorrente, Operacao, VendaLote
 from core.services import obter_ou_criar_conta_corrente, recalcular_resumo_vendas, sincronizar_lancamento_compra
 
-from .models import ParametroTributario, SaldoInicialFiscal
+from accounts.models import PerfilUsuario
+
+from .calendario import feriados_bancarios, pascoa, ultimo_dia_util
+from .darf import (
+    calcular_acrescimos, desfazer_pagamento, notificar_darfs_telegram, obter_taxas_selic, registrar_pagamento,
+    situacao_das_darfs, sincronizar_darfs,
+)
+from .models import Darf, ParametroTributario, SaldoInicialFiscal, TaxaSelicMensal
 from .services import (
     COMUM, DAY_TRADE, GRUPO_COMUM, GRUPO_DAY_TRADE, GRUPO_FII, MovimentoDia, ResultadoVenda, apurar_meses,
     apurar_operacoes, calcular_apuracao, calcular_meses, ir_estimado_por_lote,
@@ -372,8 +382,19 @@ class ApuracaoMensalTests(TestCase):
         self.assertIsNone(parametro.vigencia_fim)
 
 
-class ApuracaoMensalComBancoTests(TestCase):
+class SemBancoCentralMixin:
+    """O painel calcula juros de DARF vencida - nos testes, a Selic nunca vem da internet."""
+
     def setUp(self):
+        super().setUp()
+        patcher = patch("tributario.darf.buscar_selic_mensal", return_value={})
+        self.buscar_selic = patcher.start()
+        self.addCleanup(patcher.stop)
+
+
+class ApuracaoMensalComBancoTests(SemBancoCentralMixin, TestCase):
+    def setUp(self):
+        super().setUp()
         self.usuario = User.objects.create_user(username="apuracao_mensal", password="SenhaForte123!")
         self.client.login(username="apuracao_mensal", password="SenhaForte123!")
         self.ativo = Ativo.objects.create(ticker="PETR4")
@@ -434,3 +455,192 @@ class ApuracaoMensalComBancoTests(TestCase):
         self.assertContains(resposta, "Lucro após IR")
         self.assertContains(resposta, "R$ 3000,00 (15,0% do lucro)")
         self.assertContains(resposta, "R$ 17000,00")
+
+
+class CalendarioTests(TestCase):
+    def test_feriados_moveis(self):
+        self.assertEqual(pascoa(2026), date(2026, 4, 5))
+        feriados = feriados_bancarios(2026)
+        for dia in (date(2026, 2, 16), date(2026, 2, 17), date(2026, 4, 3), date(2026, 6, 4), date(2026, 11, 20)):
+            self.assertIn(dia, feriados)
+
+    def test_vencimento_pula_fim_de_semana_e_feriado(self):
+        self.assertEqual(ultimo_dia_util(2026, 4), date(2026, 4, 30))
+        self.assertEqual(ultimo_dia_util(2026, 2), date(2026, 2, 27))  # 28/02 é sábado
+        self.assertEqual(ultimo_dia_util(2029, 3), date(2029, 3, 29))  # 30/03/2029 é Sexta-feira Santa
+
+
+class AcrescimosAtrasoTests(TestCase):
+    VENCIMENTO = date(2026, 4, 30)
+
+    def test_pago_ate_o_vencimento_nao_tem_acrescimo(self):
+        acrescimos = calcular_acrescimos(Decimal("1000"), self.VENCIMENTO, self.VENCIMENTO, {})
+        self.assertEqual((acrescimos.multa, acrescimos.juros), (Decimal("0"), Decimal("0")))
+
+    def test_atraso_no_mes_seguinte_tem_multa_diaria_e_juros_de_1_pct(self):
+        acrescimos = calcular_acrescimos(Decimal("1000"), self.VENCIMENTO, date(2026, 5, 10), {})
+        self.assertEqual(acrescimos.dias_atraso, 10)
+        self.assertEqual(acrescimos.multa, Decimal("33.00"))  # 10 x 0,33%
+        self.assertEqual(acrescimos.juros, Decimal("10.00"))  # só o 1% do mês do pagamento
+        self.assertTrue(acrescimos.selic_completa)
+
+    def test_multa_limitada_a_20_pct_e_juros_com_selic_dos_meses_intermediarios(self):
+        taxas = {date(2026, 5, 1): Decimal("1.1"), date(2026, 6, 1): Decimal("1.0"), date(2026, 7, 1): Decimal("1.2")}
+        acrescimos = calcular_acrescimos(Decimal("1000"), self.VENCIMENTO, date(2026, 8, 15), taxas)
+        self.assertEqual(acrescimos.multa, Decimal("200.00"))
+        self.assertEqual(acrescimos.juros_pct, Decimal("4.3"))  # 1,1 + 1,0 + 1,2 + 1
+        self.assertEqual(acrescimos.juros, Decimal("43.00"))
+
+    def test_sem_selic_de_algum_mes_marca_juros_incompletos(self):
+        acrescimos = calcular_acrescimos(Decimal("1000"), self.VENCIMENTO, date(2026, 7, 15), {date(2026, 5, 1): Decimal("1")})
+        self.assertFalse(acrescimos.selic_completa)
+
+
+class SelicBancoCentralTests(TestCase):
+    @patch("tributario.darf.requests.get")
+    def test_busca_grava_no_cache_e_nao_busca_de_novo(self, get):
+        get.return_value = Mock(status_code=200, json=lambda: [
+            {"data": "01/05/2026", "valor": "1.14"}, {"data": "01/06/2026", "valor": "1.10"},
+        ])
+        meses = [date(2026, 5, 1), date(2026, 6, 1)]
+        self.assertEqual(obter_taxas_selic(meses), {date(2026, 5, 1): Decimal("1.14"), date(2026, 6, 1): Decimal("1.10")})
+        self.assertEqual(TaxaSelicMensal.objects.count(), 2)
+
+        obter_taxas_selic(meses)
+        self.assertEqual(get.call_count, 1)
+
+    @patch("tributario.darf.requests.get", side_effect=requests.ConnectionError("sem internet"))
+    def test_sem_internet_devolve_o_que_tem(self, get):
+        TaxaSelicMensal.objects.create(mes=date(2026, 5, 1), taxa_pct=Decimal("1.14"))
+        self.assertEqual(obter_taxas_selic([date(2026, 5, 1), date(2026, 6, 1)]), {date(2026, 5, 1): Decimal("1.14")})
+
+
+class DarfTests(SemBancoCentralMixin, TestCase):
+    def setUp(self):
+        super().setUp()
+        self.usuario = User.objects.create_user(username="contribuinte_darf", password="SenhaForte123!")
+        self.client.login(username="contribuinte_darf", password="SenhaForte123!")
+        self.lote = Operacao.objects.create(
+            usuario=self.usuario, ativo=Ativo.objects.create(ticker="PETR4"), tipo=Operacao.COMPRA,
+            quantidade=100, preco_unitario=Decimal("100.00"), data_operacao=D1,
+        )
+        # vende 30.000 em março/2026 com 20.000 de ganho: IR 3.000 - 1,50 retido
+        self.venda = VendaLote.objects.create(operacao=self.lote, quantidade=100, preco=Decimal("300.00"), data=D2)
+        recalcular_resumo_vendas(self.lote)
+
+    def test_cria_a_guia_do_mes_com_imposto(self):
+        [darf] = sincronizar_darfs(self.usuario)
+        self.assertEqual(darf.competencia, date(2026, 3, 1))
+        self.assertEqual(darf.valor_principal, Decimal("2998.50"))
+        self.assertEqual(darf.vencimento, date(2026, 4, 30))
+        self.assertEqual(darf.codigo_receita, "6015")
+
+    def test_guia_em_aberto_acompanha_correcao_e_some_sem_imposto(self):
+        sincronizar_darfs(self.usuario)
+        self.venda.preco = Decimal("210.00")  # vende 21.000, ganho 11.000 -> IR 1.650 - 1,05 retido
+        self.venda.save()
+        [darf] = sincronizar_darfs(self.usuario)
+        self.assertEqual(darf.valor_principal, Decimal("1648.95"))
+
+        self.venda.delete()
+        recalcular_resumo_vendas(self.lote)
+        self.assertEqual(sincronizar_darfs(self.usuario), [])
+
+    def test_guia_paga_fica_congelada_e_mostra_diferenca(self):
+        [darf] = sincronizar_darfs(self.usuario)
+        registrar_pagamento(darf, date(2026, 4, 28), Decimal("2998.50"))
+        self.venda.preco = Decimal("310.00")  # ganho sobe para 21.000
+        self.venda.save()
+
+        [situacao] = situacao_das_darfs(self.usuario)
+        self.assertEqual(situacao.status, "PAGA")
+        self.assertEqual(situacao.darf.valor_principal, Decimal("2998.50"))
+        self.assertEqual(situacao.diferenca, Decimal("149.95"))  # 3.150 - 1,55 retido - 2.998,50
+
+    def test_pagamento_lanca_debito_na_conta_corrente_e_desfazer_remove(self):
+        [darf] = sincronizar_darfs(self.usuario)
+        registrar_pagamento(darf, date(2026, 5, 10), Decimal("3128.44"))
+        lancamento = darf.lancamento
+        self.assertEqual(lancamento.tipo, LancamentoContaCorrente.DEBITO)
+        self.assertEqual(lancamento.origem, LancamentoContaCorrente.ORIGEM_IMPOSTO)
+        self.assertEqual((lancamento.valor, lancamento.data), (Decimal("3128.44"), date(2026, 5, 10)))
+        self.assertEqual(darf.multa_paga, Decimal("98.95"))  # 10 dias x 0,33% de 2.998,50
+
+        desfazer_pagamento(darf)
+        self.assertFalse(LancamentoContaCorrente.objects.filter(origem=LancamentoContaCorrente.ORIGEM_IMPOSTO).exists())
+        self.assertIsNone(Darf.objects.get().data_pagamento)
+
+    def test_tela_lista_guia_vencida_com_acrescimos(self):
+        with patch("tributario.darf.timezone.localdate", return_value=date(2026, 5, 10)):
+            resposta = self.client.get(reverse("tributario:darf_lista"))
+        self.assertContains(resposta, "Vencida há 10 dia(s)")
+        self.assertContains(resposta, "R$ 98,95")  # multa
+        self.assertContains(resposta, "R$ 29,99")  # juros de 1%
+
+    def test_marcar_como_paga_pela_tela(self):
+        [darf] = sincronizar_darfs(self.usuario)
+        resposta = self.client.post(reverse("tributario:darf_pagar", args=[darf.id]), {
+            "data_pagamento": "2026-04-29", "valor_pago": "2998.50",
+        })
+        self.assertRedirects(resposta, reverse("tributario:darf_lista"))
+        darf.refresh_from_db()
+        self.assertEqual(darf.data_pagamento, date(2026, 4, 29))
+        self.assertContains(self.client.get(reverse("tributario:darf_lista")), "Paga em 29/04/2026")
+
+        self.client.post(reverse("tributario:darf_desfazer_pagamento", args=[darf.id]))
+        darf.refresh_from_db()
+        self.assertFalse(darf.paga)
+
+    def test_rejeita_data_futura_e_nao_mexe_em_guia_de_outro_usuario(self):
+        [darf] = sincronizar_darfs(self.usuario)
+        resposta = self.client.post(reverse("tributario:darf_pagar", args=[darf.id]), {
+            "data_pagamento": (date.today() + timedelta(days=5)).isoformat(), "valor_pago": "10",
+        })
+        self.assertEqual(resposta.status_code, 200)
+        self.assertFalse(Darf.objects.get().paga)
+
+        outro = User.objects.create_user(username="outro_darf", password="SenhaForte123!")
+        self.client.login(username="outro_darf", password="SenhaForte123!")
+        self.assertEqual(self.client.get(reverse("tributario:darf_pagar", args=[darf.id])).status_code, 404)
+
+    def test_painel_avisa_guia_vencida(self):
+        with patch("tributario.darf.timezone.localdate", return_value=date(2026, 5, 10)):
+            resposta = self.client.get(reverse("tributario:imposto_renda"))
+        self.assertContains(resposta, "DARF(s) vencida(s)")
+
+
+@patch("tributario.darf.enviar_notificacao_telegram", return_value=True)
+class LembreteDarfTelegramTests(SemBancoCentralMixin, TestCase):
+    def setUp(self):
+        super().setUp()
+        self.usuario = User.objects.create_user(username="lembrete_darf", password="SenhaForte123!")
+        PerfilUsuario.objects.create(usuario=self.usuario, telegram_bot_token="123:abc", telegram_chat_id="999")
+        lote = Operacao.objects.create(
+            usuario=self.usuario, ativo=Ativo.objects.create(ticker="VALE3"), tipo=Operacao.COMPRA,
+            quantidade=100, preco_unitario=Decimal("100.00"), data_operacao=D1,
+        )
+        VendaLote.objects.create(operacao=lote, quantidade=100, preco=Decimal("300.00"), data=D2)
+        recalcular_resumo_vendas(lote)
+
+    def _notificar_em(self, dia):
+        with patch("tributario.darf.timezone.localdate", return_value=dia):
+            return notificar_darfs_telegram(self.usuario)
+
+    def test_avisa_perto_do_vencimento_uma_vez_por_dia(self, enviar):
+        self.assertTrue(self._notificar_em(date(2026, 4, 27)))
+        self.assertIn("vence em 3 dia(s)", enviar.call_args[0][1])
+        self.assertFalse(self._notificar_em(date(2026, 4, 27)))
+        self.assertEqual(enviar.call_count, 1)
+
+    def test_nao_avisa_longe_do_vencimento(self, enviar):
+        self.assertFalse(self._notificar_em(date(2026, 4, 10)))
+        enviar.assert_not_called()
+
+    def test_avisa_vencida_com_valor_atualizado(self, enviar):
+        self.assertTrue(self._notificar_em(date(2026, 5, 10)))
+        self.assertIn("VENCIDA há 10 dia(s) - R$ 3127.44", enviar.call_args[0][1])
+
+    def test_nao_avisa_guia_paga(self, enviar):
+        [darf] = sincronizar_darfs(self.usuario)
+        registrar_pagamento(darf, date(2026, 4, 29), Decimal("2998.50"))
+        self.assertFalse(self._notificar_em(date(2026, 5, 10)))

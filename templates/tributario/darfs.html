@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+{% block titulo %}DARFs - BolsaTrader{% endblock %}
+{% block conteudo %}
+<h1>💳 DARFs - IR sobre a bolsa</h1>
+<a href="{% url 'tributario:imposto_renda' %}" class="btn-futurista btn-secundario">🧾 Imposto de Renda</a>
+<a href="{{ url_sicalc }}" target="_blank" rel="noopener" class="btn-futurista btn-secundario">Emitir no Sicalc (Receita) ↗</a>
+<p style="color: var(--text-dim); font-size: .9rem;">
+    As guias nascem da apuração mensal e acompanham correções nas operações enquanto estiverem em aberto. O sistema
+    calcula os valores; a guia oficial, com código de barras, é emitida no Sicalc ou no app da Receita. Depois de
+    pagar, marque a guia como paga para lançar o débito na conta corrente.
+</p>
+
+{% if situacoes %}
+<div style="display: flex; gap: 1.5rem; flex-wrap: wrap; margin: 1rem 0;">
+    <div><span style="color: var(--text-dim);">Em aberto hoje:</span> <strong>R$ {{ em_aberto }}</strong></div>
+    {% if vencidas %}<div class="valor-negativo">⚠️ {{ vencidas }} guia(s) vencida(s)</div>{% endif %}
+</div>
+
+<div class="card-glass">
+    <div class="tabela-scroll">
+    <table class="tabela-futurista">
+        <thead>
+            <tr>
+                <th>Mês de apuração</th>
+                <th>Período (Sicalc)</th>
+                <th>Código</th>
+                <th>Vencimento</th>
+                <th>Principal</th>
+                <th>Multa</th>
+                <th>Juros</th>
+                <th>Total</th>
+                <th>Situação</th>
+                <th>Ações</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for s in situacoes %}
+            <tr>
+                <td>{{ s.darf.competencia|date:"m/Y" }}</td>
+                <td>{{ s.periodo_apuracao|date:"d/m/Y" }}</td>
+                <td>{{ s.darf.codigo_receita }}</td>
+                <td>{{ s.darf.vencimento|date:"d/m/Y" }}</td>
+                <td>R$ {{ s.darf.valor_principal }}</td>
+                {% if s.status == "PAGA" %}
+                    <td>R$ {{ s.darf.multa_paga }}</td>
+                    <td>R$ {{ s.darf.juros_pagos }}</td>
+                    <td>R$ {{ s.darf.valor_pago }}</td>
+                    <td class="valor-positivo">
+                        ✅ Paga em {{ s.darf.data_pagamento|date:"d/m/Y" }}
+                        {% if s.diferenca > 0 %}<br><span class="valor-negativo" title="A apuração deste mês mudou depois do pagamento (operação corrigida)">Falta R$ {{ s.diferenca }} (DARF complementar)</span>
+                        {% elif s.diferenca < 0 %}<br><span style="color: var(--text-dim);" title="A apuração deste mês diminuiu depois do pagamento">Pago a mais: R$ {{ s.pago_a_mais }}</span>{% endif %}
+                    </td>
+                {% else %}
+                    <td>{% if s.acrescimos.multa %}R$ {{ s.acrescimos.multa }} ({{ s.acrescimos.multa_pct|floatformat:2 }}%){% else %}&mdash;{% endif %}</td>
+                    <td>{% if s.acrescimos.juros %}R$ {{ s.acrescimos.juros }} ({{ s.acrescimos.juros_pct|floatformat:2 }}%){% if not s.acrescimos.selic_completa %} <span title="Faltou a Selic de algum mês (sem conexão com o Banco Central) - juros podem estar menores">⚠️</span>{% endif %}{% else %}&mdash;{% endif %}</td>
+                    <td><strong>R$ {{ s.total_hoje }}</strong></td>
+                    <td class="{% if s.status == 'VENCIDA' %}valor-negativo{% endif %}">
+                        {% if s.status == "VENCIDA" %}Vencida há {{ s.acrescimos.dias_atraso }} dia(s){% else %}Em aberto{% endif %}
+                    </td>
+                {% endif %}
+                <td>
+                    <div style="display: flex; gap: .4rem;">
+                        <a href="{% url 'tributario:darf_pagar' s.darf.id %}" class="btn-futurista btn-secundario btn-icone" title="{% if s.status == 'PAGA' %}Corrigir pagamento{% else %}Marcar como paga{% endif %}" aria-label="{% if s.status == 'PAGA' %}Corrigir pagamento{% else %}Marcar como paga{% endif %}">{% if s.status == "PAGA" %}✏️{% else %}💰{% endif %}</a>
+                        {% if s.status == "PAGA" %}
+                        <form method="post" action="{% url 'tributario:darf_desfazer_pagamento' s.darf.id %}" onsubmit="return confirm('Desfazer o pagamento da DARF de {{ s.darf.competencia|date:"m/Y" }}? O débito sai da conta corrente.');">
+                            {% csrf_token %}
+                            <button type="submit" class="btn-futurista btn-secundario btn-icone" style="color: var(--neon-red); border-color: rgba(255, 56, 96, .4);" title="Desfazer pagamento" aria-label="Desfazer pagamento">↩️</button>
+                        </form>
+                        {% endif %}
+                    </div>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    </div>
+    <p style="color: var(--text-dim); font-size: .85rem;">
+        Atraso: multa de 0,33% por dia (até 20%) e juros pela Selic acumulada desde o mês seguinte ao vencimento, mais
+        1% no mês do pagamento - calculados até hoje. Vencimento: último dia útil do mês seguinte ao da apuração.
+    </p>
+</div>
+{% else %}
+<div class="card-glass">
+    <p style="color: var(--text-dim); margin: 0;">Nenhuma DARF a pagar - os meses apurados ficaram isentos, com prejuízo ou abaixo do mínimo de R$ 10,00.</p>
+</div>
+{% endif %}
+{% endblock %}

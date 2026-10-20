@@ -23,15 +23,15 @@ Os valores são estimativas para conferência - não substituem um contador.
 """
 from __future__ import annotations
 
-import calendar
 from collections import defaultdict
 from dataclasses import dataclass, field
-from datetime import date, timedelta
+from datetime import date
 from decimal import Decimal, ROUND_HALF_UP
 
 from core.classificacao import ACAO, FII, UNIT
 from core.models import Operacao
 
+from .calendario import ultimo_dia_util
 from .models import ParametroTributario, SaldoInicialFiscal
 
 COMUM = "COMUM"
@@ -240,14 +240,6 @@ def grupo_do_resultado(resultado: ResultadoVenda) -> str:
 
 def classes_com_isencao(parametro: ParametroTributario) -> set[str]:
     return {ACAO, UNIT} if parametro.units_isentas else {ACAO}
-
-
-def ultimo_dia_util(ano: int, mes: int) -> date:
-    """Último dia útil (segunda a sexta) do mês - feriados não são considerados."""
-    dia = date(ano, mes, calendar.monthrange(ano, mes)[1])
-    while dia.weekday() >= 5:
-        dia -= timedelta(days=1)
-    return dia
 
 
 @dataclass

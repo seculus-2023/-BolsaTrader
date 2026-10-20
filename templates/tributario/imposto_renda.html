@@ -2,11 +2,12 @@
 {% block titulo %}Imposto de Renda - BolsaTrader{% endblock %}
 {% block conteudo %}
 <h1>🧾 Imposto de Renda na Bolsa</h1>
+<a href="{% url 'tributario:darf_lista' %}" class="btn-futurista btn-secundario">💳 DARFs{% if darfs_vencidas %} ({{ darfs_vencidas }} vencida{{ darfs_vencidas|pluralize }}){% endif %}</a>
 <a href="{% url 'tributario:posicao_fiscal' %}" class="btn-futurista btn-secundario">🧮 Posição Fiscal (preço médio)</a>
 <a href="{% url 'core:operacao_lista' %}" class="btn-futurista btn-secundario">Minhas Operações</a>
 <p style="color: var(--text-dim); font-size: .9rem;">
     ⚠️ Valores estimados a partir das operações cadastradas (preço médio, taxas e IR retido calculado pelo sistema) -
-    confira com as notas de corretagem e, se precisar, com um contador. Vencimento sem considerar feriados.
+    confira com as notas de corretagem e, se precisar, com um contador. Vencimento sem feriados estaduais e municipais.
 </p>
 
 {% if inconsistencias %}
@@ -41,8 +42,10 @@
         {% else %}
             <p style="color: var(--text-dim);">Nenhuma venda neste mês.</p>
         {% endif %}
-        {% if proximo_darf and proximo_darf != mes_atual %}
-            <p style="margin-bottom: 0;">⏰ DARF de {{ proximo_darf.competencia }}: <strong>R$ {{ proximo_darf.valor_darf }}</strong> até {{ proximo_darf.vencimento|date:"d/m/Y" }}</p>
+        {% if darfs_vencidas %}
+            <p class="valor-negativo" style="margin-bottom: 0;">⚠️ {{ darfs_vencidas }} DARF(s) vencida(s) - <a href="{% url 'tributario:darf_lista' %}">ver valores com multa e juros</a></p>
+        {% elif proximo_darf %}
+            <p style="margin-bottom: 0;">⏰ Próxima DARF ({{ proximo_darf.darf.competencia|date:"m/Y" }}): <strong>R$ {{ proximo_darf.total_hoje }}</strong> até {{ proximo_darf.darf.vencimento|date:"d/m/Y" }} - <a href="{% url 'tributario:darf_lista' %}">DARFs</a></p>
         {% endif %}
     </div>
 

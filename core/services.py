@@ -44,7 +44,8 @@ from .models import (
     FundamentosAtivo, VendaLote,
 )
 from tributario.models import (
-    AvisoLimiteIsencao, Darf, EventoCorporativo, ParametroTributario, Provento, SaldoInicialFiscal, TaxaSelicMensal,
+    AvisoLimiteIsencao, Darf, EventoCorporativo, MapeamentoTitulo, NotaCorretagem, ParametroTributario, Provento,
+    SaldoInicialFiscal, TaxaSelicMensal,
 )
 
 
@@ -6751,6 +6752,7 @@ def usuarios_logados_agora() -> list[dict]:
 # usuários e seus perfis (Minha Conta). Model novo no core precisa entrar
 # numa das duas listas - core.tests.LimparDadosSistemaTests confere isso.
 MODELOS_LIMPOS_NA_LIMPEZA_GERAL = [
+    NotaCorretagem,
     LancamentoContaCorrente,
     VendaLote,
     ContaCorrente,
@@ -6777,6 +6779,7 @@ MODELOS_LIMPOS_NA_LIMPEZA_GERAL = [
     AvisoLimiteIsencao,
     FundamentosAtivo,  # cache de dado público - volta a ser buscado
     TaxaSelicMensal,  # cache do Banco Central - volta a ser buscado
+    MapeamentoTitulo,  # nome de pregão -> ticker confirmado nas importações de notas
 ]
 # Ficam de propósito: o catálogo Ações da B3; o consumo da API brapi (zerar faria
 # o sistema achar que ainda tem cota no mês e estourar o plano); e os parâmetros
@@ -6816,6 +6819,7 @@ def limpar_dados_sistema() -> int:
 # cotações, índices, notícias, WhatsApp...) são compartilhados entre os
 # usuários e ficam intactos - ver MODELOS_COMPARTILHADOS_NA_LIMPEZA_USUARIO.
 MODELOS_LIMPOS_NA_LIMPEZA_USUARIO = {
+    NotaCorretagem: "usuario",
     LancamentoContaCorrente: "conta__usuario",
     VendaLote: "operacao__usuario",
     ContaCorrente: "usuario",
@@ -6844,6 +6848,7 @@ MODELOS_COMPARTILHADOS_NA_LIMPEZA_USUARIO = [
     MensagemWhatsapp,
     FundamentosAtivo,
     TaxaSelicMensal,
+    MapeamentoTitulo,
 ]
 
 

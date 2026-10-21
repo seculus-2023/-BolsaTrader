@@ -1019,3 +1019,273 @@ class RelatorioAnualTests(SemBancoCentralMixin, TestCase):
 
         pdf = self.client.get(reverse("tributario:relatorio_anual_pdf"), {"ano": "2026"})
         self.assertTrue(pdf.content.startswith(b"%PDF"))
+
+
+# --------------------------------------------------------------------------
+# Importação das notas de corretagem
+
+from .models import MapeamentoTitulo, NotaCorretagem  # noqa: E402
+from .notas import (  # noqa: E402
+    ExclusaoBloqueada, ImportacaoInvalida, Negocio, NotaInvalida, NotaLida, chave_titulo, excluir_notas,
+    importar_notas, ler_notas_pdf, simular_importacao, sugerir_ticker,
+)
+from .services import ORIGEM_MANUAIS, ORIGEM_NOTAS  # noqa: E402
+
+DIA_NOTA = date(2026, 10, 5)
+
+
+def _pdf_nota_sinacor(numero="145779266", data_pregao="05/10/2026") -> bytes:
+    """PDF mínimo no layout da nota SINACOR (posições das colunas iguais às da Clear)."""
+    import pymupdf
+
+    documento = pymupdf.open()
+    pagina = documento.new_page(width=595, height=842)
+
+    def escrever(x, y, texto, tamanho=7):
+        pagina.insert_text((x, y), texto, fontsize=tamanho)
+
+    escrever(113, 46, "NOTA DE NEGOCIAÇÃO", 9)
+    escrever(430, 56, "Nr. nota")
+    escrever(432, 63, numero)
+    escrever(517, 56, "Data pregão")
+    escrever(518, 63, data_pregao)
+    escrever(129, 80, "CLEAR CTVM S/A")
+    cabecalho = [(35, "Q"), (43, "Negociação"), (94, "C/V"), (109, "Tipo"), (128, "mercado"), (169, "Prazo"),
+                 (194, "Especificação"), (249, "do"), (261, "título"), (294, "Obs."), (314, "(*)"),
+                 (327, "Quantidade"), (378, "Preço"), (440, "Valor"), (544, "D/C")]
+    for x, texto in cabecalho:
+        escrever(x, 245, texto)
+    linhas = [
+        ("C", "FRACIONARIO", ["MAGAZ", "LUIZA", "ON", "NM"], "@", "10", "9,63", "96,30", "D"),
+        ("C", "FRACIONARIO", ["PETROBRAS", "PN", "N2"], "D", "2", "53,52", "107,04", "D"),
+        ("V", "FRACIONARIO", ["PETROBRAS", "PN", "N2"], "D#", "2", "53,72", "107,44", "C"),
+        ("C", "OPCAO DE COMPRA", ["PETRK450", "PN"], "", "100", "0,50", "50,00", "D"),
+    ]
+    y = 256
+    for cv, mercado, especificacao, obs, qtd, preco, valor, dc in linhas:
+        escrever(43, y, "1-BOVESPA")
+        escrever(98, y, cv)
+        x = 109
+        for palavra in mercado.split():
+            escrever(x, y, palavra)
+            x += 20
+        x = 194
+        for palavra in especificacao:
+            escrever(x, y + 1, palavra, 5)
+            x += 25
+        if obs:
+            escrever(304, y, obs)
+        escrever(368, y, qtd)
+        escrever(418, y, preco)
+        escrever(518, y, valor)
+        escrever(549, y, dc)
+        y += 10
+    resumo = [
+        (470, "Taxa de liquidação 0,20 D"), (478, "Taxa de Registro 0,00"), (536, "Total Bovespa / Soma 0,05 D"),
+        (593, "I.R.R.F. s/ operações, base R$107,44 0,00"), (621, "Total Custos / Despesas 0,00"),
+        (630, "Líquido para 07/10/2026 146,15 D"),
+    ]
+    for y, texto in resumo:
+        escrever(300, y, texto)
+    conteudo = documento.tobytes()
+    documento.close()
+    return conteudo
+
+
+def _nota(numero, dia, negocios, custos="0"):
+    return NotaLida(
+        corretora="CLEAR CTVM S/A", numero=numero, data=dia, custos=Decimal(custos),
+        negocios=[
+            Negocio(cv=cv, mercado="FRACIONARIO", especificacao=esp, obs="", quantidade=qtd, preco=Decimal(preco),
+                    valor=(Decimal(preco) * qtd).quantize(Decimal("0.01")))
+            for cv, esp, qtd, preco in negocios
+        ],
+    )
+
+
+TICKERS = {"MAGAZ LUIZA ON": "MGLU3", "PETROBRAS PN": "PETR4", "HYPERA ON": "HYPE3"}
+
+
+class LeituraNotaPdfTests(TestCase):
+    def test_le_negocios_taxas_e_ignora_opcoes(self):
+        resultado = ler_notas_pdf(_pdf_nota_sinacor(), "nota.pdf")
+        self.assertEqual(len(resultado.notas), 1)
+        nota = resultado.notas[0]
+        self.assertEqual((nota.numero, nota.data, nota.corretora), ("145779266", DIA_NOTA, "CLEAR CTVM S/A"))
+        self.assertEqual(nota.custos, Decimal("0.25"))
+        self.assertEqual(nota.liquido, Decimal("-146.15"))
+        self.assertEqual(len(nota.negocios), 4)
+        self.assertEqual(len(nota.importaveis), 3)
+        mglu = nota.negocios[0]
+        self.assertEqual(
+            (mglu.cv, mglu.especificacao, mglu.obs, mglu.quantidade, mglu.preco),
+            ("C", "MAGAZ LUIZA ON NM", "@", 10, Decimal("9.63")),
+        )
+        self.assertTrue(nota.negocios[2].day_trade)
+        self.assertTrue(any("não é importado" in aviso for aviso in nota.avisos))
+
+    def test_pdf_invalido(self):
+        with self.assertRaises(NotaInvalida):
+            ler_notas_pdf(b"nada a ver", "x.pdf")
+
+    def test_chave_e_sugestao_de_ticker(self):
+        self.assertEqual(chave_titulo("COPASA          ON EJ NM"), "COPASA ON")
+        self.assertEqual(chave_titulo("TAESA UNT N2"), "TAESA UNT")
+        self.assertEqual(sugerir_ticker("TAESA UNT N2"), "TAEE11")
+        self.assertEqual(sugerir_ticker("NU HOLDINGS DRN"), "ROXO34")
+        from core.models import AcaoB3
+        AcaoB3.objects.create(ticker="XPTO3", nome="EMPRESA XPTO PARTICIPAÇÕES S.A.")
+        self.assertEqual(sugerir_ticker("XPTO PART ON NM"), "XPTO3")
+        MapeamentoTitulo.objects.create(especificacao="XPTO PART ON", ticker="XPTO11")
+        self.assertEqual(sugerir_ticker("XPTO PART ON NM"), "XPTO11")
+
+
+class ImportacaoNotasTests(TestCase):
+    def setUp(self):
+        self.usuario = User.objects.create_user("importa", password="SenhaForte123!")
+
+    def test_compras_com_taxas_rateadas_e_day_trade(self):
+        nota = _nota("1", DIA_NOTA, [
+            ("C", "MAGAZ LUIZA ON NM", 10, "10.00"),
+            ("C", "PETROBRAS PN N2", 2, "50.00"),
+            ("V", "PETROBRAS PN N2", 1, "51.00"),
+            ("V", "PETROBRAS PN N2", 1, "51.00"),  # mesmo preço: vira uma venda só
+        ], custos="0.31")
+        resumo = importar_notas(self.usuario, [nota], TICKERS)
+
+        registro = NotaCorretagem.objects.get(usuario=self.usuario)
+        self.assertEqual(registro.operacoes.count(), 2)
+        self.assertEqual(registro.vendas.count(), 1)
+        mglu = Operacao.objects.get(usuario=self.usuario, ativo__ticker="MGLU3")
+        petr = Operacao.objects.get(usuario=self.usuario, ativo__ticker="PETR4")
+        venda = VendaLote.objects.get(operacao=petr)
+        self.assertEqual(mglu.taxas_compra + petr.taxas_compra + venda.taxas, Decimal("0.31"))
+        self.assertEqual(venda.quantidade, 2)
+        self.assertEqual(petr.saldo, 0)
+        self.assertEqual(len(resumo.linhas), 3)
+        self.assertEqual(LancamentoContaCorrente.objects.filter(conta__usuario=self.usuario).count(), 3)
+        self.assertEqual(MapeamentoTitulo.objects.get(especificacao="PETROBRAS PN").ticker, "PETR4")
+        self.assertEqual([r.modalidade for r in apurar_operacoes(self.usuario).resultados], [DAY_TRADE])
+
+    def test_venda_baixa_primeiro_no_mesmo_dia_e_depois_no_mais_antigo(self):
+        importar_notas(self.usuario, [
+            _nota("1", D1, [("C", "HYPERA ON NM", 10, "20.00")]),
+            _nota("2", D2, [("C", "HYPERA ON NM", 5, "21.00")]),
+            _nota("3", D3, [("C", "HYPERA ON NM", 3, "22.00"), ("V", "HYPERA ON NM", 6, "23.00")]),
+        ], TICKERS)
+        vendas = {v.operacao.data_operacao: v.quantidade for v in VendaLote.objects.select_related("operacao")}
+        self.assertEqual(vendas, {D3: 3, D1: 3})
+
+    def test_venda_sem_saldo_nao_grava_nada(self):
+        with self.assertRaises(ImportacaoInvalida):
+            importar_notas(self.usuario, [
+                _nota("1", D1, [("C", "HYPERA ON NM", 1, "20.00")]),
+                _nota("2", D2, [("V", "HYPERA ON NM", 5, "21.00")]),
+            ], TICKERS)
+        self.assertFalse(NotaCorretagem.objects.exists())
+        self.assertFalse(Operacao.objects.exists())
+
+    def test_nota_repetida_e_pulada(self):
+        nota = _nota("1", D1, [("C", "HYPERA ON NM", 1, "20.00")])
+        importar_notas(self.usuario, [nota], TICKERS)
+        resumo = importar_notas(self.usuario, [nota], TICKERS)
+        self.assertEqual(resumo.notas_repetidas, [f"1 ({D1:%d/%m/%Y})"])
+        self.assertEqual(Operacao.objects.count(), 1)
+
+    def test_simulacao_nao_grava(self):
+        resumo, meses, erro = simular_importacao(self.usuario, [
+            _nota("1", D1, [("C", "HYPERA ON NM", 10, "20.00")]),
+            _nota("2", D2, [("V", "HYPERA ON NM", 10, "22.00")]),
+        ], TICKERS)
+        self.assertEqual(erro, "")
+        self.assertEqual(len(resumo.linhas), 2)
+        self.assertEqual(meses[0].grupos[GRUPO_COMUM].resultado, Decimal("20.00"))
+        self.assertFalse(Operacao.objects.exists())
+        self.assertFalse(NotaCorretagem.objects.exists())
+
+    def test_excluir_notas_bloqueia_venda_de_outra_nota_e_desfaz_baixa(self):
+        importar_notas(self.usuario, [
+            _nota("1", D1, [("C", "HYPERA ON NM", 10, "20.00")]),
+            _nota("2", D2, [("V", "HYPERA ON NM", 4, "22.00")]),
+        ], TICKERS)
+        with self.assertRaises(ExclusaoBloqueada):
+            excluir_notas(self.usuario, NotaCorretagem.objects.filter(numero="1"))
+
+        self.assertEqual(excluir_notas(self.usuario, NotaCorretagem.objects.filter(numero="2")), 1)
+        lote = Operacao.objects.get()
+        self.assertEqual((lote.quantidade_vendida, lote.saldo), (0, 10))
+        self.assertFalse(VendaLote.objects.exists())
+        self.assertEqual(excluir_notas(self.usuario, NotaCorretagem.objects.all()), 1)
+        self.assertFalse(Operacao.objects.exists())
+        self.assertFalse(LancamentoContaCorrente.objects.exists())
+
+    def test_apuracao_por_origem(self):
+        manual = Operacao.objects.create(
+            usuario=self.usuario, ativo=Ativo.objects.create(ticker="VALE3"), tipo=Operacao.COMPRA,
+            quantidade=10, preco_unitario=Decimal("50"), data_operacao=D1,
+        )
+        VendaLote.objects.create(operacao=manual, quantidade=10, preco=Decimal("55"), data=D2)
+        importar_notas(self.usuario, [
+            _nota("1", D1, [("C", "HYPERA ON NM", 10, "20.00")]),
+            _nota("2", D2, [("V", "HYPERA ON NM", 10, "21.00")]),
+        ], TICKERS)
+
+        def tickers(origem):
+            return sorted(r.ticker for r in apurar_operacoes(self.usuario, origem=origem).resultados)
+
+        self.assertEqual(tickers("todas"), ["HYPE3", "VALE3"])
+        self.assertEqual(tickers(ORIGEM_NOTAS), ["HYPE3"])
+        self.assertEqual(tickers(ORIGEM_MANUAIS), ["VALE3"])
+
+
+class TelasNotasTests(TestCase):
+    def setUp(self):
+        self.usuario = User.objects.create_user("tela_notas", password="SenhaForte123!")
+        self.client.login(username="tela_notas", password="SenhaForte123!")
+
+    def test_upload_previa_confirmacao_e_exclusao_do_mes(self):
+        from django.core.files.uploadedfile import SimpleUploadedFile
+        arquivo = SimpleUploadedFile("nota.pdf", _pdf_nota_sinacor(), content_type="application/pdf")
+        resposta = self.client.post(reverse("tributario:notas_importar"), {"arquivos": [arquivo]})
+        self.assertRedirects(resposta, reverse("tributario:notas_previa"))
+
+        previa = self.client.get(reverse("tributario:notas_previa"))
+        self.assertContains(previa, "MGLU3")
+        self.assertContains(previa, "Confirmar importação")
+        self.assertFalse(Operacao.objects.exists())
+
+        dados = {f"ticker_{t['indice']}": t["ticker"] for t in previa.context["titulos"]}
+        resposta = self.client.post(reverse("tributario:notas_previa"), {**dados, "acao": "confirmar"})
+        self.assertRedirects(
+            resposta, reverse("tributario:imposto_renda") + "?origem=notas", fetch_redirect_response=False
+        )
+        self.assertEqual(NotaCorretagem.objects.filter(usuario=self.usuario).count(), 1)
+        self.assertEqual(Operacao.objects.filter(usuario=self.usuario).count(), 2)
+
+        tela = self.client.get(reverse("tributario:imposto_renda"), {"origem": "notas", "ano": "2026"})
+        self.assertContains(tela, "Excluir notas do mês (1)")
+        self.assertContains(tela, "Só notas importadas")
+        self.assertContains(self.client.get(reverse("tributario:notas_importar")), "145779266")
+
+        resposta = self.client.post(reverse("tributario:notas_mes_excluir", args=[2026, 10]))
+        self.assertRedirects(resposta, reverse("tributario:imposto_renda"), fetch_redirect_response=False)
+        self.assertFalse(NotaCorretagem.objects.exists())
+        self.assertFalse(Operacao.objects.exists())
+
+    def test_ticker_em_branco_pede_preenchimento(self):
+        session = self.client.session
+        session["notas_corretagem_lidas"] = [
+            _nota("9", D1, [("C", "EMPRESA DESCONHECIDA ON NM", 1, "1.00")]).como_dict()
+        ]
+        session.save()
+        resposta = self.client.get(reverse("tributario:notas_previa"))
+        self.assertContains(resposta, "Informe o ticker de")
+        self.assertNotContains(resposta, "Confirmar importação")
+
+    def test_nao_exclui_nota_de_outro_usuario(self):
+        outro = User.objects.create_user("outro_notas", password="SenhaForte123!")
+        importar_notas(outro, [_nota("1", D1, [("C", "HYPERA ON NM", 1, "20.00")])], TICKERS)
+        nota = NotaCorretagem.objects.get()
+        self.assertEqual(self.client.post(reverse("tributario:nota_excluir", args=[nota.id])).status_code, 404)
+        self.client.post(reverse("tributario:notas_mes_excluir", args=[D1.year, D1.month]))
+        self.assertTrue(NotaCorretagem.objects.exists())

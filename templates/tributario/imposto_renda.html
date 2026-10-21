@@ -2,6 +2,7 @@
 {% block titulo %}Imposto de Renda - BolsaTrader{% endblock %}
 {% block conteudo %}
 <h1>🧾 Imposto de Renda na Bolsa</h1>
+<a href="{% url 'tributario:notas_importar' %}" class="btn-futurista btn-secundario">📥 Notas de corretagem{% if total_notas %} ({{ total_notas }}){% endif %}</a>
 <a href="{% url 'tributario:darf_lista' %}" class="btn-futurista btn-secundario">💳 DARFs{% if darfs_vencidas %} ({{ darfs_vencidas }} vencida{{ darfs_vencidas|pluralize }}){% endif %}</a>
 <a href="{% url 'tributario:posicao_fiscal' %}" class="btn-futurista btn-secundario">🧮 Posição Fiscal (preço médio)</a>
 <a href="{% url 'tributario:proventos' %}" class="btn-futurista btn-secundario">💵 Proventos</a>
@@ -64,13 +65,27 @@
 <div class="card-glass" style="margin-top: 1.5rem;">
     <div style="display: flex; justify-content: space-between; align-items: flex-end; gap: 1rem; flex-wrap: wrap;">
         <h2 style="margin: 0;">Apuração mês a mês</h2>
-        <form method="get" class="form-futurista">
-            <label for="id_ano" style="margin-top: 0;">Ano</label>
-            <select id="id_ano" name="ano" class="form-control-futurista" onchange="this.form.submit()">
-                {% for opcao in anos %}<option value="{{ opcao }}" {% if opcao == ano %}selected{% endif %}>{{ opcao }}</option>{% endfor %}
-            </select>
+        <form method="get" class="form-futurista" style="display: flex; gap: 1rem; flex-wrap: wrap; align-items: flex-end;">
+            <div>
+                <label for="id_origem" style="margin-top: 0;">Apurar</label>
+                <select id="id_origem" name="origem" class="form-control-futurista" onchange="this.form.submit()">
+                    {% for valor, rotulo in origens %}<option value="{{ valor }}" {% if valor == origem %}selected{% endif %}>{{ rotulo }}</option>{% endfor %}
+                </select>
+            </div>
+            <div>
+                <label for="id_ano" style="margin-top: 0;">Ano</label>
+                <select id="id_ano" name="ano" class="form-control-futurista" onchange="this.form.submit()">
+                    {% for opcao in anos %}<option value="{{ opcao }}" {% if opcao == ano %}selected{% endif %}>{{ opcao }}</option>{% endfor %}
+                </select>
+            </div>
         </form>
     </div>
+    {% if origem != "todas" %}
+    <p style="color: var(--neon-yellow); font-size: .9rem; margin: .8rem 0 0;">
+        Visão filtrada ({% if origem == "notas" %}só operações importadas das notas{% else %}só operações lançadas à mão{% endif %}) - serve para conferência.
+        As guias DARF continuam calculadas com todas as operações.
+    </p>
+    {% endif %}
 
     {% if meses %}
     <div style="display: flex; gap: 1.5rem; flex-wrap: wrap; margin-top: 1rem;">
@@ -119,7 +134,16 @@
                         IR R$ {{ mes.imposto_bruto }} &minus; retido R$ {{ mes.irrf_utilizado }}{% if mes.imposto_acumulado_anterior %} + acumulado R$ {{ mes.imposto_acumulado_anterior }}{% endif %}
                         &middot; vence {{ mes.vencimento|date:"d/m/Y" }}
                     </td>
-                    <td colspan="2"><strong>DARF: R$ {{ mes.valor_darf }}</strong>{% if mes.imposto_acumulado_proximo %} <span style="color: var(--text-dim);">(acumula R$ {{ mes.imposto_acumulado_proximo }})</span>{% endif %}</td>
+                    <td colspan="2">
+                        <strong>DARF: R$ {{ mes.valor_darf }}</strong>{% if mes.imposto_acumulado_proximo %} <span style="color: var(--text-dim);">(acumula R$ {{ mes.imposto_acumulado_proximo }})</span>{% endif %}
+                        {% if mes.notas_importadas %}
+                        <form method="post" action="{% url 'tributario:notas_mes_excluir' mes.ano mes.mes %}" style="margin-top: .4rem;" onsubmit="return confirm('Excluir as {{ mes.notas_importadas }} nota(s) importada(s) de {{ mes.competencia }}? As compras e vendas criadas por elas também são apagadas e a apuração do mês é refeita.');">
+                            {% csrf_token %}
+                            <input type="hidden" name="proximo" value="{{ request.get_full_path }}">
+                            <button type="submit" class="btn-futurista btn-secundario" style="color: var(--neon-red); border-color: rgba(255, 56, 96, .4); padding: .3rem .7rem; font-size: .85rem;" title="Excluir as notas importadas deste mês">🗑️ Excluir notas do mês ({{ mes.notas_importadas }})</button>
+                        </form>
+                        {% endif %}
+                    </td>
                 </tr>
             {% endfor %}
         </tbody>

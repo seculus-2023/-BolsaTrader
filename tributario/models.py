@@ -277,3 +277,65 @@ class SaldoInicialFiscal(models.Model):
 
     def __str__(self):
         return f"Prejuízos anteriores de {self.usuario}"
+
+
+class NotaCorretagem(models.Model):
+    """
+    Nota de negociação (corretagem) importada do PDF da corretora - guarda os
+    totais da nota e as compras (Operacao) e vendas (VendaLote) que a
+    importação criou, para a apuração poder separar o que veio das notas do
+    que foi lançado à mão e para a importação poder ser desfeita.
+    """
+
+    usuario = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="notas_corretagem"
+    )
+    corretora = models.CharField("Corretora", max_length=100)
+    numero = models.CharField("Número da nota", max_length=30)
+    data_pregao = models.DateField("Data do pregão")
+    arquivo = models.CharField("Arquivo", max_length=255, blank=True)
+    valor_compras = models.DecimalField("Compras (R$)", max_digits=14, decimal_places=2, default=Decimal("0"))
+    valor_vendas = models.DecimalField("Vendas (R$)", max_digits=14, decimal_places=2, default=Decimal("0"))
+    custos = models.DecimalField(
+        "Custos (R$)", max_digits=12, decimal_places=2, default=Decimal("0"),
+        help_text="Taxas de liquidação e registro, emolumentos e custos operacionais da nota.",
+    )
+    irrf = models.DecimalField("IRRF retido (R$)", max_digits=12, decimal_places=2, default=Decimal("0"))
+    liquido = models.DecimalField(
+        "Líquido da nota (R$)", max_digits=14, decimal_places=2, default=Decimal("0"),
+        help_text="Positivo quando a nota é a crédito, negativo quando é a débito.",
+    )
+    operacoes = models.ManyToManyField("core.Operacao", blank=True, related_name="notas_corretagem")
+    vendas = models.ManyToManyField("core.VendaLote", blank=True, related_name="notas_corretagem")
+    importada_em = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = "Nota de corretagem"
+        verbose_name_plural = "Notas de corretagem"
+        ordering = ["-data_pregao", "-numero"]
+        constraints = [
+            models.UniqueConstraint(fields=["usuario", "corretora", "numero"], name="nota_corretagem_unica"),
+        ]
+
+    def __str__(self):
+        return f"Nota {self.numero} ({self.corretora}) de {self.data_pregao:%d/%m/%Y}"
+
+
+class MapeamentoTitulo(models.Model):
+    """
+    Ticker de cada "especificação do título" das notas (ex: "MAGAZ LUIZA ON"
+    -> MGLU3). A nota traz o nome de pregão, não o código - o que o usuário
+    confirma na importação fica salvo aqui e vira a sugestão das próximas.
+    """
+
+    especificacao = models.CharField("Especificação na nota", max_length=120, unique=True)
+    ticker = models.CharField("Ticker", max_length=12)
+    atualizado_em = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Mapeamento de título da nota"
+        verbose_name_plural = "Mapeamentos de títulos das notas"
+        ordering = ["especificacao"]
+
+    def __str__(self):
+        return f"{self.especificacao} -> {self.ticker}"

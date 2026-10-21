@@ -1,7 +1,8 @@
 from django.contrib import admin
 
 from .models import (
-    AvisoLimiteIsencao, Darf, EventoCorporativo, ParametroTributario, Provento, SaldoInicialFiscal, TaxaSelicMensal,
+    AvisoLimiteIsencao, Darf, EventoCorporativo, MapeamentoTitulo, NotaCorretagem, ParametroTributario, Provento,
+    SaldoInicialFiscal, TaxaSelicMensal,
 )
 
 
@@ -47,3 +48,17 @@ class ProventoAdmin(admin.ModelAdmin):
 class EventoCorporativoAdmin(admin.ModelAdmin):
     list_display = ("usuario", "ativo", "tipo", "data", "proporcao", "custo_unitario_bonificacao")
     list_filter = ("tipo",)
+
+
+@admin.register(NotaCorretagem)
+class NotaCorretagemAdmin(admin.ModelAdmin):
+    list_display = ("usuario", "data_pregao", "numero", "corretora", "valor_compras", "valor_vendas", "custos", "liquido")
+    list_filter = ("corretora",)
+    search_fields = ("usuario__username", "numero")
+    filter_horizontal = ("operacoes", "vendas")
+
+
+@admin.register(MapeamentoTitulo)
+class MapeamentoTituloAdmin(admin.ModelAdmin):
+    list_display = ("especificacao", "ticker", "atualizado_em")
+    search_fields = ("especificacao", "ticker")

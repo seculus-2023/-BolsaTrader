@@ -32,13 +32,19 @@ from core.classificacao import ACAO, FII, UNIT
 from core.models import Operacao
 
 from .calendario import ultimo_dia_util
-from .models import EventoCorporativo, ParametroTributario, SaldoInicialFiscal
+from .models import EventoCorporativo, NotaCorretagem, ParametroTributario, SaldoInicialFiscal
 
 COMUM = "COMUM"
 DAY_TRADE = "DAY_TRADE"
 MODALIDADE_LABELS = {COMUM: "Operação comum", DAY_TRADE: "Day trade"}
 
 CENTAVO = Decimal("0.01")
+
+# de onde vêm as operações apuradas: todas, só as importadas das notas de corretagem ou só as lançadas à mão
+ORIGEM_TODAS = "todas"
+ORIGEM_NOTAS = "notas"
+ORIGEM_MANUAIS = "manuais"
+ORIGEM_LABELS = {ORIGEM_TODAS: "Todas as operações", ORIGEM_NOTAS: "Só notas importadas", ORIGEM_MANUAIS: "Só lançadas à mão"}
 
 
 def _centavos(valor: Decimal) -> Decimal:
@@ -195,13 +201,27 @@ def calcular_apuracao(
     return apuracao
 
 
-def apurar_operacoes(usuario, ate: date | None = None, simulacao=None) -> ApuracaoFiscal:
+def _filtro_origem(usuario, origem: str):
+    """Funções que dizem se um lote / uma venda entra na apuração, conforme a origem escolhida."""
+    if origem not in (ORIGEM_NOTAS, ORIGEM_MANUAIS):
+        return (lambda lote: True), (lambda venda: True)
+    notas = NotaCorretagem.objects.filter(usuario=usuario)
+    ids_lotes = set(notas.values_list("operacoes", flat=True)) - {None}
+    ids_vendas = set(notas.values_list("vendas", flat=True)) - {None}
+    da_nota = origem == ORIGEM_NOTAS
+    return (lambda lote: (lote.pk in ids_lotes) == da_nota), (lambda venda: (venda.pk in ids_vendas) == da_nota)
+
+
+def apurar_operacoes(usuario, ate: date | None = None, simulacao=None, origem: str = ORIGEM_TODAS) -> ApuracaoFiscal:
     """
     Apuração fiscal de todas as compras e vendas de ações do usuário (até a
     data informada, se houver). `simulacao` é um VendaLote NÃO salvo (ligado
     ao lote) que entra no cálculo como se existisse - se tiver pk, substitui
     a venda gravada de mesmo id (correção). Serve para o simulador da tela de
-    venda mostrar o efeito no imposto antes de confirmar.
+    venda mostrar o efeito no imposto antes de confirmar. `origem` limita o
+    cálculo às operações importadas das notas de corretagem ou às lançadas à
+    mão (ORIGEM_NOTAS / ORIGEM_MANUAIS) - uma venda cuja compra ficou de fora
+    aparece nas inconsistências.
     """
     lotes = (
         Operacao.objects.filter(usuario=usuario, tipo=Operacao.COMPRA)
@@ -209,9 +229,12 @@ def apurar_operacoes(usuario, ate: date | None = None, simulacao=None) -> Apurac
     )
     movimentos: dict[tuple[str, date], MovimentoDia] = defaultdict(MovimentoDia)
     classes: dict[str, str] = {}
+    incluir_lote, incluir_venda = _filtro_origem(usuario, origem)
 
     def somar_venda(ticker, venda):
         if ate is not None and venda.data > ate:
+            return
+        if not incluir_venda(venda):
             return
         mov = movimentos[(ticker, venda.data)]
         mov.quantidade_venda += venda.quantidade
@@ -222,7 +245,7 @@ def apurar_operacoes(usuario, ate: date | None = None, simulacao=None) -> Apurac
         ticker = lote.ativo.ticker
         classes[ticker] = lote.ativo.classe
         # lote gerado por evento corporativo não é aquisição - o evento é aplicado direto na posição
-        if lote.evento_id is None and (ate is None or lote.data_operacao <= ate):
+        if lote.evento_id is None and (ate is None or lote.data_operacao <= ate) and incluir_lote(lote):
             mov = movimentos[(ticker, lote.data_operacao)]
             mov.quantidade_compra += lote.quantidade_comprada
             mov.custo_compra += lote.quantidade_comprada * lote.preco_unitario + (lote.taxas_compra or Decimal("0"))

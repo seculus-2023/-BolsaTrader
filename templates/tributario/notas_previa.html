@@ -1,0 +1,92 @@
+{% extends "base.html" %}
+{% block titulo %}Prévia da importação - BolsaTrader{% endblock %}
+{% block conteudo %}
+<h1>📥 Prévia da importação</h1>
+<p style="color: var(--text-dim);">
+    {{ notas|length }} nota{{ notas|length|pluralize }} lida{{ notas|length|pluralize }}
+    ({{ notas.0.data|date:"d/m/Y" }}{% if notas|length > 1 %}{% with ultima=notas|last %} a {{ ultima.data|date:"d/m/Y" }}{% endwith %}{% endif %}) &middot;
+    custos somados R$ {{ total_custos }}. Nada foi gravado ainda.
+</p>
+
+{% if avisos %}
+<div class="card-glass" style="margin-top: 1rem; border-color: rgba(255, 200, 0, .5);">
+    <h3 style="margin-top: 0;">Avisos</h3>
+    <ul>{% for aviso in avisos %}<li>{{ aviso }}</li>{% endfor %}</ul>
+</div>
+{% endif %}
+
+<form method="post" class="form-futurista">
+    {% csrf_token %}
+    <div class="card-glass" style="margin-top: 1.5rem; max-width: 720px;">
+        <h3 style="margin-top: 0;">Ticker de cada papel</h3>
+        <p style="color: var(--text-dim); font-size: .9rem;">A nota traz o nome de pregão, não o código. Confira as sugestões - o que você confirmar fica salvo para as próximas notas.</p>
+        <div class="tabela-scroll">
+        <table class="tabela-futurista">
+            <thead><tr><th>Na nota</th><th>Ticker</th></tr></thead>
+            <tbody>
+                {% for titulo in titulos %}
+                <tr>
+                    <td><label for="id_ticker_{{ titulo.indice }}" style="margin: 0;">{{ titulo.especificacao }}</label></td>
+                    <td><input type="text" id="id_ticker_{{ titulo.indice }}" name="ticker_{{ titulo.indice }}" value="{{ titulo.ticker }}" maxlength="12" class="form-control-futurista" style="max-width: 9rem; text-transform: uppercase;" {% if not titulo.ticker %}autofocus{% endif %}></td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        </div>
+    </div>
+
+    {% if erro %}
+    <div class="card-glass" style="margin-top: 1rem; border-color: rgba(255, 56, 96, .5);">
+        <p class="valor-negativo" style="margin: 0;">{{ erro }}</p>
+    </div>
+    {% endif %}
+
+    {% if resumo %}
+    <div class="card-glass" style="margin-top: 1.5rem;">
+        <h3 style="margin-top: 0;">Operações que serão gravadas</h3>
+        {% if resumo.notas_repetidas %}<p style="color: var(--text-dim);">Já importadas antes (serão puladas): {{ resumo.notas_repetidas|join:", " }}</p>{% endif %}
+        <div class="tabela-scroll">
+        <table class="tabela-futurista">
+            <thead><tr><th>Pregão</th><th>Nota</th><th>C/V</th><th>Ticker</th><th>Qtd</th><th>Preço</th><th>Valor</th><th>Taxas</th><th>Lançamento</th></tr></thead>
+            <tbody>
+                {% for linha in resumo.linhas %}
+                <tr>
+                    <td>{{ linha.data|date:"d/m/Y" }}</td>
+                    <td>{{ linha.nota }}</td>
+                    <td class="{% if linha.cv == 'V' %}valor-positivo{% endif %}">{% if linha.cv == 'C' %}Compra{% else %}Venda{% endif %}{% if linha.day_trade %} <span title="Day trade">(DT)</span>{% endif %}</td>
+                    <td>{{ linha.ticker }}</td>
+                    <td>{{ linha.quantidade }}</td>
+                    <td>R$ {{ linha.preco }}</td>
+                    <td>R$ {{ linha.valor }}</td>
+                    <td>R$ {{ linha.taxas }}</td>
+                    <td style="color: var(--text-dim);">{% if linha.cv == 'V' %}baixa: {% endif %}{{ linha.destino }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        </div>
+    </div>
+
+    <div class="card-glass" style="margin-top: 1.5rem;">
+        <h3 style="margin-top: 0;">Imposto dos meses das notas (depois da importação)</h3>
+        {% for mes in meses %}
+            <h4 style="margin-bottom: .3rem;">{{ mes.competencia }} &middot; vendas de ações R$ {{ mes.vendas_acoes }}{% if mes.isento %} ✅ dentro da isenção{% endif %}</h4>
+            <ul style="margin-top: 0;">
+            {% for grupo in mes.grupos.values %}{% if grupo.resultado or grupo.prejuizo_anterior %}
+                <li>{{ grupo.label }}: resultado <span class="{% if grupo.resultado > 0 %}valor-positivo{% elif grupo.resultado < 0 %}valor-negativo{% endif %}">R$ {{ grupo.resultado }}</span>{% if grupo.isento %} (isento R$ {{ grupo.isento }}){% endif %}{% if grupo.prejuizo_compensado %} &middot; prejuízo compensado R$ {{ grupo.prejuizo_compensado }}{% endif %} &middot; IR R$ {{ grupo.imposto }} &middot; prejuízo a compensar R$ {{ grupo.prejuizo_a_compensar }}</li>
+            {% endif %}{% endfor %}
+            </ul>
+            <p style="margin-top: 0;"><strong>DARF: R$ {{ mes.valor_darf }}</strong>{% if mes.imposto_acumulado_proximo %} (acumula R$ {{ mes.imposto_acumulado_proximo }} para o mês seguinte){% endif %}{% if mes.valor_darf %} &middot; vence {{ mes.vencimento|date:"d/m/Y" }}{% endif %}</p>
+        {% empty %}
+            <p style="color: var(--text-dim);">Nenhuma venda nos meses das notas - só compras, sem imposto a apurar.</p>
+        {% endfor %}
+    </div>
+    {% endif %}
+
+    <div style="display: flex; gap: .6rem; flex-wrap: wrap; margin-top: 1.5rem;">
+        {% if resumo %}<button type="submit" name="acao" value="confirmar" class="btn-futurista">✅ Confirmar importação</button>{% endif %}
+        <button type="submit" name="acao" value="previa" class="btn-futurista btn-secundario">🔄 Refazer prévia com estes tickers</button>
+        <button type="submit" name="acao" value="cancelar" class="btn-futurista btn-secundario" formnovalidate>Cancelar</button>
+    </div>
+</form>
+{% endblock %}

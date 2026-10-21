@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% block titulo %}Importar notas de corretagem - BolsaTrader{% endblock %}
+{% block conteudo %}
+<h1>📥 Importar notas de corretagem</h1>
+<a href="{% url 'tributario:imposto_renda' %}" class="btn-futurista btn-secundario">🧾 Imposto de Renda</a>
+<a href="{% url 'core:operacao_lista' %}" class="btn-futurista btn-secundario">Minhas Operações</a>
+
+<div class="card-glass" style="margin-top: 1.5rem; max-width: 720px;">
+    <h3 style="margin-top: 0;">Enviar PDFs</h3>
+    <p style="color: var(--text-dim); font-size: .9rem;">
+        Envie as notas de negociação em PDF (Clear, XP, Rico e outras no padrão da B3), de um ou vários meses.
+        Antes de gravar você confere os tickers, em qual compra cada venda dá baixa e o imposto resultante.
+        Entram as compras e vendas do mercado à vista e fracionário, com as taxas da nota rateadas por negócio.
+        Notas de mercado futuro (BM&amp;F) e opções não são importadas.
+    </p>
+    <form method="post" enctype="multipart/form-data" class="form-futurista">
+        {% csrf_token %}
+        <label for="id_arquivos">Arquivos PDF</label>
+        <input type="file" id="id_arquivos" name="arquivos" accept="application/pdf,.pdf" multiple required class="form-control-futurista">
+        <button type="submit" class="btn-futurista" style="margin-top: 1.2rem;">Ler notas e ver prévia</button>
+    </form>
+</div>
+
+<div class="card-glass" style="margin-top: 1.5rem;">
+    <h2 style="margin-top: 0;">Notas importadas</h2>
+    {% if meses_notas %}
+        {% for grupo in meses_notas %}
+        <div style="display: flex; justify-content: space-between; align-items: center; gap: 1rem; flex-wrap: wrap; margin-top: 1.2rem;">
+            <h3 style="margin: 0;">{{ grupo.competencia }} &middot; {{ grupo.notas|length }} nota{{ grupo.notas|length|pluralize }}</h3>
+            <form method="post" action="{% url 'tributario:notas_mes_excluir' grupo.ano grupo.mes %}" onsubmit="return confirm('Excluir as {{ grupo.notas|length }} nota(s) de {{ grupo.competencia }}? As compras e vendas criadas por elas também são apagadas.');">
+                {% csrf_token %}
+                <input type="hidden" name="proximo" value="{% url 'tributario:notas_importar' %}">
+                <button type="submit" class="btn-futurista btn-secundario" style="color: var(--neon-red); border-color: rgba(255, 56, 96, .4);">🗑️ Excluir notas do mês</button>
+            </form>
+        </div>
+        <p style="color: var(--text-dim); margin: .3rem 0;">Compras R$ {{ grupo.compras }} &middot; Vendas R$ {{ grupo.vendas }} &middot; Custos R$ {{ grupo.custos }}</p>
+        <div class="tabela-scroll">
+        <table class="tabela-futurista">
+            <thead><tr><th>Ações</th><th>Pregão</th><th>Nota</th><th>Corretora</th><th>Compras</th><th>Vendas</th><th>Custos</th><th>IRRF</th><th>Líquido</th></tr></thead>
+            <tbody>
+                {% for nota in grupo.notas %}
+                <tr>
+                    <td>
+                        <form method="post" action="{% url 'tributario:nota_excluir' nota.id %}" onsubmit="return confirm('Excluir a nota {{ nota.numero }}? As compras e vendas criadas por ela também são apagadas.');">
+                            {% csrf_token %}
+                            <button type="submit" class="btn-futurista btn-secundario btn-icone" style="color: var(--neon-red); border-color: rgba(255, 56, 96, .4);" title="Excluir nota" aria-label="Excluir nota">🗑️</button>
+                        </form>
+                    </td>
+                    <td>{{ nota.data_pregao|date:"d/m/Y" }}</td>
+                    <td>{{ nota.numero }}</td>
+                    <td>{{ nota.corretora }}</td>
+                    <td>R$ {{ nota.valor_compras }}</td>
+                    <td>R$ {{ nota.valor_vendas }}</td>
+                    <td>R$ {{ nota.custos }}</td>
+                    <td>R$ {{ nota.irrf }}</td>
+                    <td class="{% if nota.liquido > 0 %}valor-positivo{% elif nota.liquido < 0 %}valor-negativo{% endif %}">R$ {{ nota.liquido }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        </div>
+        {% endfor %}
+    {% else %}
+        <p style="color: var(--text-dim);">Nenhuma nota importada ainda.</p>
+    {% endif %}
+</div>
+{% endblock %}

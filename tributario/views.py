@@ -15,13 +15,17 @@ from core.models import Ativo, Operacao, VendaLote
 from .darf import URL_SICALC, acrescimos_ate, desfazer_pagamento, registrar_pagamento, situacao_das_darfs
 from .eventos import EventoInvalido, aplicar_evento, desfazer_evento
 from .forms import EventoCorporativoForm, PagamentoDarfForm, ProventoForm, SaldoInicialFiscalForm
-from .models import Darf, EventoCorporativo, Provento, SaldoInicialFiscal
+from .models import Darf, EventoCorporativo, NotaCorretagem, Provento, SaldoInicialFiscal
+from .notas import (
+    ExclusaoBloqueada, ImportacaoInvalida, NotaInvalida, NotaLida, excluir_notas, importar_notas, ler_notas_pdf,
+    simular_importacao, sugerir_ticker,
+)
 from .proventos import excluir_provento, ir_retido_sugerido, sincronizar_lancamento_provento
 from .relatorio import AVISO as AVISO_RELATORIO
 from .relatorio import gerar_excel_relatorio_anual, gerar_pdf_relatorio_anual, gerar_relatorio_anual
 from .services import (
-    COMUM, DAY_TRADE, GRUPO_COMUM, GRUPO_LABELS, GRUPOS, MODALIDADE_LABELS, apurar_meses, apurar_operacoes,
-    parametro_vigente, prejuizos_iniciais_do_usuario, simular_venda,
+    COMUM, DAY_TRADE, GRUPO_COMUM, GRUPO_LABELS, GRUPOS, MODALIDADE_LABELS, ORIGEM_LABELS, ORIGEM_TODAS,
+    apurar_meses, apurar_operacoes, parametro_vigente, prejuizos_iniciais_do_usuario, simular_venda,
 )
 
 
@@ -43,10 +47,24 @@ def imposto_renda(request):
     prejuízos que ainda podem ser compensados.
     """
     hoje = timezone.localdate()
+    origem = request.GET.get("origem", ORIGEM_TODAS)
+    if origem not in ORIGEM_LABELS:
+        origem = ORIGEM_TODAS
     apuracao = apurar_operacoes(request.user)
     meses = apurar_meses(request.user, apuracao)
+    # as DARFs seguem sempre a apuração completa - o filtro de origem é só para conferência
     situacoes = situacao_das_darfs(request.user, meses)
+    if origem != ORIGEM_TODAS:
+        apuracao = apurar_operacoes(request.user, origem=origem)
+        meses = apurar_meses(request.user, apuracao)
     ano, anos = _ano_escolhido(request, sorted({m.ano for m in meses}, reverse=True))
+
+    notas_por_mes: dict[tuple[int, int], int] = {}
+    for data_pregao in NotaCorretagem.objects.filter(usuario=request.user).values_list("data_pregao", flat=True):
+        chave = (data_pregao.year, data_pregao.month)
+        notas_por_mes[chave] = notas_por_mes.get(chave, 0) + 1
+    for mes in meses:
+        mes.notas_importadas = notas_por_mes.get((mes.ano, mes.mes), 0)
 
     mes_atual = next((m for m in meses if (m.ano, m.mes) == (hoje.year, hoje.month)), None)
     parametro = mes_atual.parametro if mes_atual else parametro_vigente(hoje)
@@ -80,6 +98,9 @@ def imposto_renda(request):
         "darfs_vencidas": sum(1 for s in situacoes if s.status == "VENCIDA"),
         "ano": ano,
         "anos": anos,
+        "origem": origem,
+        "origens": list(ORIGEM_LABELS.items()),
+        "total_notas": sum(notas_por_mes.values()),
         "inconsistencias": apuracao.inconsistencias,
         "form_saldo": SaldoInicialFiscalForm(instance=saldo_inicial),
     })
@@ -400,3 +421,178 @@ def posicao_fiscal(request):
         "inconsistencias": apuracao.inconsistencias,
         "data_referencia": timezone.localdate(),
     })
+
+
+# --------------------------------------------------------------------------
+# Importação das notas de corretagem (PDF)
+
+_SESSAO_NOTAS = "notas_corretagem_lidas"
+_SESSAO_AVISOS = "notas_corretagem_avisos"
+TAMANHO_MAXIMO_PDF = 10 * 1024 * 1024
+
+
+def _notas_da_sessao(request) -> list[NotaLida]:
+    return [NotaLida.de_dict(dados) for dados in request.session.get(_SESSAO_NOTAS, [])]
+
+
+def _limpar_sessao_notas(request) -> None:
+    request.session.pop(_SESSAO_NOTAS, None)
+    request.session.pop(_SESSAO_AVISOS, None)
+
+
+def _meses_com_notas(usuario) -> list[dict]:
+    """Notas já importadas agrupadas por mês (mais recente primeiro), para a lista e o botão de excluir."""
+    grupos: dict[tuple[int, int], list[NotaCorretagem]] = {}
+    for nota in NotaCorretagem.objects.filter(usuario=usuario).order_by("-data_pregao", "-numero"):
+        grupos.setdefault((nota.data_pregao.year, nota.data_pregao.month), []).append(nota)
+    return [
+        {
+            "ano": ano, "mes": mes, "competencia": f"{mes:02d}/{ano}", "notas": notas,
+            "compras": sum((n.valor_compras for n in notas), Decimal("0")),
+            "vendas": sum((n.valor_vendas for n in notas), Decimal("0")),
+            "custos": sum((n.custos for n in notas), Decimal("0")),
+        }
+        for (ano, mes), notas in grupos.items()
+    ]
+
+
+@login_required
+def notas_importar(request):
+    """
+    Envio dos PDFs das notas de negociação. As notas lidas ficam na sessão até
+    o usuário conferir a prévia (tickers, baixas e IR) e confirmar.
+    """
+    if request.method == "POST":
+        arquivos = request.FILES.getlist("arquivos")
+        if not arquivos:
+            messages.error(request, "Escolha pelo menos um PDF de nota de negociação.")
+            return redirect("tributario:notas_importar")
+        notas: dict[tuple[str, str], NotaLida] = {}
+        avisos: list[str] = []
+        for arquivo in arquivos:
+            if arquivo.size > TAMANHO_MAXIMO_PDF:
+                avisos.append(f"{arquivo.name}: arquivo maior que 10 MB, ignorado.")
+                continue
+            try:
+                lido = ler_notas_pdf(arquivo.read(), arquivo.name)
+            except NotaInvalida as exc:
+                avisos.append(str(exc))
+                continue
+            avisos.extend(lido.avisos)
+            for nota in lido.notas:
+                notas[(nota.corretora, nota.numero)] = nota  # o mesmo PDF enviado duas vezes não duplica
+        if not notas:
+            for aviso in avisos:
+                messages.warning(request, aviso)
+            messages.error(request, "Nenhuma nota do mercado à vista encontrada nos arquivos enviados.")
+            return redirect("tributario:notas_importar")
+        request.session[_SESSAO_NOTAS] = [
+            nota.como_dict() for nota in sorted(notas.values(), key=lambda n: (n.data, n.numero))
+        ]
+        request.session[_SESSAO_AVISOS] = avisos
+        return redirect("tributario:notas_previa")
+
+    return render(request, "tributario/notas_importar.html", {"meses_notas": _meses_com_notas(request.user)})
+
+
+@login_required
+def notas_previa(request):
+    """
+    Prévia da importação: ticker de cada papel (editável), como cada venda dá
+    baixa nos lotes e o IR dos meses depois da importação. "Confirmar" grava.
+    """
+    notas = _notas_da_sessao(request)
+    if not notas:
+        messages.info(request, "Envie os PDFs das notas para importar.")
+        return redirect("tributario:notas_importar")
+
+    titulos: dict[str, str] = {}  # chave -> especificação como saiu na nota
+    for nota in notas:
+        for negocio in nota.importaveis:
+            titulos.setdefault(negocio.chave, negocio.especificacao)
+
+    if request.method == "POST":
+        if request.POST.get("acao") == "cancelar":
+            _limpar_sessao_notas(request)
+            messages.info(request, "Importação cancelada - nada foi gravado.")
+            return redirect("tributario:notas_importar")
+        tickers = {
+            chave: request.POST.get(f"ticker_{indice}", "").strip().upper()
+            for indice, chave in enumerate(titulos)
+        }
+        if request.POST.get("acao") == "confirmar":
+            try:
+                resumo = importar_notas(request.user, notas, tickers)
+            except ImportacaoInvalida as exc:
+                messages.error(request, str(exc))
+            else:
+                _limpar_sessao_notas(request)
+                texto = (
+                    f"{len(resumo.notas_importadas)} nota(s) importada(s), "
+                    f"{len(resumo.linhas)} operação(ões) gravada(s)."
+                )
+                if resumo.notas_repetidas:
+                    texto += f" Já importadas antes (puladas): {', '.join(resumo.notas_repetidas)}."
+                messages.success(request, texto)
+                return redirect(f"{reverse('tributario:imposto_renda')}?origem=notas")
+    else:
+        tickers = {chave: sugerir_ticker(especificacao) for chave, especificacao in titulos.items()}
+
+    resumo, meses, erro = None, [], ""
+    faltando = [titulos[chave] for chave, ticker in tickers.items() if not ticker]
+    if faltando:
+        erro = "Informe o ticker de: " + ", ".join(faltando) + "."
+    else:
+        resumo, meses, erro = simular_importacao(request.user, notas, tickers)
+
+    return render(request, "tributario/notas_previa.html", {
+        "notas": notas,
+        "avisos": request.session.get(_SESSAO_AVISOS, []) + [f"Nota {n.numero}: {a}" for n in notas for a in n.avisos],
+        "titulos": [
+            {"indice": indice, "especificacao": especificacao, "ticker": tickers.get(chave, "")}
+            for indice, (chave, especificacao) in enumerate(titulos.items())
+        ],
+        "resumo": resumo,
+        "meses": meses,
+        "erro": erro,
+        "total_custos": sum((n.custos for n in notas), Decimal("0")),
+    })
+
+
+def _voltar(request, padrao: str):
+    proximo = request.POST.get("proximo") or ""
+    return redirect(proximo if proximo.startswith("/") and not proximo.startswith("//") else padrao)
+
+
+@login_required
+@require_POST
+def nota_excluir(request, nota_id):
+    """Exclui uma nota importada e as compras e vendas criadas por ela."""
+    nota = get_object_or_404(NotaCorretagem, id=nota_id, usuario=request.user)
+    descricao = f"{nota.numero} de {nota.data_pregao:%d/%m/%Y}"
+    try:
+        excluir_notas(request.user, NotaCorretagem.objects.filter(pk=nota.pk))
+    except ExclusaoBloqueada as exc:
+        messages.error(request, str(exc))
+    else:
+        messages.success(request, f"Nota {descricao} excluída, com as compras e vendas dela.")
+    return _voltar(request, reverse("tributario:notas_importar"))
+
+
+@login_required
+@require_POST
+def notas_mes_excluir(request, ano, mes):
+    """Exclui todas as notas importadas de um mês - a apuração do mês é refeita sem elas."""
+    notas = NotaCorretagem.objects.filter(usuario=request.user, data_pregao__year=ano, data_pregao__month=mes)
+    try:
+        quantidade = excluir_notas(request.user, notas)
+    except ExclusaoBloqueada as exc:
+        messages.error(request, str(exc))
+    else:
+        if quantidade:
+            messages.success(
+                request, f"{quantidade} nota(s) de {mes:02d}/{ano} excluída(s), com as compras e vendas delas."
+            )
+        else:
+            messages.info(request, f"Nenhuma nota importada em {mes:02d}/{ano}.")
+    return _voltar(request, reverse("tributario:imposto_renda"))

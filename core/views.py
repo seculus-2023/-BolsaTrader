@@ -1149,7 +1149,25 @@ def scanner_tecnico(request):
     """
     resultados = escanear_carteira(request.user)
     notificar_compras_scanner_telegram(request.user, resultados)
-    return render(request, "core/scanner_tecnico.html", {"resultados": resultados})
+
+    # Destaca (e põe no topo) os ativos que tiveram oportunidade de compra
+    # avisada hoje pelo Telegram - inclusive as avisadas pelo ciclo automático.
+    alertas_hoje = {
+        alerta.ativo_id: alerta
+        for alerta in Alerta.objects.filter(
+            usuario=request.user, tipo=Alerta.SCANNER_COMPRA, criado_em__date=timezone.localdate(),
+        )
+    }
+    for item in resultados:
+        alerta = alertas_hoje.get(item["ativo"].id)
+        item["oportunidade_enviada"] = alerta is not None
+        item["oportunidade_hora"] = timezone.localtime(alerta.criado_em).strftime("%H:%M") if alerta else None
+    resultados.sort(key=lambda item: not item["oportunidade_enviada"])
+
+    return render(request, "core/scanner_tecnico.html", {
+        "resultados": resultados,
+        "total_oportunidades": sum(1 for item in resultados if item["oportunidade_enviada"]),
+    })
 
 
 @login_required

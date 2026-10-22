@@ -5445,6 +5445,24 @@ class ScannerTecnicoViewTests(TestCase):
 
         self.assertContains(resposta, "Só Nome Curto")
 
+    def test_destaca_no_topo_ativo_com_oportunidade_avisada_hoje(self):
+        for ticker in ("AAAA3", "ZZZZ3"):
+            Operacao.objects.create(
+                usuario=self.usuario, ativo=Ativo.objects.create(ticker=ticker), tipo=Operacao.COMPRA,
+                quantidade=10, preco_unitario=Decimal("30.00"), data_operacao=date.today(),
+            )
+        Alerta.objects.create(
+            usuario=self.usuario, ativo=Ativo.objects.get(ticker="ZZZZ3"),
+            tipo=Alerta.SCANNER_COMPRA, mensagem="ZZZZ3 na entrada",
+        )
+
+        resposta = self.client.get(reverse("core:scanner_tecnico"))
+
+        self.assertContains(resposta, "card-oportunidade-compra", count=1)
+        self.assertContains(resposta, "1 oportunidade de compra")
+        conteudo = resposta.content.decode()
+        self.assertLess(conteudo.index("ZZZZ3"), conteudo.index("AAAA3"))
+
     def test_mostra_reserva_com_selo_mas_nao_ativo_de_outro_usuario(self):
         reservado = Ativo.objects.create(ticker="RESV3")
         Operacao.objects.create(

@@ -18,9 +18,24 @@
 </div>
 {% endif %}
 
+{% if total_oportunidades %}
+<div class="card-glass card-oportunidade-aviso" style="margin-top: 1rem;">
+    <p style="margin: 0;">
+        🛒 <strong>{{ total_oportunidades }} oportunidade{{ total_oportunidades|pluralize }} de compra</strong>
+        avisada{{ total_oportunidades|pluralize }} hoje pelo Telegram &mdash; destacada{{ total_oportunidades|pluralize }}
+        em verde no topo. A cotação chegou à entrada sugerida do plano de trade.
+    </p>
+</div>
+{% endif %}
+
 <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 1.2rem; margin-top: 1.2rem;">
     {% for r in resultados %}
-    <div class="card-glass">
+    <div class="card-glass{% if r.oportunidade_enviada %} card-oportunidade-compra{% endif %}">
+        {% if r.oportunidade_enviada %}
+        <div class="faixa-oportunidade-compra">
+            🛒 Oportunidade de compra &middot; enviada ao Telegram às {{ r.oportunidade_hora }}
+        </div>
+        {% endif %}
         <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: .6rem; flex-wrap: wrap;">
             <h3 style="margin: 0;">
                 {{ r.ativo.ticker }}
@@ -83,7 +98,7 @@
         </div>
         {% endif %}
 
-        <a href="{% url 'core:operacao_nova' %}?ticker={{ r.ativo.ticker }}&tipo=COMPRA" class="btn-futurista btn-secundario" style="margin-top: 1rem; width: 100%; text-align: center;">🛒 Comprar {{ r.ativo.ticker }}</a>
+        <a href="{% url 'core:operacao_nova' %}?ticker={{ r.ativo.ticker }}&tipo=COMPRA" class="btn-futurista{% if not r.oportunidade_enviada %} btn-secundario{% endif %}" style="margin-top: 1rem; width: 100%; text-align: center;">🛒 Comprar {{ r.ativo.ticker }}</a>
     </div>
     {% endfor %}
 </div>

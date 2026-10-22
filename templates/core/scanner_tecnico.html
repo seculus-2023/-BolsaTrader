@@ -91,6 +91,7 @@
                 <li>Stop: R$ {{ r.plano_trade.stop }}</li>
                 <li>Alvo: R$ {{ r.plano_trade.alvo }}</li>
                 {% if r.plano_trade.relacao_risco_retorno %}<li>Relação risco-retorno: 1:{{ r.plano_trade.relacao_risco_retorno }}</li>{% endif %}
+                {% if r.plano_trade.ganho is not None %}<li>Ganho no alvo: R$ {{ r.plano_trade.ganho|floatformat:2 }} por ação{% if r.plano_trade.ganho_pct is not None %} ({{ r.plano_trade.ganho_pct|floatformat:2 }}%){% endif %}</li>{% endif %}
             </ul>
             {% if r.plano_trade.observacao %}
             <p style="margin: .5rem 0 0; font-size: .74rem; color: var(--text-dim);">{{ r.plano_trade.observacao }}</p>

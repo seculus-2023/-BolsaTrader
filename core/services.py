@@ -3659,6 +3659,9 @@ def sugerir_plano_trade(
         "stop": stop,
         "alvo": alvo,
         "relacao_risco_retorno": round(retorno / risco, 2) if risco else None,
+        # Ganho por ação se o alvo for atingido, em R$ e em % sobre a entrada.
+        "ganho": round(retorno, 2),
+        "ganho_pct": round(retorno / entrada * 100, 2) if entrada else None,
     }
 
 

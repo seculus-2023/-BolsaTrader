@@ -5237,6 +5237,8 @@ class AtrSuporteResistenciaPlanoTradeTests(TestCase):
         self.assertEqual(plano["stop"], 8.0)
         self.assertEqual(plano["alvo"], 12.0)
         self.assertEqual(plano["relacao_risco_retorno"], 1.0)
+        self.assertEqual(plano["ganho"], 2.0)
+        self.assertEqual(plano["ganho_pct"], 20.0)
         self.assertIsNone(plano["observacao"])
 
     def test_plano_trade_de_venda_usa_resistencia_como_stop_e_suporte_como_alvo(self):

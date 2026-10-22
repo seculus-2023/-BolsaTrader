@@ -11,4 +11,6 @@ waitress==3.0.*
 whitenoise==6.8.*
 openpyxl==3.1.*
 reportlab==4.2.*
+# Leitura das notas de corretagem em PDF (tributario/notas.py)
+pymupdf==1.28.*
 cryptography==46.*

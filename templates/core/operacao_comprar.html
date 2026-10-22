@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% load static %}
 {% block titulo %}Comprar {{ operacao.ativo.ticker }} - BolsaTrader{% endblock %}
 {% block conteudo %}
 <h1>Efetivar compra de {{ operacao.ativo.ticker }}</h1>
@@ -21,4 +22,5 @@
         <a href="{% url 'core:operacao_lista' %}" class="btn-futurista btn-secundario">Cancelar</a>
     </form>
 </div>
+<script src="{% static 'js/preco_alvo.js' %}"></script>
 {% endblock %}

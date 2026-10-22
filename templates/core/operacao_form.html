@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% load static %}
 {% block titulo %}Nova operação - BolsaTrader{% endblock %}
 {% block conteudo %}
 <h1>Registrar Compra / Reserva</h1>
@@ -179,7 +180,10 @@
             if (quantidade && !(tipo && tipo.value === "RESERVAR")) quantidade.value = ultimo.quantidade;
             if (campoPreco && !campoPreco.value) campoPreco.value = String(ultimo.preco_entrada);
             if (metaPerda) metaPerda.value = (-ultimo.queda_ate_stop_pct).toFixed(2);
-            if (metaLucro) metaLucro.value = ((ultimo.alvo - ultimo.preco_entrada) / ultimo.preco_entrada * 100).toFixed(2);
+            if (metaLucro) {
+                metaLucro.value = ((ultimo.alvo - ultimo.preco_entrada) / ultimo.preco_entrada * 100).toFixed(2);
+                metaLucro.dispatchEvent(new Event("change"));
+            }
         });
 
         if (campoTicker.value) calcular();
@@ -206,4 +210,5 @@
         ajustarLimiteQuantidade();
     })();
 </script>
+<script src="{% static 'js/preco_alvo.js' %}"></script>
 {% endblock %}

@@ -33,6 +33,56 @@ class MetasValidacaoMixin:
         return valor
 
 
+class PrecoAlvoMixin:
+    """
+    Campo "Preço alvo (R$)" ao lado da meta de lucro. O alvo continua sendo
+    calculado (preço de compra + meta de lucro, ou a meta padrão), mas pode
+    ser editado: quando o alvo informado é diferente do calculado, a meta de
+    lucro (%) é refeita a partir dele. O que fica gravado é só a meta - o
+    alvo é sempre derivado dela (Operacao.preco_alvo).
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["preco_alvo"] = forms.DecimalField(
+            label="Preço alvo (R$) - calculado pela meta de lucro, edite se quiser",
+            max_digits=12, decimal_places=2, min_value=Decimal("0.01"), required=False,
+            widget=forms.NumberInput(attrs={
+                "step": "0.01",
+                "data-meta-padrao": str(settings.META_LUCRO_PADRAO),
+            }),
+        )
+        if self.instance.pk and self.instance.preco_alvo is not None and not self.is_bound:
+            self.initial["preco_alvo"] = self.instance.preco_alvo
+        # posiciona logo depois da meta de lucro
+        ordem = [nome for nome in self.fields if nome != "preco_alvo"]
+        if "meta_lucro_pct" in ordem:
+            ordem.insert(ordem.index("meta_lucro_pct") + 1, "preco_alvo")
+            self.order_fields(ordem)
+
+    def clean(self):
+        cleaned_data = super().clean()
+        alvo = cleaned_data.get("preco_alvo")
+        preco = cleaned_data.get("preco_unitario")
+        if alvo is None or not preco or "meta_lucro_pct" in self.errors:
+            return cleaned_data
+        meta = cleaned_data.get("meta_lucro_pct")
+        meta_efetiva = abs(meta if meta is not None else Decimal(str(settings.META_LUCRO_PADRAO)))
+        alvo_calculado = (preco * (1 + meta_efetiva / 100)).quantize(Decimal("0.01"))
+        if alvo == alvo_calculado:
+            return cleaned_data
+        if alvo <= preco:
+            self.add_error("preco_alvo", "O preço alvo deve ser maior que o preço de compra.")
+            return cleaned_data
+        nova_meta = ((alvo / preco - 1) * 100).quantize(Decimal("0.01"))
+        if nova_meta >= Decimal("10000"):
+            self.add_error("preco_alvo", "Preço alvo alto demais em relação ao preço de compra.")
+            return cleaned_data
+        cleaned_data["meta_lucro_pct"] = nova_meta
+        self.instance.meta_lucro_pct = nova_meta
+        return cleaned_data
+
+
 class TaxasCompraMixin:
     """Deixa "Taxas da compra" opcional nos formulários de compra (vazio = R$ 0,00)."""
 
@@ -46,7 +96,7 @@ class TaxasCompraMixin:
         return self.cleaned_data.get("taxas_compra") or Decimal("0")
 
 
-class OperacaoForm(MetasValidacaoMixin, TaxasCompraMixin, forms.ModelForm):
+class OperacaoForm(PrecoAlvoMixin, MetasValidacaoMixin, TaxasCompraMixin, forms.ModelForm):
     ticker = forms.CharField(
         label="Ticker do ativo (ex: PETR4, VALE3, ITUB4)",
         max_length=12,
@@ -133,7 +183,7 @@ class OperacaoForm(MetasValidacaoMixin, TaxasCompraMixin, forms.ModelForm):
         return operacao
 
 
-class ConfirmarCompraForm(MetasValidacaoMixin, TaxasCompraMixin, forms.ModelForm):
+class ConfirmarCompraForm(PrecoAlvoMixin, MetasValidacaoMixin, TaxasCompraMixin, forms.ModelForm):
     """
     Efetiva uma reserva (intenção de compra) como uma compra real: converte o
     mesmo registro de tipo Reservar para Compra, com a quantidade e o preço
@@ -189,7 +239,7 @@ class ConfirmarCompraForm(MetasValidacaoMixin, TaxasCompraMixin, forms.ModelForm
         return cleaned_data
 
 
-class EditarCompraForm(MetasValidacaoMixin, TaxasCompraMixin, forms.ModelForm):
+class EditarCompraForm(PrecoAlvoMixin, MetasValidacaoMixin, TaxasCompraMixin, forms.ModelForm):
     """Corrige os dados de uma compra já registrada (ticker, nome, quantidade, preço, data e metas)."""
 
     ticker = forms.CharField(

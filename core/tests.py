@@ -99,6 +99,50 @@ class OperacaoFormTests(TestCase):
         self.assertTrue(form.is_valid(), form.errors)
 
 
+class PrecoAlvoFormTests(TestCase):
+    """Preço alvo no cadastro da compra: calculado pela meta, mas editável (editar refaz a meta)."""
+
+    def _dados(self, **extra):
+        dados = {
+            "ticker": "PETR4", "tipo": Operacao.COMPRA, "quantidade": "10",
+            "preco_unitario": "20.00", "data_operacao": date.today().isoformat(),
+            "meta_lucro_pct": "10.00", "meta_perda_pct": "", "observacao": "", "preco_alvo": "",
+        }
+        dados.update(extra)
+        return dados
+
+    def test_alvo_vazio_mantem_meta(self):
+        form = OperacaoForm(data=self._dados())
+        self.assertTrue(form.is_valid(), form.errors)
+        self.assertEqual(form.cleaned_data["meta_lucro_pct"], Decimal("10.00"))
+
+    def test_alvo_igual_ao_calculado_mantem_meta(self):
+        form = OperacaoForm(data=self._dados(preco_alvo="22.00"))
+        self.assertTrue(form.is_valid(), form.errors)
+        self.assertEqual(form.cleaned_data["meta_lucro_pct"], Decimal("10.00"))
+
+    def test_alvo_editado_refaz_meta_de_lucro(self):
+        form = OperacaoForm(data=self._dados(preco_alvo="25.00"))
+        self.assertTrue(form.is_valid(), form.errors)
+        operacao = form.save(commit=False)
+        self.assertEqual(operacao.meta_lucro_pct, Decimal("25.00"))
+        self.assertEqual(operacao.preco_alvo, Decimal("25.00"))
+
+    def test_alvo_editado_sem_meta_informada(self):
+        form = OperacaoForm(data=self._dados(meta_lucro_pct="", preco_alvo="30.00"))
+        self.assertTrue(form.is_valid(), form.errors)
+        self.assertEqual(form.cleaned_data["meta_lucro_pct"], Decimal("50.00"))
+
+    def test_alvo_abaixo_do_preco_e_invalido(self):
+        form = OperacaoForm(data=self._dados(preco_alvo="19.00"))
+        self.assertFalse(form.is_valid())
+        self.assertIn("preco_alvo", form.errors)
+
+    def test_campo_fica_depois_da_meta_de_lucro(self):
+        nomes = list(OperacaoForm().fields)
+        self.assertEqual(nomes.index("preco_alvo"), nomes.index("meta_lucro_pct") + 1)
+
+
 class OperacaoTipoReservarTests(TestCase):
     def _dados(self, tipo, quantidade):
         return {

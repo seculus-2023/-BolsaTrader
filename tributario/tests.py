@@ -1219,6 +1219,31 @@ class ImportacaoNotasTests(TestCase):
         self.assertFalse(Operacao.objects.exists())
         self.assertFalse(LancamentoContaCorrente.objects.exists())
 
+    def test_compra_ja_lancada_a_mao_e_vinculada_sem_duplicar(self):
+        manual = Operacao.objects.create(
+            usuario=self.usuario, ativo=Ativo.objects.create(ticker="HYPE3"), tipo=Operacao.COMPRA,
+            quantidade=10, preco_unitario=Decimal("20.05"), data_operacao=D1, observacao="Lançada à mão.",
+        )
+        resumo = importar_notas(self.usuario, [_nota("1", D1, [("C", "HYPERA ON NM", 10, "20.00")], custos="0.10")], TICKERS)
+
+        self.assertEqual(Operacao.objects.filter(usuario=self.usuario).count(), 1)
+        manual.refresh_from_db()
+        self.assertEqual(manual.preco_unitario, Decimal("20.00"))
+        self.assertEqual(manual.taxas_compra, Decimal("0.10"))
+        self.assertIn("Vinculada à nota 1", manual.observacao)
+        self.assertEqual(list(NotaCorretagem.objects.get().operacoes.all()), [manual])
+        self.assertEqual(resumo.linhas[0].destino, "lote existente")
+        self.assertEqual(LancamentoContaCorrente.objects.get(operacao=manual).valor, Decimal("200.10"))
+
+    def test_compra_a_mao_com_quantidade_diferente_nao_e_vinculada(self):
+        Operacao.objects.create(
+            usuario=self.usuario, ativo=Ativo.objects.create(ticker="HYPE3"), tipo=Operacao.COMPRA,
+            quantidade=5, preco_unitario=Decimal("20"), data_operacao=D1,
+        )
+        resumo = importar_notas(self.usuario, [_nota("1", D1, [("C", "HYPERA ON NM", 10, "20.00")])], TICKERS)
+        self.assertEqual(Operacao.objects.filter(usuario=self.usuario).count(), 2)
+        self.assertEqual(resumo.linhas[0].destino, "lote novo")
+
     def test_apuracao_por_origem(self):
         manual = Operacao.objects.create(
             usuario=self.usuario, ativo=Ativo.objects.create(ticker="VALE3"), tipo=Operacao.COMPRA,

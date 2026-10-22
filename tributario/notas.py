@@ -471,6 +471,23 @@ def _consolidar(nota: NotaLida, tickers: dict[str, str]) -> list[dict]:
     return lista
 
 
+def _compra_lancada_a_mao(usuario, nota: NotaLida, grupo: dict) -> Operacao | None:
+    """
+    Compra já lançada à mão que corresponde a esta linha da nota: mesmo ativo,
+    data e quantidade, sem nota vinculada e sem ajuste de evento corporativo.
+    O preço pode diferir um pouco (o lançado à mão costuma ser aproximado).
+    """
+    return (
+        Operacao.objects.filter(
+            usuario=usuario, tipo=Operacao.COMPRA, ativo__ticker=grupo["ticker"], data_operacao=nota.data,
+            quantidade=grupo["quantidade"], evento__isnull=True, quantidade_original__isnull=True,
+            notas_corretagem__isnull=True,
+        )
+        .order_by("pk")
+        .first()
+    )
+
+
 def _dar_baixa(usuario, nota: NotaLida, registro: NotaCorretagem, grupo: dict) -> str:
     """Grava a venda nos lotes com saldo: primeiro os comprados no mesmo dia, depois os mais antigos."""
     lotes = [
@@ -524,16 +541,29 @@ def importar_notas(usuario, notas: list[NotaLida], tickers: dict[str, str]) -> R
             custos=nota.custos, irrf=nota.irrf, liquido=nota.liquido,
         )
         for grupo in (g for g in grupos if g["cv"] == "C"):
-            lote = Operacao.objects.create(
-                usuario=usuario, ativo=_ativo(grupo["ticker"], grupo["especificacao"]), tipo=Operacao.COMPRA,
-                quantidade=grupo["quantidade"], preco_unitario=grupo["preco"], data_operacao=nota.data,
-                taxas_compra=grupo["taxas"], observacao=f"Importada da nota {nota.numero} ({nota.corretora}).",
-            )
+            lote = _compra_lancada_a_mao(usuario, nota, grupo)
+            if lote:
+                # a compra já foi lançada à mão: a nota assume esse lote (com o
+                # preço e as taxas oficiais) em vez de duplicar a posição
+                lote.preco_unitario = grupo["preco"]
+                lote.taxas_compra = grupo["taxas"]
+                lote.observacao = " ".join(filter(None, [
+                    lote.observacao, f"Vinculada à nota {nota.numero} ({nota.corretora}).",
+                ]))
+                lote.save(update_fields=["preco_unitario", "taxas_compra", "observacao"])
+                destino = "lote existente"
+            else:
+                lote = Operacao.objects.create(
+                    usuario=usuario, ativo=_ativo(grupo["ticker"], grupo["especificacao"]), tipo=Operacao.COMPRA,
+                    quantidade=grupo["quantidade"], preco_unitario=grupo["preco"], data_operacao=nota.data,
+                    taxas_compra=grupo["taxas"], observacao=f"Importada da nota {nota.numero} ({nota.corretora}).",
+                )
+                destino = "lote novo"
             sincronizar_lancamento_compra(lote)
             registro.operacoes.add(lote)
             resumo.linhas.append(LinhaImportada(
                 data=nota.data, nota=nota.numero, ticker=grupo["ticker"], cv="C", quantidade=grupo["quantidade"],
-                preco=grupo["preco"], taxas=grupo["taxas"], destino="lote novo", day_trade=grupo["day_trade"],
+                preco=grupo["preco"], taxas=grupo["taxas"], destino=destino, day_trade=grupo["day_trade"],
             ))
         for grupo in (g for g in grupos if g["cv"] == "V"):
             _ativo(grupo["ticker"], grupo["especificacao"])

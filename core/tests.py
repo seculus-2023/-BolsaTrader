@@ -3991,6 +3991,7 @@ class RelatorioScannerEIaServicosTests(TestCase):
             "plano_trade": {
                 "acao_label": "Considere comprar / reforçar a posição", "observacao": None,
                 "entrada": 12.5, "stop": 11.0, "alvo": 15.0, "relacao_risco_retorno": 1.67,
+                "ganho": 2.5, "ganho_pct": 20.0,
             },
         }
 
@@ -4024,6 +4025,8 @@ class RelatorioScannerEIaServicosTests(TestCase):
         linha_dados = [c.value for c in ws1[6]]
         self.assertEqual(linha_dados[0], "SCIA3")
         self.assertEqual(linha_dados[1], "Não")
+        self.assertEqual(linha_dados[cabecalho.index("Ganho no alvo (R$)")], 2.5)
+        self.assertEqual(linha_dados[cabecalho.index("Ganho no alvo (%)")], 20.0)
 
         ws2 = wb["Análise da B3 (IA)"]
         valores_ws2 = [c.value for row in ws2.iter_rows() for c in row if c.value]

@@ -3852,6 +3852,7 @@ COLUNAS_SCANNER = [
     "Ativo", "Reservado", "Veredito", "IFR (RSI)", "Médias móveis", "MACD", "Volume",
     "Suporte e resistência", "Tendência", "Volatilidade (30d, %)", "ATR (14d, R$)",
     "Suporte (R$)", "Resistência (R$)", "Entrada", "Stop", "Alvo", "Relação R:R",
+    "Ganho no alvo (R$)", "Ganho no alvo (%)",
 ]
 
 
@@ -3877,6 +3878,8 @@ def _linha_scanner(item: dict) -> list:
         plano["stop"] if plano else "—",
         plano["alvo"] if plano else "—",
         f"1:{plano['relacao_risco_retorno']}" if plano and plano.get("relacao_risco_retorno") else "—",
+        plano["ganho"] if plano and plano.get("ganho") is not None else "—",
+        plano["ganho_pct"] if plano and plano.get("ganho_pct") is not None else "—",
     ]
 
 
@@ -4279,7 +4282,7 @@ def gerar_pdf_scanner_e_analise_ia(
     if not resultados_scanner:
         elementos.append(Paragraph("Nenhum ativo em carteira para escanear.", estilos["Normal"]))
     else:
-        colunas_pdf = ["Ativo", "Reservado", "Veredito", "Suporte", "Resistência", "ATR", "Entrada", "Stop", "Alvo", "R:R"]
+        colunas_pdf = ["Ativo", "Reservado", "Veredito", "Suporte", "Resistência", "ATR", "Entrada", "Stop", "Alvo", "R:R", "Ganho", "Ganho %"]
         dados = [colunas_pdf]
         for item in resultados_scanner:
             plano = item.get("plano_trade")
@@ -4295,6 +4298,8 @@ def gerar_pdf_scanner_e_analise_ia(
                 f"R$ {plano['stop']}" if plano else "—",
                 f"R$ {plano['alvo']}" if plano else "—",
                 f"1:{plano['relacao_risco_retorno']}" if plano and plano.get("relacao_risco_retorno") else "—",
+                f"R$ {plano['ganho']}" if plano and plano.get("ganho") is not None else "—",
+                f"{plano['ganho_pct']}%" if plano and plano.get("ganho_pct") is not None else "—",
             ])
         tabela = Table(dados, repeatRows=1)
         tabela.setStyle(TableStyle([

@@ -28,9 +28,22 @@
 </div>
 {% endif %}
 
-<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 1.2rem; margin-top: 1.2rem;">
+{% if resultados %}
+<div class="card-glass" style="margin-top: 1rem;">
+    <div style="display: flex; flex-wrap: wrap; gap: .6rem; align-items: center;">
+        <input type="search" id="pesquisa-scanner" list="lista-pesquisa-scanner" placeholder="Pesquisar ativo (ex: PETR4)"
+               autocomplete="off" aria-label="Pesquisar ativo no scanner" style="max-width: 18rem;">
+        <datalist id="lista-pesquisa-scanner">
+            {% for r in resultados %}<option value="{{ r.ativo.ticker }}">{{ r.ativo.nome_longo|default:r.ativo.nome }}</option>{% endfor %}
+        </datalist>
+        <span id="contador-pesquisa-scanner" aria-live="polite" style="color: var(--text-dim); font-size: .85rem;"></span>
+    </div>
+</div>
+{% endif %}
+
+<div id="grade-scanner" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 1.2rem; margin-top: 1.2rem;">
     {% for r in resultados %}
-    <div class="card-glass{% if r.oportunidade_enviada %} card-oportunidade-compra{% endif %}">
+    <div class="card-glass{% if r.oportunidade_enviada %} card-oportunidade-compra{% endif %}" data-pesquisa="{{ r.ativo.ticker|lower }} {{ r.ativo.nome_longo|default:''|lower }} {{ r.ativo.nome|default:''|lower }}">
         {% if r.oportunidade_enviada %}
         <div class="faixa-oportunidade-compra">
             🛒 Oportunidade de compra &middot; enviada ao Telegram às {{ r.oportunidade_hora }}
@@ -103,6 +116,35 @@
     </div>
     {% endfor %}
 </div>
+<p id="sem-resultado-scanner" style="display: none; color: var(--text-dim); margin-top: 1rem;">Nenhum ativo encontrado para essa pesquisa.</p>
+
+<script>
+    (function () {
+        // Filtra os cards do scanner pelo ticker ou nome enquanto o usuário digita.
+        var campo = document.getElementById("pesquisa-scanner");
+        if (!campo) return;
+        var cards = document.querySelectorAll("#grade-scanner > [data-pesquisa]");
+        var contador = document.getElementById("contador-pesquisa-scanner");
+        var semResultado = document.getElementById("sem-resultado-scanner");
+
+        function filtrar() {
+            var termo = campo.value.trim().toLowerCase();
+            var visiveis = 0;
+            cards.forEach(function (card) {
+                var mostra = !termo || card.getAttribute("data-pesquisa").indexOf(termo) !== -1;
+                card.style.display = mostra ? "" : "none";
+                if (mostra) visiveis++;
+            });
+            contador.textContent = termo ? visiveis + " de " + cards.length + " ativos" : "";
+            semResultado.style.display = termo && !visiveis ? "" : "none";
+        }
+
+        campo.addEventListener("input", filtrar);
+        campo.addEventListener("keydown", function (e) {
+            if (e.key === "Escape") { campo.value = ""; filtrar(); }
+        });
+    })();
+</script>
 
 <div class="card-glass" style="margin-top: 1.5rem;">
     <h3 style="margin-top: 0;">Como ler este scanner</h3>

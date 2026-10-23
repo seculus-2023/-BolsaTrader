@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% block titulo %}Instalar o aplicativo - BolsaTrader{% endblock %}
+{% block conteudo %}
+<h1>Instalar o aplicativo</h1>
+<p style="color: var(--text-dim);">
+    O BolsaTrader abre como um programa, com ícone próprio na área de trabalho e no menu Iniciar.
+    Seus dados ficam guardados no servidor, então você acessa a mesma conta de qualquer computador ou celular.
+</p>
+
+<div class="card-glass" style="margin-bottom: 1.2rem; text-align: center;">
+    <p id="pwa-ja-instalado" hidden style="font-size: 1.1rem;">✅ O aplicativo já está aberto como programa neste aparelho.</p>
+    <div id="pwa-instalar-bloco">
+        <button type="button" id="btn-instalar-pwa-pagina" class="btn-futurista" style="display:none; font-size: 1.15rem; padding: .9rem 1.8rem;">
+            ⬇ Instalar no computador
+        </button>
+        <p id="pwa-sem-botao" style="color: var(--text-dim);">
+            Se o botão de instalar não aparecer, siga o passo a passo do seu aparelho abaixo.
+        </p>
+    </div>
+    <p style="margin-top: 1rem;"><a class="link-secundario" href="{% url 'core:dashboard' %}">Pular e ir para o painel →</a></p>
+</div>
+
+<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 1rem;">
+    <div class="card-glass">
+        <h3>💻 Computador: Chrome ou Edge</h3>
+        <ol>
+            <li>Abra o BolsaTrader no <strong>Google Chrome</strong> ou no <strong>Microsoft Edge</strong>.</li>
+            <li>Clique em <strong>⬇ Instalar no computador</strong> acima, ou no ícone de instalar no canto direito da barra de endereço.</li>
+            <li>Confirme em <strong>Instalar</strong>. O ícone aparece na área de trabalho e no menu Iniciar.</li>
+        </ol>
+        <small style="color: var(--text-dim);">No Edge também dá pelo menu ⋯ → Aplicativos → Instalar este site como aplicativo.</small>
+    </div>
+    <div class="card-glass">
+        <h3>🤖 Celular Android</h3>
+        <ol>
+            <li>Abra no <strong>Chrome</strong>.</li>
+            <li>Toque no menu <strong>⋮</strong> → <strong>Instalar aplicativo</strong> (ou "Adicionar à tela inicial").</li>
+            <li>Confirme. O ícone aparece junto com os outros aplicativos.</li>
+        </ol>
+    </div>
+    <div class="card-glass">
+        <h3>🍎 iPhone e iPad</h3>
+        <ol>
+            <li>Abra no <strong>Safari</strong>.</li>
+            <li>Toque em <strong>Compartilhar</strong> (quadrado com seta para cima).</li>
+            <li>Escolha <strong>Adicionar à Tela de Início</strong> e depois <strong>Adicionar</strong>.</li>
+        </ol>
+    </div>
+</div>
+
+<script>
+    (function () {
+        function marcarInstalado() {
+            document.getElementById("pwa-ja-instalado").hidden = false;
+            document.getElementById("pwa-instalar-bloco").hidden = true;
+        }
+        if (window.matchMedia("(display-mode: standalone)").matches || window.navigator.standalone === true) {
+            marcarInstalado();
+        }
+        // quando o navegador oferece a instalação, o pwa.js mostra o botão - aí o aviso some
+        window.addEventListener("beforeinstallprompt", function () {
+            document.getElementById("pwa-sem-botao").hidden = true;
+        });
+        window.addEventListener("appinstalled", marcarInstalado);
+    })();
+</script>
+{% endblock %}

@@ -67,7 +67,20 @@ class PerfilUsuario(models.Model):
     # LogoContaForm, poucos KB) e não em arquivo, pra não depender de volume
     # de mídia no Docker. Vazio = usa a marca padrão do BolsaTrader.
     logo = models.BinaryField("Logo da conta", null=True, blank=True, editable=False)
+    # Data limite de acesso da conta (inclusive), definida pelo superusuário no
+    # convite ou depois em "Convites"/admin. Vazio = sem limite. Vencida, o
+    # login é recusado e a sessão aberta é encerrada (accounts.middleware).
+    acesso_ate = models.DateField(
+        "Acesso válido até", null=True, blank=True,
+        help_text="Último dia em que a conta pode entrar no sistema. Vazio = sem limite.",
+    )
     atualizado_em = models.DateTimeField(auto_now=True)
+
+    @property
+    def acesso_vencido(self) -> bool:
+        from django.utils import timezone
+
+        return bool(self.acesso_ate) and self.acesso_ate < timezone.localdate()
 
     @property
     def logo_data_uri(self) -> str:
@@ -82,3 +95,64 @@ class PerfilUsuario(models.Model):
 
     def __str__(self):
         return f"Perfil de {self.usuario.username}"
+
+
+class ConviteCadastro(models.Model):
+    """
+    Link de convite para criar conta sem abrir o cadastro ao público: o
+    administrador gera o link (accounts.views.convites_view), manda para a
+    pessoa, e ela cria a conta em accounts.views.convite_cadastro_view.
+    Vale CONVITE_VALIDADE_DIAS e só uma vez; não fica preso a um e-mail.
+    """
+
+    token = models.CharField(max_length=64, unique=True, editable=False)
+    observacao = models.CharField(
+        "Para quem é", max_length=100, blank=True,
+        help_text="Só para você identificar o convite na lista (ex: João da contabilidade). Opcional.",
+    )
+    criado_por = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, related_name="convites_criados"
+    )
+    criado_em = models.DateTimeField(auto_now_add=True)
+    expira_em = models.DateTimeField()
+    usado_em = models.DateTimeField(null=True, blank=True)
+    usado_por = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="convite_usado",
+    )
+    cancelado = models.BooleanField(default=False)
+    # Validade de acesso da conta criada por este convite (só superusuário
+    # define); copiada para PerfilUsuario.acesso_ate no cadastro.
+    acesso_ate = models.DateField("Acesso da conta válido até", null=True, blank=True)
+
+    class Meta:
+        ordering = ["-criado_em"]
+        verbose_name = "Convite de cadastro"
+        verbose_name_plural = "Convites de cadastro"
+
+    def __str__(self):
+        return f"Convite {self.observacao or self.token[:8]} ({self.situacao})"
+
+    @property
+    def situacao(self) -> str:
+        from django.utils import timezone
+
+        if self.usado_em:
+            return "usado"
+        if self.cancelado:
+            return "cancelado"
+        if self.expira_em <= timezone.now():
+            return "vencido"
+        return "pendente"
+
+    @property
+    def valido(self) -> bool:
+        return self.situacao == "pendente"
+
+
+def acesso_expirado(usuario) -> bool:
+    """True se a conta tem data limite de acesso já vencida (superusuário nunca expira)."""
+    if not usuario.is_authenticated or usuario.is_superuser:
+        return False
+    acesso_ate = PerfilUsuario.objects.filter(usuario=usuario).values_list("acesso_ate", flat=True).first()
+    return PerfilUsuario(acesso_ate=acesso_ate).acesso_vencido

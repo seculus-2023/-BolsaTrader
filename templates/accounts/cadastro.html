@@ -6,6 +6,10 @@
         <div class="logo">⚡ BOLSATRADER</div>
         {% if user.is_authenticated %}
         <p class="subtitulo">Cadastrar um novo usuário</p>
+        {% elif convite %}
+        <p class="subtitulo">Você foi convidado(a)! Crie sua conta e depois instale o aplicativo no seu computador ou celular.</p>
+        <p style="color: var(--text-dim); font-size: .85rem;">Convite válido até {{ convite.expira_em|date:"d/m/Y H:i" }}.</p>
+        {% if convite.acesso_ate %}<p style="color: var(--text-dim); font-size: .85rem;">Seu acesso ao sistema vai até {{ convite.acesso_ate|date:"d/m/Y" }}.</p>{% endif %}
         {% else %}
         <p class="subtitulo">Crie sua conta para começar a registrar suas operações</p>
         {% endif %}

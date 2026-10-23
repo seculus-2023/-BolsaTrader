@@ -375,3 +375,188 @@ class LogoContaTests(TestCase):
         self.client.logout()
         resposta = self.client.get(reverse("core:painel_tv", args=[token]))
         self.assertContains(resposta, 'class="tv-logo"')
+
+
+@override_settings(CADASTRO_PUBLICO=False, CONVITE_VALIDADE_DIAS=5)
+class ConviteCadastroTests(TestCase):
+    """Link de convite: cria conta com o cadastro fechado, uma vez só e dentro da validade."""
+
+    def setUp(self):
+        self.admin = User.objects.create_user(username="admin_conv", password="SenhaForte123!", is_staff=True)
+        self.comum = User.objects.create_user(username="comum_conv", password="SenhaForte123!")
+
+    def _gerar(self):
+        from .models import ConviteCadastro
+
+        self.client.login(username="admin_conv", password="SenhaForte123!")
+        self.client.post(reverse("accounts:convites"), {"observacao": "Fulano"})
+        self.client.logout()
+        return ConviteCadastro.objects.latest("criado_em")
+
+    def _dados(self, username="convidado"):
+        return {
+            "username": username, "first_name": "Convidado", "email": "c@example.com",
+            "password1": "SenhaForte123!", "password2": "SenhaForte123!",
+        }
+
+    def test_staff_gera_convite_com_validade_do_env(self):
+        from datetime import timedelta
+        from django.utils import timezone
+
+        convite = self._gerar()
+        self.assertEqual(convite.observacao, "Fulano")
+        self.assertTrue(convite.valido)
+        self.assertAlmostEqual(
+            convite.expira_em, timezone.now() + timedelta(days=5), delta=timedelta(minutes=1)
+        )
+
+    def test_usuario_comum_nao_gera_convite(self):
+        from .models import ConviteCadastro
+
+        self.client.login(username="comum_conv", password="SenhaForte123!")
+        self.client.post(reverse("accounts:convites"), {})
+        self.assertFalse(ConviteCadastro.objects.exists())
+
+    def test_cadastro_pelo_convite_cria_conta_loga_e_vai_para_instalacao(self):
+        convite = self._gerar()
+        url = reverse("accounts:convite_cadastro", args=[convite.token])
+        self.assertEqual(self.client.get(url).status_code, 200)
+        resposta = self.client.post(url, self._dados())
+        self.assertRedirects(resposta, reverse("accounts:instalar_app"))
+        convite.refresh_from_db()
+        self.assertEqual(convite.usado_por.username, "convidado")
+        self.assertEqual(convite.situacao, "usado")
+
+    def test_convite_nao_pode_ser_usado_duas_vezes(self):
+        convite = self._gerar()
+        url = reverse("accounts:convite_cadastro", args=[convite.token])
+        self.client.post(url, self._dados())
+        self.client.logout()
+        resposta = self.client.post(url, self._dados(username="segundo"))
+        self.assertEqual(resposta.status_code, 410)
+        self.assertFalse(User.objects.filter(username="segundo").exists())
+
+    def test_convite_vencido_ou_cancelado_recusa(self):
+        from django.utils import timezone
+
+        convite = self._gerar()
+        url = reverse("accounts:convite_cadastro", args=[convite.token])
+        convite.expira_em = timezone.now()
+        convite.save()
+        self.assertContains(self.client.get(url), "venceu", status_code=410)
+
+        convite = self._gerar()
+        self.client.login(username="admin_conv", password="SenhaForte123!")
+        self.client.post(reverse("accounts:convite_cancelar", args=[convite.pk]))
+        self.client.logout()
+        resposta = self.client.post(reverse("accounts:convite_cadastro", args=[convite.token]), self._dados())
+        self.assertEqual(resposta.status_code, 410)
+        self.assertFalse(User.objects.filter(username="convidado").exists())
+
+    def test_token_inexistente_da_404(self):
+        self.assertEqual(self.client.get(reverse("accounts:convite_cadastro", args=["nao-existe"])).status_code, 404)
+
+    def test_tela_de_instalacao_exige_login(self):
+        self.assertEqual(self.client.get(reverse("accounts:instalar_app")).status_code, 302)
+        self.client.login(username="comum_conv", password="SenhaForte123!")
+        self.assertContains(self.client.get(reverse("accounts:instalar_app")), "btn-instalar-pwa-pagina")
+
+
+@override_settings(CADASTRO_PUBLICO=False)
+class ValidadeAcessoTests(TestCase):
+    """Data limite de acesso da conta criada por convite (só superusuário define)."""
+
+    def setUp(self):
+        self.super = User.objects.create_superuser(username="super_acesso", password="SenhaForte123!")
+        self.staff = User.objects.create_user(username="staff_acesso", password="SenhaForte123!", is_staff=True)
+
+    def _gerar(self, quem, acesso_ate=""):
+        from .models import ConviteCadastro
+
+        self.client.login(username=quem, password="SenhaForte123!")
+        self.client.post(reverse("accounts:convites"), {"acesso_ate": acesso_ate})
+        self.client.logout()
+        return ConviteCadastro.objects.latest("criado_em")
+
+    def _cadastrar(self, convite):
+        self.client.post(reverse("accounts:convite_cadastro", args=[convite.token]), {
+            "username": "conta_prazo", "first_name": "Prazo", "email": "p@example.com",
+            "password1": "SenhaForte123!", "password2": "SenhaForte123!",
+        })
+        return User.objects.get(username="conta_prazo")
+
+    def test_superusuario_define_validade_que_vai_para_a_conta(self):
+        from datetime import timedelta
+        from django.utils import timezone
+
+        data = timezone.localdate() + timedelta(days=30)
+        convite = self._gerar("super_acesso", data.isoformat())
+        self.assertEqual(convite.acesso_ate, data)
+        usuario = self._cadastrar(convite)
+        self.assertEqual(usuario.perfil.acesso_ate, data)
+
+    def test_staff_comum_nao_define_validade(self):
+        from datetime import timedelta
+        from django.utils import timezone
+
+        convite = self._gerar("staff_acesso", (timezone.localdate() + timedelta(days=30)).isoformat())
+        self.assertIsNone(convite.acesso_ate)
+
+    def test_data_no_passado_e_recusada(self):
+        from .models import ConviteCadastro
+
+        self.client.login(username="super_acesso", password="SenhaForte123!")
+        self.client.post(reverse("accounts:convites"), {"acesso_ate": "2000-01-01"})
+        self.assertFalse(ConviteCadastro.objects.exists())
+
+    def test_acesso_vencido_barra_login_e_derruba_sessao(self):
+        from datetime import timedelta
+        from django.utils import timezone
+
+        convite = self._gerar("super_acesso", (timezone.localdate() + timedelta(days=1)).isoformat())
+        usuario = self._cadastrar(convite)  # já fica logado
+        self.assertEqual(self.client.get(reverse("accounts:instalar_app")).status_code, 200)
+
+        usuario.perfil.acesso_ate = timezone.localdate() - timedelta(days=1)
+        usuario.perfil.save()
+        resposta = self.client.get(reverse("accounts:instalar_app"))
+        self.assertRedirects(resposta, reverse("accounts:login"))
+        self.assertNotIn("_auth_user_id", self.client.session)
+
+        resposta = self.client.post(reverse("accounts:login"), {"username": "conta_prazo", "password": "SenhaForte123!"})
+        self.assertNotIn("_auth_user_id", self.client.session)
+
+    def test_ultimo_dia_ainda_tem_acesso(self):
+        from django.utils import timezone
+
+        convite = self._gerar("super_acesso", timezone.localdate().isoformat())
+        self._cadastrar(convite)
+        self.assertEqual(self.client.get(reverse("accounts:instalar_app")).status_code, 200)
+
+    def test_superusuario_altera_e_tira_limite(self):
+        from datetime import timedelta
+        from django.utils import timezone
+
+        convite = self._gerar("super_acesso")
+        usuario = self._cadastrar(convite)
+        self.client.logout()
+        self.client.login(username="super_acesso", password="SenhaForte123!")
+        nova = timezone.localdate() + timedelta(days=60)
+        self.client.post(reverse("accounts:convite_acesso", args=[convite.pk]), {"acesso_ate": nova.isoformat()})
+        usuario.perfil.refresh_from_db()
+        self.assertEqual(usuario.perfil.acesso_ate, nova)
+        self.client.post(reverse("accounts:convite_acesso", args=[convite.pk]), {"acesso_ate": ""})
+        usuario.perfil.refresh_from_db()
+        self.assertIsNone(usuario.perfil.acesso_ate)
+
+    def test_staff_comum_nao_altera_validade(self):
+        from datetime import timedelta
+        from django.utils import timezone
+
+        convite = self._gerar("super_acesso")
+        usuario = self._cadastrar(convite)
+        self.client.logout()
+        self.client.login(username="staff_acesso", password="SenhaForte123!")
+        self.client.post(reverse("accounts:convite_acesso", args=[convite.pk]),
+                         {"acesso_ate": (timezone.localdate() + timedelta(days=5)).isoformat()})
+        self.assertFalse(PerfilUsuario.objects.filter(usuario=usuario, acesso_ate__isnull=False).exists())

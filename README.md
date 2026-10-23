@@ -28,6 +28,13 @@ Todas as configurações ficam no `.env`, explicadas uma a uma no [.env.example]
 
 - **Cadastro**: por padrão só administradores (staff) cadastram usuários, pelo menu "Cadastrar
   Usuário". Para abrir o cadastro ao público na tela de login, use `CADASTRO_PUBLICO=True`.
+- **Convites**: staff gera em "Convites" (menu) um link de uso único, válido por
+  `CONVITE_VALIDADE_DIAS` (padrão 5), e manda por WhatsApp ou e-mail. A pessoa cria a conta mesmo
+  com o cadastro público fechado e cai na tela "Instalar o aplicativo" (`/contas/instalar/`). Só o
+  aplicativo (PWA) vai para o computador ou celular; banco e o resto continuam no servidor.
+  O superusuário pode pôr no convite uma data "acesso válido até": depois dela a conta não entra
+  mais (e a sessão aberta cai). Sem data, o acesso não tem limite. A data pode ser trocada ou
+  tirada depois na lista de convites ou no admin (Perfil do usuário).
 - **Só staff**: gerenciar fontes de notícias e ver as mensagens do WhatsApp.
 - **Só superusuário**: "Limpar dados do sistema" em Minha Conta (escolhe no combo a conta a apagar,
   ou "Todos os usuários" para apagar os dados de todos).

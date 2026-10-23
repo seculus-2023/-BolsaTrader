@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block titulo %}Convite - BolsaTrader{% endblock %}
+{% block conteudo %}
+<div class="tela-auth">
+    <div class="auth-box card-glass">
+        <div class="logo">⚡ BOLSATRADER</div>
+        <p class="subtitulo">{{ motivo }}</p>
+        {% if not user.is_authenticated %}
+        <p style="color: var(--text-dim);">Peça um novo link a quem te convidou.</p>
+        <a class="link-secundario" href="{% url 'accounts:login' %}">Já tem conta? Entrar</a>
+        {% else %}
+        <a class="link-secundario" href="{% url 'core:dashboard' %}">Voltar ao painel</a>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

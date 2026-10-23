@@ -220,7 +220,7 @@ def _contexto_painel(usuario):
 def _usuario_do_painel_tv(token):
     """Dono do link do painel para TV - 404 se o link não existe ou foi desativado/trocado."""
     perfil = PerfilUsuario.objects.select_related("usuario").filter(painel_tv_token=token).first() if token else None
-    if perfil is None or not perfil.usuario.is_active:
+    if perfil is None or not perfil.usuario.is_active or (perfil.acesso_vencido and not perfil.usuario.is_superuser):
         raise Http404("Link do painel não encontrado ou desativado.")
     return perfil.usuario
 

@@ -1,0 +1,110 @@
+{% extends "base.html" %}
+{% block titulo %}Convites - BolsaTrader{% endblock %}
+{% block conteudo %}
+<h1>Convites</h1>
+<p style="color: var(--text-dim);">
+    Gere um link e mande para a pessoa: ela cria a própria conta e já cai na tela de instalação do aplicativo.
+    Cada link vale <strong>{{ validade_dias }} dia{{ validade_dias|pluralize }}</strong> e só pode ser usado uma vez.
+    {% if user.is_superuser %}A data de acesso (opcional) é o último dia em que a conta criada pelo convite consegue entrar no sistema; dá para mudar depois na lista.{% endif %}
+</p>
+
+<div class="card-glass" style="margin-bottom: 1.2rem;">
+    <form method="post" class="form-futurista" style="display: flex; gap: .8rem; flex-wrap: wrap; align-items: flex-end;">
+        {% csrf_token %}
+        <div style="flex: 1 1 260px;">
+            <label for="id_observacao">Para quem é (opcional)</label>
+            <input type="text" name="observacao" id="id_observacao" maxlength="100" class="form-control-futurista"
+                   placeholder="Ex: João da contabilidade">
+        </div>
+        {% if user.is_superuser %}
+        <div style="flex: 0 1 220px;">
+            <label for="id_acesso_ate">Acesso da conta válido até (opcional)</label>
+            <input type="date" name="acesso_ate" id="id_acesso_ate" min="{{ hoje|date:'Y-m-d' }}" class="form-control-futurista">
+        </div>
+        {% endif %}
+        <button type="submit" class="btn-futurista">✉️ Gerar convite</button>
+    </form>
+</div>
+
+<div class="card-glass">
+    {% if convites %}
+    <div class="tabela-scroll">
+    <table class="tabela-futurista">
+        <thead>
+            <tr><th>Para quem</th><th>Situação</th><th>Link vence em</th><th>Acesso da conta até</th><th>Link</th><th></th></tr>
+        </thead>
+        <tbody>
+            {% for c in convites %}
+            <tr id="convite-{{ c.pk }}">
+                <td>{{ c.observacao|default:"—" }}<br><small style="color: var(--text-dim);">criado em {{ c.criado_em|date:"d/m/Y H:i" }}</small></td>
+                <td>
+                    {% if c.situacao == "usado" %}✅ Usado por <strong>{{ c.usado_por.username|default:"(conta apagada)" }}</strong><br><small style="color: var(--text-dim);">{{ c.usado_em|date:"d/m/Y H:i" }}</small>
+                    {% elif c.situacao == "pendente" %}⏳ Pendente
+                    {% elif c.situacao == "vencido" %}⌛ Vencido
+                    {% else %}🚫 Cancelado{% endif %}
+                </td>
+                <td>{{ c.expira_em|date:"d/m/Y H:i" }}</td>
+                <td>
+                    {% if c.usado_por %}
+                        {% with acesso=c.perfil_conta.acesso_ate %}
+                        {% if acesso %}{{ acesso|date:"d/m/Y" }}{% if acesso < hoje %} <span style="color: var(--neon-red);">(vencido)</span>{% endif %}{% else %}Sem limite{% endif %}
+                        {% if user.is_superuser %}
+                        <form method="post" action="{% url 'accounts:convite_acesso' c.pk %}" style="display: flex; gap: .4rem; margin-top: .4rem; flex-wrap: wrap;">
+                            {% csrf_token %}
+                            <input type="date" name="acesso_ate" value="{{ acesso|date:'Y-m-d' }}" min="{{ hoje|date:'Y-m-d' }}" class="form-control-futurista" style="width: auto;">
+                            <button type="submit" class="btn-futurista btn-secundario" title="Deixe a data vazia para tirar o limite">Salvar</button>
+                        </form>
+                        {% endif %}
+                        {% endwith %}
+                    {% else %}
+                        {{ c.acesso_ate|date:"d/m/Y"|default:"Sem limite" }}
+                    {% endif %}
+                </td>
+                <td>
+                    {% if c.valido %}
+                    <input type="text" readonly value="{{ c.link }}" class="form-control-futurista convite-link" style="min-width: 260px;">
+                    {% else %}<span style="color: var(--text-dim);">—</span>{% endif %}
+                </td>
+                <td style="white-space: nowrap;">
+                    {% if c.valido %}
+                    <button type="button" class="btn-futurista btn-secundario btn-copiar-convite" data-link="{{ c.link }}">📋 Copiar</button>
+                    <a class="btn-futurista btn-secundario" href="{{ c.link_whatsapp }}" target="_blank" rel="noopener">WhatsApp</a>
+                    <form method="post" action="{% url 'accounts:convite_cancelar' c.pk %}" style="display: inline;"
+                          onsubmit="return confirm('Cancelar este convite? O link para de funcionar.');">
+                        {% csrf_token %}
+                        <button type="submit" class="link-botao">Cancelar</button>
+                    </form>
+                    {% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    </div>
+    {% else %}
+    <p style="color: var(--text-dim);">Nenhum convite gerado ainda.</p>
+    {% endif %}
+</div>
+
+<script>
+    document.querySelectorAll(".btn-copiar-convite").forEach(function (botao) {
+        botao.addEventListener("click", function () {
+            var link = botao.dataset.link;
+            var feito = function () {
+                var texto = botao.textContent;
+                botao.textContent = "✔ Copiado";
+                setTimeout(function () { botao.textContent = texto; }, 1800);
+            };
+            if (navigator.clipboard && window.isSecureContext) {
+                navigator.clipboard.writeText(link).then(feito);
+            } else {
+                // http sem TLS (ex: rede local): cópia pelo campo de texto
+                var campo = botao.closest("tr").querySelector(".convite-link");
+                campo.select();
+                document.execCommand("copy");
+                feito();
+            }
+        });
+    });
+</script>
+{% endblock %}

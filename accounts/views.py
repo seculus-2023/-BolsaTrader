@@ -1,11 +1,15 @@
 import logging
 import secrets
+from datetime import date, timedelta
+from urllib.parse import quote
 
 from django.conf import settings
 from django.contrib.auth import get_user_model, login
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.views import LoginView, LogoutView
 from django.core.cache import cache
+from django.db import transaction
+from django.utils import timezone
 from django.shortcuts import render, redirect
 from django.urls import reverse, reverse_lazy
 from django.contrib import messages
@@ -14,7 +18,8 @@ from django.views.decorators.http import require_POST
 from core.services import MANTIDOS_NA_LIMPEZA_GERAL, limpar_dados_sistema, limpar_dados_usuario
 
 from .forms import CadastroForm, LogoContaForm, PerfilUsuarioForm
-from .models import PerfilUsuario
+from .middleware import MENSAGEM_ACESSO_VENCIDO
+from .models import ConviteCadastro, PerfilUsuario, acesso_expirado
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +52,9 @@ class LoginFuturistaView(LoginView):
 
     def form_valid(self, form):
         cache.delete(_chave_tentativas_login(self.request))
+        if acesso_expirado(form.get_user()):
+            messages.error(self.request, MENSAGEM_ACESSO_VENCIDO)
+            return redirect("accounts:login")
         return super().form_valid(form)
 
     def get_context_data(self, **kwargs):
@@ -213,3 +221,150 @@ def limpar_dados_view(request):
         f"Dados da conta {alvo.username} apagados ({total} registro(s)). O usuário e Minha Conta foram mantidos.",
     )
     return redirect("accounts:minha_conta")
+
+
+# --------------------------------------------------------------------------
+# Convites: link para a pessoa criar a conta com o cadastro público fechado
+# --------------------------------------------------------------------------
+
+@login_required
+def convites_view(request):
+    """Staff gera links de convite (validade CONVITE_VALIDADE_DIAS) e acompanha a lista."""
+    if not request.user.is_staff:
+        messages.error(request, "Só administradores podem gerar convites.")
+        return redirect("core:dashboard")
+
+    if request.method == "POST":
+        acesso_ate = None
+        if request.user.is_superuser:
+            acesso_ate, erro = _ler_data_acesso(request.POST.get("acesso_ate", ""))
+            if erro:
+                messages.error(request, erro)
+                return redirect("accounts:convites")
+        convite = ConviteCadastro.objects.create(
+            token=secrets.token_urlsafe(24),
+            observacao=request.POST.get("observacao", "").strip()[:100],
+            criado_por=request.user,
+            expira_em=timezone.now() + timedelta(days=settings.CONVITE_VALIDADE_DIAS),
+            acesso_ate=acesso_ate,
+        )
+        messages.success(request, "Convite gerado - copie o link ou envie pelo WhatsApp.")
+        return redirect(reverse("accounts:convites") + f"#convite-{convite.pk}")
+
+    convites = list(ConviteCadastro.objects.select_related("usado_por__perfil")[:100])
+    for convite in convites:
+        convite.link = request.build_absolute_uri(reverse("accounts:convite_cadastro", args=[convite.token]))
+        texto = (
+            "Você foi convidado(a) para o BolsaTrader! Crie sua conta e instale o aplicativo "
+            f"por este link (vale até {timezone.localtime(convite.expira_em):%d/%m/%Y}): {convite.link}"
+        )
+        convite.link_whatsapp = "https://wa.me/?text=" + quote(texto)
+    for convite in convites:
+        perfil = getattr(convite.usado_por, "perfil", None) if convite.usado_por else None
+        convite.perfil_conta = perfil
+    return render(request, "accounts/convites.html", {
+        "convites": convites,
+        "validade_dias": settings.CONVITE_VALIDADE_DIAS,
+        "hoje": timezone.localdate(),
+    })
+
+
+def _ler_data_acesso(texto):
+    """Data "aaaa-mm-dd" do campo de validade de acesso -> (data ou None, mensagem de erro ou None)."""
+    texto = (texto or "").strip()
+    if not texto:
+        return None, None
+    try:
+        data = date.fromisoformat(texto)
+    except ValueError:
+        return None, "Data de validade do acesso inválida."
+    if data < timezone.localdate():
+        return None, "A validade do acesso não pode ser uma data que já passou."
+    return data, None
+
+
+@login_required
+@require_POST
+def convite_acesso_view(request, pk):
+    """Superusuário altera (ou tira) a data limite de acesso da conta criada pelo convite."""
+    if not request.user.is_superuser:
+        messages.error(request, "Só o administrador do sistema pode alterar a validade do acesso.")
+        return redirect("accounts:convites")
+    convite = ConviteCadastro.objects.select_related("usado_por").filter(pk=pk).first()
+    if convite is None or convite.usado_por is None:
+        messages.error(request, "Esse convite ainda não tem conta criada.")
+        return redirect("accounts:convites")
+    acesso_ate, erro = _ler_data_acesso(request.POST.get("acesso_ate", ""))
+    if erro:
+        messages.error(request, erro)
+        return redirect("accounts:convites")
+    PerfilUsuario.objects.update_or_create(usuario=convite.usado_por, defaults={"acesso_ate": acesso_ate})
+    if acesso_ate:
+        messages.success(request, f"Acesso de {convite.usado_por.username} válido até {acesso_ate:%d/%m/%Y}.")
+    else:
+        messages.success(request, f"Acesso de {convite.usado_por.username} agora é sem limite de data.")
+    return redirect(reverse("accounts:convites") + f"#convite-{convite.pk}")
+
+
+@login_required
+@require_POST
+def convite_cancelar_view(request, pk):
+    if not request.user.is_staff:
+        messages.error(request, "Só administradores podem cancelar convites.")
+        return redirect("core:dashboard")
+    atualizados = ConviteCadastro.objects.filter(pk=pk, usado_em__isnull=True).update(cancelado=True)
+    if atualizados:
+        messages.success(request, "Convite cancelado - o link parou de funcionar.")
+    else:
+        messages.error(request, "Esse convite já foi usado e não pode ser cancelado.")
+    return redirect("accounts:convites")
+
+
+def convite_cadastro_view(request, token):
+    """
+    Cadastro pelo link de convite. Funciona mesmo com CADASTRO_PUBLICO=False;
+    o convite vale uma vez só e até expira_em. Depois de criar a conta, a
+    pessoa já entra logada na tela de instalação do aplicativo.
+    """
+    convite = ConviteCadastro.objects.filter(token=token).first()
+    if convite is None or not convite.valido:
+        motivo = {
+            "usado": "Este convite já foi usado.",
+            "vencido": "Este convite venceu.",
+            "cancelado": "Este convite foi cancelado.",
+        }.get(convite.situacao if convite else "", "Convite não encontrado.")
+        return render(request, "accounts/convite_invalido.html", {"motivo": motivo}, status=410 if convite else 404)
+
+    if request.user.is_authenticated:
+        return render(request, "accounts/convite_invalido.html", {
+            "motivo": f"Você já está logado como {request.user.username}. Saia da conta para usar este convite.",
+        })
+
+    if request.method == "POST":
+        form = CadastroForm(request.POST)
+        if form.is_valid():
+            with transaction.atomic():
+                # trava o convite: dois envios ao mesmo tempo não criam duas contas
+                convite = ConviteCadastro.objects.select_for_update().get(pk=convite.pk)
+                if not convite.valido:
+                    return render(request, "accounts/convite_invalido.html",
+                                  {"motivo": "Este convite já foi usado."}, status=410)
+                user = form.save()
+                if convite.acesso_ate:
+                    PerfilUsuario.objects.update_or_create(usuario=user, defaults={"acesso_ate": convite.acesso_ate})
+                convite.usado_em = timezone.now()
+                convite.usado_por = user
+                convite.save(update_fields=["usado_em", "usado_por"])
+            login(request, user)
+            messages.success(request, f"Bem-vindo(a), {user.first_name}! Sua conta foi criada.")
+            return redirect("accounts:instalar_app")
+    else:
+        form = CadastroForm()
+
+    return render(request, "accounts/cadastro.html", {"form": form, "convite": convite})
+
+
+@login_required
+def instalar_app_view(request):
+    """Passo a passo para instalar o BolsaTrader (PWA) no computador ou celular."""
+    return render(request, "accounts/instalar_app.html")

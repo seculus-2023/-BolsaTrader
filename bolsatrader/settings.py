@@ -122,6 +122,8 @@ MIDDLEWARE = [
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
+    # encerra a sessão de contas com a data de acesso vencida (convites)
+    "accounts.middleware.ValidadeAcessoMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
 
@@ -219,6 +221,10 @@ LOGOUT_REDIRECT_URL = "accounts:login"
 # Cadastro aberto ao público na tela de login ("Ainda não tem conta?"). Desligado
 # (padrão), só staff/superusuário cadastra usuários, pelo menu "Cadastrar Usuário".
 CADASTRO_PUBLICO = config("CADASTRO_PUBLICO", default=False, cast=bool)
+
+# Validade (em dias) dos links de convite gerados em "Convites" (staff): quem
+# recebe o link cria a conta mesmo com o cadastro público fechado.
+CONVITE_VALIDADE_DIAS = config("CONVITE_VALIDADE_DIAS", default=5, cast=int)
 
 # Proteção contra força bruta no login: após LOGIN_MAX_TENTATIVAS senhas erradas
 # (mesmo usuário + mesmo IP), o login fica bloqueado por LOGIN_BLOQUEIO_MINUTOS.

@@ -32,6 +32,7 @@
   const botoesInstalar = [
     document.getElementById("btn-instalar-pwa"),
     document.getElementById("btn-instalar-pwa-anonimo"),
+    document.getElementById("btn-instalar-pwa-pagina"), // tela "Instalar o aplicativo"
   ].filter(Boolean);
 
   window.addEventListener("beforeinstallprompt", function (evento) {

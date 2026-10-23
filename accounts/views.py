@@ -229,18 +229,16 @@ def limpar_dados_view(request):
 
 @login_required
 def convites_view(request):
-    """Staff gera links de convite (validade CONVITE_VALIDADE_DIAS) e acompanha a lista."""
-    if not request.user.is_staff:
-        messages.error(request, "Só administradores podem gerar convites.")
+    """Superusuário gera links de convite (validade CONVITE_VALIDADE_DIAS) e acompanha a lista."""
+    if not request.user.is_superuser:
+        messages.error(request, "Só o administrador do sistema pode gerar convites.")
         return redirect("core:dashboard")
 
     if request.method == "POST":
-        acesso_ate = None
-        if request.user.is_superuser:
-            acesso_ate, erro = _ler_data_acesso(request.POST.get("acesso_ate", ""))
-            if erro:
-                messages.error(request, erro)
-                return redirect("accounts:convites")
+        acesso_ate, erro = _ler_data_acesso(request.POST.get("acesso_ate", ""))
+        if erro:
+            messages.error(request, erro)
+            return redirect("accounts:convites")
         convite = ConviteCadastro.objects.create(
             token=secrets.token_urlsafe(24),
             observacao=request.POST.get("observacao", "").strip()[:100],
@@ -289,7 +287,7 @@ def convite_acesso_view(request, pk):
     """Superusuário altera (ou tira) a data limite de acesso da conta criada pelo convite."""
     if not request.user.is_superuser:
         messages.error(request, "Só o administrador do sistema pode alterar a validade do acesso.")
-        return redirect("accounts:convites")
+        return redirect("core:dashboard")
     convite = ConviteCadastro.objects.select_related("usado_por").filter(pk=pk).first()
     if convite is None or convite.usado_por is None:
         messages.error(request, "Esse convite ainda não tem conta criada.")
@@ -309,8 +307,8 @@ def convite_acesso_view(request, pk):
 @login_required
 @require_POST
 def convite_cancelar_view(request, pk):
-    if not request.user.is_staff:
-        messages.error(request, "Só administradores podem cancelar convites.")
+    if not request.user.is_superuser:
+        messages.error(request, "Só o administrador do sistema pode cancelar convites.")
         return redirect("core:dashboard")
     atualizados = ConviteCadastro.objects.filter(pk=pk, usado_em__isnull=True).update(cancelado=True)
     if atualizados:

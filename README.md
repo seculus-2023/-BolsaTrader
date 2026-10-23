@@ -28,7 +28,7 @@ Todas as configurações ficam no `.env`, explicadas uma a uma no [.env.example]
 
 - **Cadastro**: por padrão só administradores (staff) cadastram usuários, pelo menu "Cadastrar
   Usuário". Para abrir o cadastro ao público na tela de login, use `CADASTRO_PUBLICO=True`.
-- **Convites**: staff gera em "Convites" (menu) um link de uso único, válido por
+- **Convites**: só o superusuário gera, em "Convites" (menu), um link de uso único, válido por
   `CONVITE_VALIDADE_DIAS` (padrão 5), e manda por WhatsApp ou e-mail. A pessoa cria a conta mesmo
   com o cadastro público fechado e cai na tela "Instalar o aplicativo" (`/contas/instalar/`). Só o
   aplicativo (PWA) vai para o computador ou celular; banco e o resto continuam no servidor.

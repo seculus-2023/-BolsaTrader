@@ -382,8 +382,9 @@ class ConviteCadastroTests(TestCase):
     """Link de convite: cria conta com o cadastro fechado, uma vez só e dentro da validade."""
 
     def setUp(self):
-        self.admin = User.objects.create_user(username="admin_conv", password="SenhaForte123!", is_staff=True)
+        self.admin = User.objects.create_superuser(username="admin_conv", password="SenhaForte123!")
         self.comum = User.objects.create_user(username="comum_conv", password="SenhaForte123!")
+        self.staff = User.objects.create_user(username="staff_conv", password="SenhaForte123!", is_staff=True)
 
     def _gerar(self):
         from .models import ConviteCadastro
@@ -410,12 +411,20 @@ class ConviteCadastroTests(TestCase):
             convite.expira_em, timezone.now() + timedelta(days=5), delta=timedelta(minutes=1)
         )
 
-    def test_usuario_comum_nao_gera_convite(self):
+    def test_so_superusuario_acessa_convites(self):
         from .models import ConviteCadastro
 
-        self.client.login(username="comum_conv", password="SenhaForte123!")
-        self.client.post(reverse("accounts:convites"), {})
+        for quem in ("comum_conv", "staff_conv"):
+            self.client.login(username=quem, password="SenhaForte123!")
+            self.assertRedirects(self.client.get(reverse("accounts:convites")), reverse("core:dashboard"),
+                                 fetch_redirect_response=False)
+            self.client.post(reverse("accounts:convites"), {})
+            self.assertNotContains(self.client.get(reverse("core:menu")), reverse("accounts:convites"))
+            self.client.logout()
         self.assertFalse(ConviteCadastro.objects.exists())
+
+        self.client.login(username="admin_conv", password="SenhaForte123!")
+        self.assertContains(self.client.get(reverse("core:menu")), reverse("accounts:convites"))
 
     def test_cadastro_pelo_convite_cria_conta_loga_e_vai_para_instalacao(self):
         convite = self._gerar()
@@ -494,13 +503,6 @@ class ValidadeAcessoTests(TestCase):
         self.assertEqual(convite.acesso_ate, data)
         usuario = self._cadastrar(convite)
         self.assertEqual(usuario.perfil.acesso_ate, data)
-
-    def test_staff_comum_nao_define_validade(self):
-        from datetime import timedelta
-        from django.utils import timezone
-
-        convite = self._gerar("staff_acesso", (timezone.localdate() + timedelta(days=30)).isoformat())
-        self.assertIsNone(convite.acesso_ate)
 
     def test_data_no_passado_e_recusada(self):
         from .models import ConviteCadastro

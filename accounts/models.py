@@ -100,7 +100,7 @@ class PerfilUsuario(models.Model):
 class ConviteCadastro(models.Model):
     """
     Link de convite para criar conta sem abrir o cadastro ao público: o
-    administrador gera o link (accounts.views.convites_view), manda para a
+    superusuário gera o link (accounts.views.convites_view), manda para a
     pessoa, e ela cria a conta em accounts.views.convite_cadastro_view.
     Vale CONVITE_VALIDADE_DIAS e só uma vez; não fica preso a um e-mail.
     """

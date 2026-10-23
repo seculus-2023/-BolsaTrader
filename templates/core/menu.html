@@ -50,12 +50,14 @@
         <h3>Avisos e Lembretes</h3>
         <p>Notificações de metas de lucro/perda atingidas e tendências.</p>
     </a>
-    {% if user.is_staff %}
+    {% if user.is_superuser %}
     <a class="menu-card" href="{% url 'accounts:convites' %}">
         <div class="icone">✉️</div>
         <h3>Convites</h3>
         <p>Gere um link para a pessoa criar a conta e instalar o aplicativo no computador ou celular.</p>
     </a>
+    {% endif %}
+    {% if user.is_staff %}
     <a class="menu-card" href="{% url 'core:mensagens_whatsapp' %}">
         <div class="icone">💬</div>
         <h3>Mensagens do WhatsApp</h3>

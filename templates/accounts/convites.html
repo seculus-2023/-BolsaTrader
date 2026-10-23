@@ -5,7 +5,7 @@
 <p style="color: var(--text-dim);">
     Gere um link e mande para a pessoa: ela cria a própria conta e já cai na tela de instalação do aplicativo.
     Cada link vale <strong>{{ validade_dias }} dia{{ validade_dias|pluralize }}</strong> e só pode ser usado uma vez.
-    {% if user.is_superuser %}A data de acesso (opcional) é o último dia em que a conta criada pelo convite consegue entrar no sistema; dá para mudar depois na lista.{% endif %}
+    A data de acesso (opcional) é o último dia em que a conta criada pelo convite consegue entrar no sistema; dá para mudar depois na lista; vazia, o acesso não tem limite.
 </p>
 
 <div class="card-glass" style="margin-bottom: 1.2rem;">
@@ -16,12 +16,10 @@
             <input type="text" name="observacao" id="id_observacao" maxlength="100" class="form-control-futurista"
                    placeholder="Ex: João da contabilidade">
         </div>
-        {% if user.is_superuser %}
         <div style="flex: 0 1 220px;">
             <label for="id_acesso_ate">Acesso da conta válido até (opcional)</label>
             <input type="date" name="acesso_ate" id="id_acesso_ate" min="{{ hoje|date:'Y-m-d' }}" class="form-control-futurista">
         </div>
-        {% endif %}
         <button type="submit" class="btn-futurista">✉️ Gerar convite</button>
     </form>
 </div>
@@ -48,13 +46,11 @@
                     {% if c.usado_por %}
                         {% with acesso=c.perfil_conta.acesso_ate %}
                         {% if acesso %}{{ acesso|date:"d/m/Y" }}{% if acesso < hoje %} <span style="color: var(--neon-red);">(vencido)</span>{% endif %}{% else %}Sem limite{% endif %}
-                        {% if user.is_superuser %}
                         <form method="post" action="{% url 'accounts:convite_acesso' c.pk %}" style="display: flex; gap: .4rem; margin-top: .4rem; flex-wrap: wrap;">
                             {% csrf_token %}
                             <input type="date" name="acesso_ate" value="{{ acesso|date:'Y-m-d' }}" min="{{ hoje|date:'Y-m-d' }}" class="form-control-futurista" style="width: auto;">
                             <button type="submit" class="btn-futurista btn-secundario" title="Deixe a data vazia para tirar o limite">Salvar</button>
                         </form>
-                        {% endif %}
                         {% endwith %}
                     {% else %}
                         {{ c.acesso_ate|date:"d/m/Y"|default:"Sem limite" }}

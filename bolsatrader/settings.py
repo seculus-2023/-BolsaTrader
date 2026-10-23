@@ -222,7 +222,7 @@ LOGOUT_REDIRECT_URL = "accounts:login"
 # (padrão), só staff/superusuário cadastra usuários, pelo menu "Cadastrar Usuário".
 CADASTRO_PUBLICO = config("CADASTRO_PUBLICO", default=False, cast=bool)
 
-# Validade (em dias) dos links de convite gerados em "Convites" (staff): quem
+# Validade (em dias) dos links de convite gerados em "Convites" (só superusuário): quem
 # recebe o link cria a conta mesmo com o cadastro público fechado.
 CONVITE_VALIDADE_DIAS = config("CONVITE_VALIDADE_DIAS", default=5, cast=int)
 

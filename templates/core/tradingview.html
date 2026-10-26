@@ -19,6 +19,23 @@
         <a href="{% url 'core:previsoes_analistas' %}" class="btn-futurista">Abrir Previsões dos Analistas</a>
         <a href="{% url 'core:qualidade_empresas' %}" class="btn-futurista btn-secundario">Qualidade das Empresas</a>
     </div>
+
+    <h4 style="margin: 1.2rem 0 .4rem;">Perguntar ao Gemini</h4>
+    <p style="color: var(--text-dim); margin-top: 0;">
+        Abre o Gemini numa janela própria na metade direita da tela, com a pergunta abaixo. A pergunta também é
+        copiada para a área de transferência - se ela não aparecer preenchida no Gemini, é só colar (Ctrl+V) e
+        enviar. Lembre que a resposta de uma IA não é recomendação de investimento.
+    </p>
+    <form id="form-gemini" style="display: flex; flex-wrap: wrap; gap: .6rem;" onsubmit="return false;">
+        <input
+            type="text"
+            id="campo-gemini-pergunta"
+            value="Quais ações você indicaria hoje na B3? Explique o motivo de cada uma, o preço atual aproximado e os principais riscos."
+            required
+            style="flex: 1 1 320px; padding: .55rem .8rem; border-radius: .5rem; border: 1px solid var(--borda, #2a3550); background: var(--bg-input, #0D1526); color: var(--text, #fff);"
+        >
+        <button type="submit" id="btn-perguntar-gemini" class="btn-futurista">Perguntar ao Gemini</button>
+    </form>
 </div>
 
 <div class="card-glass" style="margin-bottom: 1.4rem;">
@@ -79,9 +96,9 @@
             window.open(url, "_blank", "noopener,noreferrer");
         });
 
-        // Home Broker: janela própria (popup sem abas) encaixada na metade direita
-        // da tela. O nome fixo faz um novo clique reaproveitar a mesma janela.
-        ligar("form-home-broker-url", "campo-home-broker-url", function (url) {
+        // Janela própria (popup sem abas) encaixada na metade direita da tela.
+        // O nome fixo faz um novo clique reaproveitar a mesma janela.
+        function abrirNaDireita(url, nome, mensagemBloqueio) {
             var tela = window.screen;
             var esquerdaTela = tela.availLeft || 0;
             var topoTela = tela.availTop || 0;
@@ -96,13 +113,28 @@
                 "resizable=yes",
                 "scrollbars=yes"
             ].join(",");
-            var janela = window.open(url, "bolsatrader_home_broker", recursos);
+            var janela = window.open(url, nome, recursos);
             if (!janela) {
-                alert("O navegador bloqueou a janela do Home Broker. Permita pop-ups para este site e tente de novo.");
+                alert(mensagemBloqueio);
                 return;
             }
             try { janela.opener = null; } catch (e) {}
             janela.focus();
+        }
+
+        ligar("form-home-broker-url", "campo-home-broker-url", function (url) {
+            abrirNaDireita(url, "bolsatrader_home_broker",
+                "O navegador bloqueou a janela do Home Broker. Permita pop-ups para este site e tente de novo.");
+        });
+
+        // Gemini: copia a pergunta e abre já tentando preenchê-la via ?q=.
+        ligar("form-gemini", "campo-gemini-pergunta", function (pergunta) {
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                navigator.clipboard.writeText(pergunta).catch(function () {});
+            }
+            var url = "https://gemini.google.com/app?q=" + encodeURIComponent(pergunta);
+            abrirNaDireita(url, "bolsatrader_gemini",
+                "O navegador bloqueou a janela do Gemini. Permita pop-ups para este site e tente de novo.");
         });
     })();
 </script>

@@ -20,11 +20,12 @@
         <a href="{% url 'core:qualidade_empresas' %}" class="btn-futurista btn-secundario">Qualidade das Empresas</a>
     </div>
 
-    <h4 style="margin: 1.2rem 0 .4rem;">Perguntar ao Gemini</h4>
+    <h4 style="margin: 1.2rem 0 .4rem;">Perguntar a uma IA</h4>
     <p style="color: var(--text-dim); margin-top: 0;">
-        Abre o Gemini numa janela própria na metade direita da tela, com a pergunta abaixo. A pergunta também é
-        copiada para a área de transferência - se ela não aparecer preenchida no Gemini, é só colar (Ctrl+V) e
-        enviar. Lembre que a resposta de uma IA não é recomendação de investimento.
+        Escolha a IA e abra numa janela própria na metade direita da tela, com a pergunta abaixo. Perplexity e
+        ChatGPT recebem a pergunta já preenchida; ela também é copiada para a área de transferência - se não
+        aparecer preenchida (comum no Gemini), é só colar (Ctrl+V) e enviar. Peça sempre as fontes e confira os
+        números. A resposta de uma IA não é recomendação de investimento.
     </p>
     <form id="form-gemini" style="display: flex; flex-wrap: wrap; gap: .6rem;" onsubmit="return false;">
         <input
@@ -34,7 +35,16 @@
             required
             style="flex: 1 1 320px; padding: .55rem .8rem; border-radius: .5rem; border: 1px solid var(--borda, #2a3550); background: var(--bg-input, #0D1526); color: var(--text, #fff);"
         >
-        <button type="submit" id="btn-perguntar-gemini" class="btn-futurista">Perguntar ao Gemini</button>
+        <select
+            id="campo-ia"
+            style="padding: .55rem .8rem; border-radius: .5rem; border: 1px solid var(--borda, #2a3550); background: var(--bg-input, #0D1526); color: var(--text, #fff);"
+        >
+            <option value="perplexity">Perplexity</option>
+            <option value="gemini">Gemini</option>
+            <option value="chatgpt">ChatGPT</option>
+            <option value="claude">Claude</option>
+        </select>
+        <button type="submit" id="btn-perguntar-ia" class="btn-futurista">Perguntar</button>
     </form>
 </div>
 
@@ -127,14 +137,28 @@
                 "O navegador bloqueou a janela do Home Broker. Permita pop-ups para este site e tente de novo.");
         });
 
-        // Gemini: copia a pergunta e abre já tentando preenchê-la via ?q=.
+        // IA: copia a pergunta e abre a IA escolhida já tentando preenchê-la via ?q=.
+        var IAS = {
+            perplexity: { nome: "Perplexity", url: "https://www.perplexity.ai/search?q=" },
+            gemini: { nome: "Gemini", url: "https://gemini.google.com/app?q=" },
+            chatgpt: { nome: "ChatGPT", url: "https://chatgpt.com/?q=" },
+            claude: { nome: "Claude", url: "https://claude.ai/new?q=" }
+        };
+        var campoIa = document.getElementById("campo-ia");
+        try {
+            var salva = localStorage.getItem("bolsatrader_ia");
+            if (salva && IAS[salva] && campoIa) campoIa.value = salva;
+        } catch (e) {}
+
         ligar("form-gemini", "campo-gemini-pergunta", function (pergunta) {
+            var chave = (campoIa && IAS[campoIa.value]) ? campoIa.value : "perplexity";
+            var ia = IAS[chave];
+            try { localStorage.setItem("bolsatrader_ia", chave); } catch (e) {}
             if (navigator.clipboard && navigator.clipboard.writeText) {
                 navigator.clipboard.writeText(pergunta).catch(function () {});
             }
-            var url = "https://gemini.google.com/app?q=" + encodeURIComponent(pergunta);
-            abrirNaDireita(url, "bolsatrader_gemini",
-                "O navegador bloqueou a janela do Gemini. Permita pop-ups para este site e tente de novo.");
+            abrirNaDireita(ia.url + encodeURIComponent(pergunta), "bolsatrader_ia",
+                "O navegador bloqueou a janela do " + ia.nome + ". Permita pop-ups para este site e tente de novo.");
         });
     })();
 </script>

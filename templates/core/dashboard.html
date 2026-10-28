@@ -114,6 +114,12 @@ coluna principal.
     <div class="card-glass" {% if comparativo_benchmark %}style="margin-top: 1.2rem;"{% endif %}>
         <h2>Posições em carteira</h2>
         {% include "core/_tabela_posicoes_compradas.html" with ocultar_acoes=True %}
+{% if posicoes_compradas %}
+<div style="display: flex; flex-wrap: wrap; gap: .6rem; margin-top: .8rem;">
+    <a href="{% url 'core:compradas_relatorio_pdf' %}" class="btn-futurista btn-secundario" style="white-space: nowrap;" title="Só as ações compradas, com as mesmas colunas desta grid">📄 Relatório Compradas (PDF)</a>
+    <a href="{% url 'core:compradas_relatorio_excel' %}" class="btn-futurista btn-secundario" style="white-space: nowrap;" title="Só as ações compradas, com as mesmas colunas desta grid">📊 Relatório Compradas (Excel)</a>
+</div>
+{% endif %}
         <a href="{% url 'core:posicoes' %}" class="link-secundario">Ver carteira de Ativos completa →</a>
     </div>
 

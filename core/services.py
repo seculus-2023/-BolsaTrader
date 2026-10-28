@@ -2437,6 +2437,234 @@ def gerar_pdf_posicoes(
 
 
 # --------------------------------------------------------------------------
+# Relatório "Compradas" (Excel / PDF) - só as ações realmente compradas
+# (reservas não entram), com as mesmas colunas da grid Compradas de
+# Posições em Carteira e do Painel de Controle (ver templates/core/
+# _tabela_posicoes_compradas.html), mais uma linha de totais.
+# --------------------------------------------------------------------------
+COLUNAS_RELATORIO_COMPRADAS = [
+    "Dias em carteira", "Ativo", "Preço compra", "Cotação atual", "Alvo",
+    "Lucro/Perda (%)", "Lucro/Perda por dia em carteira", "Lucro/Perda (R$)", "Qtd.",
+    "Valor investido", "Valor atual", "Meta lucro / perda", "Tendência",
+]
+
+
+def _filtrar_compradas(posicoes: list[Posicao]) -> list[Posicao]:
+    return [p for p in posicoes if not p.apenas_reservado]
+
+
+def _texto_dias_em_carteira(dias: int | None) -> str:
+    if dias is None:
+        return "—"
+    if dias == 0:
+        return "hoje"
+    return "1 dia" if dias == 1 else f"{dias} dias"
+
+
+def _texto_meta_lucro_perda(p: Posicao) -> str:
+    lucro = f"+{p.meta_lucro_pct}%" if p.meta_lucro_pct else "padrão"
+    perda = f"{p.meta_perda_pct}%" if p.meta_perda_pct else "padrão"
+    return f"{lucro} / {perda}"
+
+
+def _totais_compradas(compradas: list[Posicao]) -> dict:
+    """Somatórios da grid Compradas; o % total considera só as posições com cotação."""
+    investido = sum((p.valor_investido for p in compradas), Decimal("0"))
+    atual = sum((p.valor_atual for p in compradas if p.valor_atual is not None), Decimal("0"))
+    lucro = sum((p.lucro_perda_valor for p in compradas if p.lucro_perda_valor is not None), Decimal("0"))
+    investido_com_cotacao = sum(
+        (p.valor_investido for p in compradas if p.lucro_perda_valor is not None), Decimal("0")
+    )
+    pct = (lucro / investido_com_cotacao * 100).quantize(Decimal("0.01")) if investido_com_cotacao else None
+    return {
+        "quantidade": sum(p.quantidade for p in compradas),
+        "valor_investido": investido,
+        "valor_atual": atual,
+        "lucro_perda_valor": lucro,
+        "lucro_perda_pct": pct,
+    }
+
+
+def gerar_excel_compradas(posicoes: list[Posicao]) -> bytes:
+    """Planilha .xlsx do relatório Compradas (ver COLUNAS_RELATORIO_COMPRADAS)."""
+    import io
+
+    from openpyxl import Workbook
+    from openpyxl.styles import Alignment, Font, PatternFill
+    from openpyxl.utils import get_column_letter
+
+    compradas = _filtrar_compradas(posicoes)
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Compradas"
+
+    ws.append(COLUNAS_RELATORIO_COMPRADAS)
+    for celula in ws[1]:
+        celula.font = Font(bold=True, color="FFFFFF")
+        celula.fill = PatternFill("solid", fgColor="0D1526")
+        celula.alignment = Alignment(horizontal="center", wrap_text=True)
+
+    def num(valor):
+        return float(valor) if valor is not None else None
+
+    for p in compradas:
+        por_dia = (
+            f"R$ {p.lucro_perda_por_dia_valor}/dia ({p.lucro_perda_por_dia_pct}%/dia)"
+            if p.lucro_perda_por_dia_valor is not None else "—"
+        )
+        ws.append([
+            _texto_dias_em_carteira(p.dias_desde_compra),
+            p.ativo.ticker,
+            num(p.preco_medio),
+            num(p.preco_atual),
+            num(p.preco_alvo),
+            num(p.lucro_perda_pct),
+            por_dia,
+            num(p.lucro_perda_valor),
+            p.quantidade,
+            num(p.valor_investido),
+            num(p.valor_atual),
+            _texto_meta_lucro_perda(p),
+            p.tendencia or "—",
+        ])
+
+    if compradas:
+        t = _totais_compradas(compradas)
+        ws.append([
+            "TOTAL", f"{len(compradas)} ativo(s)", None, None, None, num(t["lucro_perda_pct"]), None,
+            num(t["lucro_perda_valor"]), t["quantidade"], num(t["valor_investido"]), num(t["valor_atual"]), None, None,
+        ])
+        for celula in ws[ws.max_row]:
+            celula.font = Font(bold=True)
+        for linha in ws.iter_rows(min_row=2):
+            for indice in (2, 3, 4, 7, 9, 10):  # colunas em R$ (base 0)
+                linha[indice].number_format = '"R$" #,##0.00'
+            linha[5].number_format = '0.00"%"'
+    else:
+        ws.append(["Nenhuma ação comprada no momento."])
+
+    larguras = [14, 10, 14, 14, 14, 14, 30, 16, 8, 16, 16, 18, 14]
+    for indice, largura in enumerate(larguras, start=1):
+        ws.column_dimensions[get_column_letter(indice)].width = largura
+    ws.freeze_panes = "A2"
+
+    buffer = io.BytesIO()
+    wb.save(buffer)
+    return buffer.getvalue()
+
+
+def gerar_pdf_compradas(posicoes: list[Posicao], nome_usuario: str) -> bytes:
+    """PDF (paisagem) do relatório Compradas (ver COLUNAS_RELATORIO_COMPRADAS)."""
+    import io
+    from xml.sax.saxutils import escape
+
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import A4, landscape
+    from reportlab.lib.styles import getSampleStyleSheet
+    from reportlab.lib.units import cm
+    from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+
+    compradas = _filtrar_compradas(posicoes)
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(
+        buffer, pagesize=landscape(A4),
+        topMargin=1.5 * cm, bottomMargin=1.5 * cm, leftMargin=1 * cm, rightMargin=1 * cm,
+        title="Relatório - Ações compradas",
+    )
+    estilos = getSampleStyleSheet()
+    estilo_cabecalho = estilos["Normal"].clone(
+        "cabecalho_compradas", fontSize=7.5, leading=9, textColor=colors.white, alignment=1,
+        fontName="Helvetica-Bold",
+    )
+
+    elementos = [
+        Paragraph("BolsaTrader - Relatório de ações compradas", estilos["Title"]),
+        Paragraph(
+            f"{escape(nome_usuario)} - gerado em {timezone.localtime().strftime('%d/%m/%Y %H:%M')}",
+            estilos["Normal"],
+        ),
+        Spacer(1, 0.5 * cm),
+    ]
+
+    def brl(valor):
+        if valor is None:
+            return "—"
+        texto = f"{valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+        return f"R$ {texto}"
+
+    def pct(valor):
+        return f"{valor:.2f}%".replace(".", ",") if valor is not None else "—"
+
+    if not compradas:
+        elementos.append(Paragraph("Nenhuma ação comprada no momento.", estilos["Normal"]))
+        doc.build(elementos)
+        return buffer.getvalue()
+
+    dados = [[Paragraph(c, estilo_cabecalho) for c in COLUNAS_RELATORIO_COMPRADAS]]
+    cores_resultado = []  # (linha, cor) para pintar o Lucro/Perda de verde/vermelho
+    verde, vermelho = colors.HexColor("#0a8a4a"), colors.HexColor("#c62839")
+    for i, p in enumerate(compradas, start=1):
+        por_dia = (
+            f"{brl(p.lucro_perda_por_dia_valor)}/dia ({pct(p.lucro_perda_por_dia_pct)}/dia)"
+            if p.lucro_perda_por_dia_valor is not None else "—"
+        )
+        ativo = p.ativo.ticker + (" *" if p.meta_lucro_atingida else "")
+        dados.append([
+            _texto_dias_em_carteira(p.dias_desde_compra), ativo, brl(p.preco_medio), brl(p.preco_atual),
+            brl(p.preco_alvo), pct(p.lucro_perda_pct), por_dia, brl(p.lucro_perda_valor), str(p.quantidade),
+            brl(p.valor_investido), brl(p.valor_atual), _texto_meta_lucro_perda(p), p.tendencia or "—",
+        ])
+        if p.situacao == "LUCRO":
+            cores_resultado.append((i, verde))
+        elif p.situacao == "PERDA":
+            cores_resultado.append((i, vermelho))
+
+    t = _totais_compradas(compradas)
+    linha_total = len(dados)
+    dados.append([
+        "TOTAL", f"{len(compradas)} ativo(s)", "", "", "", pct(t["lucro_perda_pct"]), "",
+        brl(t["lucro_perda_valor"]), str(t["quantidade"]), brl(t["valor_investido"]), brl(t["valor_atual"]), "", "",
+    ])
+    if t["lucro_perda_valor"] > 0:
+        cores_resultado.append((linha_total, verde))
+    elif t["lucro_perda_valor"] < 0:
+        cores_resultado.append((linha_total, vermelho))
+
+    estilo = [
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#0D1526")),
+        ("FONTSIZE", (0, 1), (-1, -1), 7.5),
+        ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#cccccc")),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -2), [colors.white, colors.HexColor("#eef2f7")]),
+        ("BACKGROUND", (0, linha_total), (-1, linha_total), colors.HexColor("#dde4ee")),
+        ("FONTNAME", (0, linha_total), (-1, linha_total), "Helvetica-Bold"),
+        ("FONTNAME", (1, 1), (1, -1), "Helvetica-Bold"),
+        ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("TOPPADDING", (0, 0), (-1, -1), 4),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+        ("LEFTPADDING", (0, 0), (-1, -1), 3),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 3),
+    ]
+    for linha, cor in cores_resultado:
+        for coluna in (5, 6, 7):  # Lucro/Perda (%), por dia e (R$)
+            estilo.append(("TEXTCOLOR", (coluna, linha), (coluna, linha), cor))
+
+    larguras = [1.6, 1.8, 2.0, 2.0, 2.0, 1.8, 3.6, 2.2, 1.2, 2.4, 2.4, 2.4, 2.1]
+    tabela = Table(dados, repeatRows=1, colWidths=[w * cm for w in larguras])
+    tabela.setStyle(TableStyle(estilo))
+    elementos.append(tabela)
+    elementos.append(Spacer(1, 0.3 * cm))
+    elementos.append(Paragraph(
+        "* = meta de lucro atingida (hora de considerar a venda). "
+        "Reservas (intenção de compra) não entram neste relatório.",
+        estilos["Italic"],
+    ))
+
+    doc.build(elementos)
+    return buffer.getvalue()
+
+
+# --------------------------------------------------------------------------
 # Exportação das operações (Excel / PDF)
 #
 # Reflete as três grids da página "Minhas Operações" (ver core.views.

@@ -200,6 +200,12 @@
 <div class="painel-abas" id="painel-compradas" role="tabpanel">
 <div class="card-glass">
 {% include "core/_tabela_posicoes_compradas.html" %}
+{% if posicoes_compradas %}
+<div style="display: flex; flex-wrap: wrap; gap: .6rem; margin-top: .8rem;">
+    <a href="{% url 'core:compradas_relatorio_pdf' %}" class="btn-futurista btn-secundario" style="white-space: nowrap;" title="Só as ações compradas, com as mesmas colunas desta grid">📄 Relatório Compradas (PDF)</a>
+    <a href="{% url 'core:compradas_relatorio_excel' %}" class="btn-futurista btn-secundario" style="white-space: nowrap;" title="Só as ações compradas, com as mesmas colunas desta grid">📊 Relatório Compradas (Excel)</a>
+</div>
+{% endif %}
 </div>
 </div>
 

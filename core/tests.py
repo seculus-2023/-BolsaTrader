@@ -1310,6 +1310,63 @@ class ExportacaoPosicoesTests(TestCase):
         self.assertIn("Indicadores de risco", texto)
 
 
+class RelatorioCompradasTests(TestCase):
+    """Relatório só das compradas (Posições em Carteira e Painel) - ver core.views.compradas_relatorio_*."""
+
+    def setUp(self):
+        self.usuario = User.objects.create_user(username="investidor_rel_compradas", password="SenhaForte123!")
+        self.client.login(username="investidor_rel_compradas", password="SenhaForte123!")
+        self.ativo = Ativo.objects.create(ticker="WEGE3", nome="WEG ON")
+        Operacao.objects.create(
+            usuario=self.usuario, ativo=self.ativo, tipo=Operacao.COMPRA,
+            quantidade=20, preco_unitario=Decimal("40.00"), data_operacao=date.today() - timedelta(days=4),
+        )
+        Cotacao.objects.create(ativo=self.ativo, data=date.today(), preco_fechamento=Decimal("44.00"))
+        so_reserva = Ativo.objects.create(ticker="ITSA4", nome="ITAUSA PN")
+        Operacao.objects.create(
+            usuario=self.usuario, ativo=so_reserva, tipo=Operacao.RESERVAR,
+            quantidade=5, preco_unitario=Decimal("10.00"), data_operacao=date.today(),
+        )
+
+    def test_excel_tem_colunas_da_grid_e_so_compradas(self):
+        from openpyxl import load_workbook
+        import io
+
+        resposta = self.client.get(reverse("core:compradas_relatorio_excel"))
+        self.assertEqual(resposta.status_code, 200)
+        linhas = list(load_workbook(io.BytesIO(resposta.content)).active.values)
+        self.assertEqual(list(linhas[0]), core_services.COLUNAS_RELATORIO_COMPRADAS)
+        self.assertEqual(len(linhas), 3)  # cabeçalho + WEGE3 + total (reserva fora)
+        self.assertEqual(linhas[1][1], "WEGE3")
+        self.assertEqual(linhas[1][0], "4 dias")
+        self.assertEqual(linhas[1][7], 80.0)  # lucro (44 - 40) x 20
+        self.assertEqual(linhas[2][0], "TOTAL")
+        self.assertEqual(linhas[2][5], 10.0)
+
+    def test_pdf_valido_sem_reservas(self):
+        import io
+        from pypdf import PdfReader
+
+        resposta = self.client.get(reverse("core:compradas_relatorio_pdf"))
+        self.assertEqual(resposta.status_code, 200)
+        self.assertEqual(resposta["Content-Type"], "application/pdf")
+        texto = "\n".join(p.extract_text() for p in PdfReader(io.BytesIO(resposta.content)).pages)
+        self.assertIn("WEGE3", texto)
+        self.assertNotIn("ITSA4", texto)
+        self.assertIn("TOTAL", texto)
+
+    def test_sem_compradas_nao_quebra(self):
+        Operacao.objects.filter(usuario=self.usuario, tipo=Operacao.COMPRA).delete()
+        self.assertEqual(self.client.get(reverse("core:compradas_relatorio_excel")).status_code, 200)
+        self.assertEqual(self.client.get(reverse("core:compradas_relatorio_pdf")).status_code, 200)
+
+    def test_botoes_nas_telas_posicoes_e_painel(self):
+        for tela in ("core:posicoes", "core:dashboard"):
+            html = self.client.get(reverse(tela)).content.decode()
+            self.assertIn(reverse("core:compradas_relatorio_pdf"), html, tela)
+            self.assertIn(reverse("core:compradas_relatorio_excel"), html, tela)
+
+
 class AnaliseTendenciaTests(TestCase):
     def setUp(self):
         self.ativo = Ativo.objects.create(ticker="ITUB4")

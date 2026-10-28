@@ -75,7 +75,9 @@ from .services import (
     atividade_recente,
     construir_grafico_cotacoes,
     construir_comparativo_valores,
+    gerar_excel_compradas,
     gerar_excel_posicoes,
+    gerar_pdf_compradas,
     gerar_pdf_posicoes,
     gerar_excel_operacoes,
     gerar_pdf_operacoes,
@@ -1130,6 +1132,34 @@ def posicoes_exportar_pdf(request):
     )
     resposta = HttpResponse(conteudo, content_type="application/pdf")
     nome_arquivo = f"posicoes_{timezone.localdate().isoformat()}.pdf"
+    resposta["Content-Disposition"] = f'attachment; filename="{nome_arquivo}"'
+    return resposta
+
+
+@login_required
+def compradas_relatorio_excel(request):
+    """
+    Relatório só das ações compradas (reservas não entram), com as mesmas
+    colunas da grid Compradas de Posições em Carteira e do Painel de
+    Controle - ver core.services.gerar_excel_compradas.
+    """
+    conteudo = gerar_excel_compradas(calcular_posicoes(request.user))
+    resposta = HttpResponse(
+        conteudo,
+        content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+    nome_arquivo = f"compradas_{timezone.localdate().isoformat()}.xlsx"
+    resposta["Content-Disposition"] = f'attachment; filename="{nome_arquivo}"'
+    return resposta
+
+
+@login_required
+def compradas_relatorio_pdf(request):
+    """Versão PDF do relatório de ações compradas - ver core.services.gerar_pdf_compradas."""
+    nome_usuario = request.user.first_name or request.user.username
+    conteudo = gerar_pdf_compradas(calcular_posicoes(request.user), nome_usuario)
+    resposta = HttpResponse(conteudo, content_type="application/pdf")
+    nome_arquivo = f"compradas_{timezone.localdate().isoformat()}.pdf"
     resposta["Content-Disposition"] = f'attachment; filename="{nome_arquivo}"'
     return resposta
 

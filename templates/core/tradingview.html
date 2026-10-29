@@ -31,9 +31,19 @@
         <input
             type="text"
             id="campo-gemini-pergunta"
-            value="Quais ações você indicaria hoje na B3? Explique o motivo de cada uma, o preço atual aproximado e os principais riscos."
+            value="Quais ações você indicaria hoje na B3 para ter um lucro de {LUCRO}? Explique o motivo de cada uma, o preço atual aproximado e os principais riscos."
             required
+            title="{LUCRO} é substituído pelo valor informado no campo Lucro desejado"
             style="flex: 1 1 320px; padding: .55rem .8rem; border-radius: .5rem; border: 1px solid var(--borda, #2a3550); background: var(--bg-input, #0D1526); color: var(--text, #fff);"
+        >
+        <input
+            type="number"
+            id="campo-ia-lucro"
+            min="0.01"
+            step="0.01"
+            placeholder="Lucro desejado (R$)"
+            title="Lucro desejado (R$)"
+            style="flex: 0 1 190px; padding: .55rem .8rem; border-radius: .5rem; border: 1px solid var(--borda, #2a3550); background: var(--bg-input, #0D1526); color: var(--text, #fff);"
         >
         <select
             id="campo-ia"
@@ -150,7 +160,24 @@
             if (salva && IAS[salva] && campoIa) campoIa.value = salva;
         } catch (e) {}
 
+        var campoLucro = document.getElementById("campo-ia-lucro");
+        try {
+            var lucroSalvo = localStorage.getItem("bolsatrader_ia_lucro");
+            if (lucroSalvo && campoLucro) campoLucro.value = lucroSalvo;
+        } catch (e) {}
+
         ligar("form-gemini", "campo-gemini-pergunta", function (pergunta) {
+            var lucro = campoLucro ? parseFloat(campoLucro.value) : NaN;
+            if (pergunta.indexOf("{LUCRO}") !== -1) {
+                if (!(lucro > 0)) {
+                    alert("Informe o valor do lucro desejado.");
+                    if (campoLucro) campoLucro.focus();
+                    return;
+                }
+                try { localStorage.setItem("bolsatrader_ia_lucro", campoLucro.value); } catch (e) {}
+                var lucroTexto = lucro.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+                pergunta = pergunta.split("{LUCRO}").join(lucroTexto);
+            }
             var chave = (campoIa && IAS[campoIa.value]) ? campoIa.value : "perplexity";
             var ia = IAS[chave];
             try { localStorage.setItem("bolsatrader_ia", chave); } catch (e) {}

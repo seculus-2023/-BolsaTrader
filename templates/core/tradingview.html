@@ -41,8 +41,8 @@
             id="campo-ia-lucro"
             min="0.01"
             step="0.01"
-            placeholder="Lucro desejado (R$)"
-            title="Lucro desejado (R$)"
+            placeholder="Lucro desejado (%)"
+            title="Lucro desejado (%)"
             style="flex: 0 1 190px; padding: .55rem .8rem; border-radius: .5rem; border: 1px solid var(--borda, #2a3550); background: var(--bg-input, #0D1526); color: var(--text, #fff);"
         >
         <select
@@ -162,7 +162,7 @@
 
         var campoLucro = document.getElementById("campo-ia-lucro");
         try {
-            var lucroSalvo = localStorage.getItem("bolsatrader_ia_lucro");
+            var lucroSalvo = localStorage.getItem("bolsatrader_ia_lucro_pct");
             if (lucroSalvo && campoLucro) campoLucro.value = lucroSalvo;
         } catch (e) {}
 
@@ -170,12 +170,12 @@
             var lucro = campoLucro ? parseFloat(campoLucro.value) : NaN;
             if (pergunta.indexOf("{LUCRO}") !== -1) {
                 if (!(lucro > 0)) {
-                    alert("Informe o valor do lucro desejado.");
+                    alert("Informe o percentual de lucro desejado.");
                     if (campoLucro) campoLucro.focus();
                     return;
                 }
-                try { localStorage.setItem("bolsatrader_ia_lucro", campoLucro.value); } catch (e) {}
-                var lucroTexto = lucro.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+                try { localStorage.setItem("bolsatrader_ia_lucro_pct", campoLucro.value); } catch (e) {}
+                var lucroTexto = lucro.toLocaleString("pt-BR", { maximumFractionDigits: 2 }) + "%";
                 pergunta = pergunta.split("{LUCRO}").join(lucroTexto);
             }
             var chave = (campoIa && IAS[campoIa.value]) ? campoIa.value : "perplexity";

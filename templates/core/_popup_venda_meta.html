@@ -1,0 +1,78 @@
+{% comment %}
+Popup "Meta de lucro atingida": depois de cada atualização de cotações,
+lê a grid Compradas (posicoes_meta_atingida - ver core.services.
+posicoes_meta_lucro_atingida) e pergunta se o usuário quer vender os
+ativos que bateram a meta. Confirmando, registra a venda de todo o saldo
+pela cotação atual (core.views.posicoes_vender_meta_atingida). "Agora não"
+só volta a perguntar na próxima atualização de cotações.
+{% endcomment %}
+{% if posicoes_meta_atingida %}
+<div class="popup-grafico" id="popup-venda-meta" role="dialog" aria-modal="true" aria-labelledby="popup-venda-meta-titulo" hidden
+     data-chave="{% if ultima_atualizacao_cotacoes %}{{ ultima_atualizacao_cotacoes|date:'c' }}{% endif %}|{% for p in posicoes_meta_atingida %}{{ p.ativo.ticker }}{% if not forloop.last %},{% endif %}{% endfor %}">
+    <div class="popup-grafico-caixa popup-venda-meta-caixa">
+        <h2 id="popup-venda-meta-titulo" style="margin-top: 0;">🎯 Meta de lucro atingida</h2>
+        <p style="color: var(--text-dim);">Estes ativos atingiram o percentual de lucro. Deseja vender agora pela cotação atual?</p>
+        <form method="post" action="{% url 'core:posicoes_vender_meta_atingida' %}" id="form-venda-meta">
+            {% csrf_token %}
+            <input type="hidden" name="next" value="{{ request.get_full_path }}">
+            <div class="tabela-scroll">
+            <table class="tabela-futurista">
+                <thead>
+                    <tr><th>Vender</th><th>Ativo</th><th>Qtd.</th><th>Preço compra</th><th>Cotação atual</th><th>Lucro (%)</th><th>Meta</th><th>Lucro (R$)</th></tr>
+                </thead>
+                <tbody>
+                    {% for p in posicoes_meta_atingida %}
+                    <tr>
+                        <td><input type="checkbox" name="tickers" value="{{ p.ativo.ticker }}" checked aria-label="Vender {{ p.ativo.ticker }}"></td>
+                        <td><strong>{{ p.ativo.ticker }}</strong></td>
+                        <td>{{ p.quantidade }}</td>
+                        <td>R$ {{ p.preco_medio }}</td>
+                        <td>R$ {{ p.preco_atual }}</td>
+                        <td class="valor-positivo">{{ p.lucro_perda_pct }}%</td>
+                        <td>{% if p.meta_lucro_pct %}+{{ p.meta_lucro_pct }}%{% else %}padrão{% endif %}</td>
+                        <td class="valor-positivo">R$ {{ p.lucro_perda_valor }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            </div>
+            <p style="color: var(--text-dim); font-size: .85rem;">A venda é registrada no BolsaTrader (todo o saldo, com a data de hoje). A ordem na corretora continua sendo enviada por você.</p>
+            <div style="display: flex; flex-wrap: wrap; gap: .6rem; justify-content: flex-end;">
+                <button type="button" class="btn-futurista btn-secundario" id="popup-venda-meta-nao">Agora não</button>
+                <button type="submit" class="btn-futurista" data-overlay-texto="Registrando vendas...">💰 OK, vender</button>
+            </div>
+        </form>
+    </div>
+</div>
+<script>
+    (function () {
+        var popup = document.getElementById("popup-venda-meta");
+        if (!popup) return;
+        var CHAVE = "bolsatrader-venda-meta-dispensada";
+        var chave = popup.dataset.chave;
+        var dispensada = null;
+        try { dispensada = window.localStorage.getItem(CHAVE); } catch (e) {}
+        if (dispensada === chave) return;
+
+        popup.hidden = false;
+        function fechar() {
+            popup.hidden = true;
+            try { window.localStorage.setItem(CHAVE, chave); } catch (e) {}
+        }
+        document.getElementById("popup-venda-meta-nao").addEventListener("click", fechar);
+        popup.addEventListener("click", function (ev) { if (ev.target === popup) fechar(); });
+        document.addEventListener("keydown", function (ev) { if (ev.key === "Escape" && !popup.hidden) fechar(); });
+
+        var form = document.getElementById("form-venda-meta");
+        form.addEventListener("submit", function (ev) {
+            var marcados = form.querySelectorAll('input[name="tickers"]:checked');
+            if (!marcados.length) {
+                ev.preventDefault();
+                alert("Marque ao menos um ativo para vender.");
+                return;
+            }
+            try { window.localStorage.setItem(CHAVE, chave); } catch (e) {}
+        });
+    })();
+</script>
+{% endif %}

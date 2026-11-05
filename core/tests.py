@@ -1367,6 +1367,72 @@ class RelatorioCompradasTests(TestCase):
             self.assertIn(reverse("core:compradas_relatorio_excel"), html, tela)
 
 
+class VendaMetaAtingidaTests(TestCase):
+    """Popup "Meta de lucro atingida" e venda automática confirmada - ver core.views.posicoes_vender_meta_atingida."""
+
+    def setUp(self):
+        self.usuario = User.objects.create_user(username="investidor_meta_venda", password="SenhaForte123!")
+        self.client.login(username="investidor_meta_venda", password="SenhaForte123!")
+        self.wege = Ativo.objects.create(ticker="WEGE3", nome="WEG ON")
+        self.lote1 = Operacao.objects.create(
+            usuario=self.usuario, ativo=self.wege, tipo=Operacao.COMPRA, meta_lucro_pct=Decimal("5"),
+            quantidade=20, preco_unitario=Decimal("40.00"), data_operacao=date.today() - timedelta(days=4),
+            percentual_corretora=Decimal("0.50"),
+        )
+        self.lote2 = Operacao.objects.create(
+            usuario=self.usuario, ativo=self.wege, tipo=Operacao.COMPRA, meta_lucro_pct=Decimal("5"),
+            quantidade=10, preco_unitario=Decimal("40.00"), data_operacao=date.today() - timedelta(days=2),
+        )
+        Cotacao.objects.create(ativo=self.wege, data=date.today(), preco_fechamento=Decimal("44.00"))
+        self.petr = Ativo.objects.create(ticker="PETR4", nome="PETROBRAS PN")
+        self.lote_petr = Operacao.objects.create(
+            usuario=self.usuario, ativo=self.petr, tipo=Operacao.COMPRA, meta_lucro_pct=Decimal("20"),
+            quantidade=10, preco_unitario=Decimal("30.00"), data_operacao=date.today() - timedelta(days=4),
+        )
+        Cotacao.objects.create(ativo=self.petr, data=date.today(), preco_fechamento=Decimal("31.00"))
+
+    def test_popup_lista_so_quem_atingiu_a_meta(self):
+        for tela in ("core:posicoes", "core:dashboard"):
+            html = self.client.get(reverse(tela)).content.decode()
+            self.assertIn('id="popup-venda-meta"', html, tela)
+            self.assertIn('name="tickers" value="WEGE3"', html, tela)
+            self.assertNotIn('name="tickers" value="PETR4"', html, tela)
+
+    def test_sem_meta_atingida_sem_popup(self):
+        Cotacao.objects.filter(ativo=self.wege).update(preco_fechamento=Decimal("41.00"))
+        html = self.client.get(reverse("core:posicoes")).content.decode()
+        self.assertNotIn('id="popup-venda-meta"', html)
+
+    def test_ok_vende_todo_saldo_pela_cotacao_atual(self):
+        resposta = self.client.post(
+            reverse("core:posicoes_vender_meta_atingida"),
+            {"tickers": ["WEGE3", "PETR4"], "next": reverse("core:posicoes")},
+        )
+        self.assertRedirects(resposta, reverse("core:posicoes"), fetch_redirect_response=False)
+        for lote in (self.lote1, self.lote2):
+            lote.refresh_from_db()
+            self.assertEqual(lote.saldo, 0)
+            venda = lote.vendas.get()
+            self.assertEqual(venda.preco, Decimal("44.00"))
+            self.assertEqual(venda.data, date.today())
+        self.assertEqual(self.lote1.vendas.get().percentual_corretora, Decimal("0.50"))
+        # PETR4 não atingiu a meta - não vende mesmo se vier no POST
+        self.lote_petr.refresh_from_db()
+        self.assertEqual(self.lote_petr.saldo, 10)
+
+    def test_nao_vende_se_a_cotacao_caiu_depois_do_popup(self):
+        Cotacao.objects.filter(ativo=self.wege).update(preco_fechamento=Decimal("41.00"))
+        self.client.post(reverse("core:posicoes_vender_meta_atingida"), {"tickers": ["WEGE3"]})
+        self.lote1.refresh_from_db()
+        self.assertEqual(self.lote1.saldo, 20)
+
+    def test_next_externo_ignorado(self):
+        resposta = self.client.post(
+            reverse("core:posicoes_vender_meta_atingida"), {"tickers": [], "next": "https://exemplo.com/"},
+        )
+        self.assertRedirects(resposta, reverse("core:dashboard"), fetch_redirect_response=False)
+
+
 class AnaliseTendenciaTests(TestCase):
     def setUp(self):
         self.ativo = Ativo.objects.create(ticker="ITUB4")

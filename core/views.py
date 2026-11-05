@@ -15,6 +15,7 @@ from django.http import Http404, HttpResponse, HttpResponseNotAllowed, JsonRespo
 from django.shortcuts import render, redirect, get_object_or_404
 from django.template.loader import render_to_string
 from django.urls import reverse
+from django.utils.http import url_has_allowed_host_and_scheme
 from django.utils import timezone
 from django.utils.dateparse import parse_date, parse_datetime
 from django.views.decorators.csrf import csrf_exempt
@@ -112,6 +113,8 @@ from .services import (
     sincronizar_lancamento_compra,
     sincronizar_lancamento_venda,
     recalcular_resumo_vendas,
+    posicoes_meta_lucro_atingida,
+    vender_posicoes_meta_atingida,
     sincronizar_lancamento_compra_cripto,
     sincronizar_lancamento_venda_cripto,
     registrar_transferencia_conta_corrente,
@@ -195,6 +198,7 @@ def _contexto_painel(usuario):
         # _tabela_posicoes_compradas.html.
         "posicoes": posicoes_compradas,
         "posicoes_compradas": posicoes_compradas,
+        "posicoes_meta_atingida": posicoes_meta_lucro_atingida(posicoes_compradas),
         "valor_investido_total": valor_investido_total,
         "valor_atual_total": valor_atual_total,
         "lucro_perda_total": lucro_perda_total,
@@ -766,6 +770,30 @@ def operacao_vender(request, operacao_id):
 
 
 @login_required
+@require_POST
+def posicoes_vender_meta_atingida(request):
+    """
+    Confirmação do popup "Meta de lucro atingida" (Painel de Controle e
+    Posições em Carteira): registra a venda de todo o saldo dos ativos
+    marcados pela cotação atual - ver core.services.vender_posicoes_meta_atingida.
+    """
+    destino = request.POST.get("next") or ""
+    if not url_has_allowed_host_and_scheme(destino, allowed_hosts={request.get_host()}):
+        destino = reverse("core:dashboard")
+
+    vendas = vender_posicoes_meta_atingida(request.user, request.POST.getlist("tickers"))
+    if not vendas:
+        messages.warning(request, "Nenhuma venda registrada - nenhum ativo marcado está mais com a meta de lucro atingida.")
+        return redirect(destino)
+
+    for venda in vendas:
+        messages.success(request, "🤖 " + _mensagem_venda_salva(venda, "registrada automaticamente"))
+    _avisar_limite_isencao(request, vendas[-1])
+    messages.info(request, "Lembre-se de enviar a ordem de venda na corretora - o BolsaTrader só registra a venda.")
+    return redirect(destino)
+
+
+@login_required
 def venda_lote_editar(request, venda_id):
     """Corrige uma venda já registrada de um lote (quantidade, preço, data, corretora e taxas)."""
     venda = get_object_or_404(
@@ -936,6 +964,7 @@ def posicoes(request):
     contexto = {
         "posicoes": lista_posicoes,
         "posicoes_compradas": posicoes_compradas,
+        "posicoes_meta_atingida": posicoes_meta_lucro_atingida(posicoes_compradas),
         "posicoes_reservadas": posicoes_reservadas,
         "posicoes_reservadas_robo": posicoes_reservadas_robo,
         "comparativo": construir_comparativo_valores(lista_posicoes),

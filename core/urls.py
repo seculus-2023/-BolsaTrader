@@ -31,6 +31,7 @@ urlpatterns = [
     path("posicoes/analise-ia/", views.posicoes_analise_ia, name="posicoes_analise_ia"),
     path("posicoes/exportar/excel/", views.posicoes_exportar_excel, name="posicoes_exportar_excel"),
     path("posicoes/exportar/pdf/", views.posicoes_exportar_pdf, name="posicoes_exportar_pdf"),
+    path("posicoes/vender-meta-atingida/", views.posicoes_vender_meta_atingida, name="posicoes_vender_meta_atingida"),
     path("posicoes/compradas/relatorio/excel/", views.compradas_relatorio_excel, name="compradas_relatorio_excel"),
     path("posicoes/compradas/relatorio/pdf/", views.compradas_relatorio_pdf, name="compradas_relatorio_pdf"),
     path("scanner-tecnico/", views.scanner_tecnico, name="scanner_tecnico"),

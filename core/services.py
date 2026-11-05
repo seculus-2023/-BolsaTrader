@@ -6327,6 +6327,50 @@ def recalcular_resumo_vendas(operacao: Operacao) -> None:
     sincronizar_lancamento_venda(operacao)
 
 
+def posicoes_meta_lucro_atingida(posicoes: list[Posicao]) -> list[Posicao]:
+    """
+    Posições compradas (grid Compradas) que já atingiram a meta de lucro e
+    têm cotação - são as que o popup "Meta de lucro atingida" pergunta se o
+    usuário quer vender depois de cada atualização de cotações.
+    """
+    return [
+        p for p in posicoes
+        if p.meta_lucro_atingida and p.preco_atual and p.quantidade > 0 and p.lotes_compra
+    ]
+
+
+def vender_posicoes_meta_atingida(usuario, tickers) -> list[VendaLote]:
+    """
+    Venda automática (confirmada pelo usuário no popup) das posições que
+    atingiram a meta de lucro: registra uma venda de todo o saldo de cada
+    lote, pela cotação atual, com data de hoje e a corretora do lote. A meta
+    é conferida de novo aqui - se a cotação caiu desde que o popup abriu, o
+    ativo não é vendido. Só registra no sistema; a ordem na corretora
+    continua sendo do usuário.
+    """
+    tickers = {t.strip().upper() for t in tickers if t and t.strip()}
+    vendas: list[VendaLote] = []
+    hoje = timezone.localdate()
+    for posicao in posicoes_meta_lucro_atingida(calcular_posicoes(usuario)):
+        if posicao.ativo.ticker.upper() not in tickers:
+            continue
+        preco = Decimal(posicao.preco_atual).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        with transaction.atomic():
+            for lote in posicao.lotes_compra:
+                lote.refresh_from_db()
+                if lote.saldo <= 0:
+                    continue
+                vendas.append(VendaLote.objects.create(
+                    operacao=lote,
+                    quantidade=lote.saldo,
+                    preco=preco,
+                    data=max(hoje, lote.data_operacao),
+                    percentual_corretora=lote.percentual_corretora,
+                ))
+                recalcular_resumo_vendas(lote)
+    return vendas
+
+
 def sincronizar_lancamento_venda(operacao: Operacao) -> None:
     """
     Cria/atualiza um lançamento de CRÉDITO na conta corrente para cada venda

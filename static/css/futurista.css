@@ -1397,6 +1397,14 @@ body.pagina-popup {
     z-index: 1;
 }
 
+/* Popup "Meta de lucro atingida" (vender?) - ver _popup_venda_meta.html */
+.popup-grafico-caixa.popup-venda-meta-caixa {
+    height: auto;
+    max-height: 100%;
+    overflow-y: auto;
+    padding: 1.2rem;
+}
+
 /* Botão 📈 ao lado do ticker nas grids de ativos comprados */
 .btn-grafico-cotacao {
     display: inline-flex;

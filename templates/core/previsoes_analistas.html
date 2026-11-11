@@ -39,6 +39,7 @@
             </div>
             <button type="button" class="btn-futurista btn-secundario" id="btn-buscar-consenso">Buscar na API</button>
             <a href="#" class="btn-futurista btn-secundario" id="link-previsao-tradingview" target="_blank" rel="noopener">Abrir previsão no TradingView</a>
+            <a href="#" class="btn-futurista btn-secundario" id="link-tecnica-investing" target="_blank" rel="noopener">Análise técnica no Investing</a>
         </div>
         <p id="aviso-consenso" style="color: var(--text-dim); font-size: .85rem; min-height: 1.2em;"></p>
         <div style="display: flex; gap: .8rem; flex-wrap: wrap;">
@@ -142,6 +143,12 @@
     (function () {
         var campoTicker = document.getElementById("id_ticker");
         var link = document.getElementById("link-previsao-tradingview");
+        var linkInvesting = document.getElementById("link-tecnica-investing");
+        // O Investing usa um apelido próprio por ativo (não o ticker). Os
+        // conhecidos vão direto para a aba técnica; os demais caem na busca.
+        var INVESTING_SLUGS = {
+            WEGE3: "weg-on-ej-nm"
+        };
         var aviso = document.getElementById("aviso-consenso");
         var origem = document.getElementById("campo-origem-previsao");
         var botao = document.getElementById("btn-buscar-consenso");
@@ -156,6 +163,12 @@
             link.href = ticker
                 ? "https://br.tradingview.com/symbols/BMFBOVESPA-" + encodeURIComponent(ticker) + "/forecast/"
                 : "https://br.tradingview.com/markets/stocks-brazil/market-movers-all-stocks/";
+            var slug = INVESTING_SLUGS[ticker];
+            linkInvesting.href = slug
+                ? "https://br.investing.com/equities/" + slug + "-technical"
+                : ticker
+                    ? "https://br.investing.com/search/?q=" + encodeURIComponent(ticker)
+                    : "https://br.investing.com/equities/brazil";
         }
         campoTicker.addEventListener("input", atualizarLink);
         atualizarLink();

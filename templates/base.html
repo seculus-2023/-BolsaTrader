@@ -228,40 +228,5 @@
             });
         })();
     </script>
-    {% if user.is_authenticated and total_alertas_acao_pendentes %}
-    <script>
-        (function () {
-            // Toca um som quando há meta de lucro/perda atingida ou sinal do
-            // robô consultor não lido - só uma vez por quantidade
-            // (sessionStorage), pra não repetir o beep a cada navegação
-            // enquanto o mesmo alerta continua sem ser lido.
-            var totalAcao = {{ total_alertas_acao_pendentes }};
-            var chave = "bolsatrader_som_acao_total";
-            if (sessionStorage.getItem(chave) === String(totalAcao)) return;
-            sessionStorage.setItem(chave, String(totalAcao));
-
-            try {
-                var Ctx = window.AudioContext || window.webkitAudioContext;
-                var ctx = new Ctx();
-                var agora = ctx.currentTime;
-
-                [0, 0.18].forEach(function (atraso) {
-                    var osc = ctx.createOscillator();
-                    var ganho = ctx.createGain();
-                    osc.type = "sine";
-                    osc.frequency.setValueAtTime(880, agora + atraso);
-                    ganho.gain.setValueAtTime(0, agora + atraso);
-                    ganho.gain.linearRampToValueAtTime(0.25, agora + atraso + 0.02);
-                    ganho.gain.exponentialRampToValueAtTime(0.001, agora + atraso + 0.16);
-                    osc.connect(ganho).connect(ctx.destination);
-                    osc.start(agora + atraso);
-                    osc.stop(agora + atraso + 0.18);
-                });
-            } catch (erro) {
-                // navegador sem suporte a Web Audio, ou bloqueio de autoplay - ignora
-            }
-        })();
-    </script>
-    {% endif %}
 </body>
 </html>

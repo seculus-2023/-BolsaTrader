@@ -51,6 +51,26 @@
             </div>
             {% endif %}{% endfor %}
         </div>
+        <div id="simulador-previsao" style="margin-top: .8rem;">
+            <label style="display: block; font-size: .85rem; color: var(--text-dim);">
+                🧮 Simulador de compra &mdash; se eu comprasse a este preço, qual seria o resultado num preço alvo?
+            </label>
+            <div style="display: flex; gap: .6rem; align-items: flex-end; flex-wrap: wrap; margin-top: .5rem;">
+                <div>
+                    <label style="font-size: .75rem; color: var(--text-dim); margin: 0;">Quantidade</label>
+                    <input type="number" step="1" min="1" id="sim-quantidade" class="form-control-futurista" placeholder="Ex.: 100" style="max-width: 110px;">
+                </div>
+                <div>
+                    <label style="font-size: .75rem; color: var(--text-dim); margin: 0;">Preço de compra (R$)</label>
+                    <input type="number" step="0.01" min="0" id="sim-preco-compra" class="form-control-futurista" style="max-width: 130px;">
+                </div>
+                <div>
+                    <label style="font-size: .75rem; color: var(--text-dim); margin: 0;">Preço alvo (R$)</label>
+                    <input type="number" step="0.01" min="0" id="sim-preco-alvo" class="form-control-futurista" placeholder="Ex.: 11.44" style="max-width: 130px;">
+                </div>
+            </div>
+            <p style="margin: .6rem 0 0;">Resultado: <strong id="sim-resultado" class="valor-neutro">&mdash;</strong></p>
+        </div>
         <div style="margin-top: .8rem;">
             {{ form.observacao.label_tag }}
             {{ form.observacao }}
@@ -175,7 +195,10 @@
 
         function preencher(id, valor) {
             var campo = document.getElementById(id);
-            if (campo && valor !== null && valor !== undefined && valor !== "") campo.value = valor;
+            if (campo && valor !== null && valor !== undefined && valor !== "") {
+                campo.value = valor;
+                campo.dispatchEvent(new Event("change"));
+            }
         }
 
         botao.addEventListener("click", function () {
@@ -209,6 +232,66 @@
                 .catch(function () { aviso.textContent = "Falha de conexão ao consultar a API."; })
                 .finally(function () { botao.disabled = false; });
         });
+
+        // Simulador de compra (igual ao da cotação avulsa). Os campos não têm
+        // name, então não vão no POST. Copia a cotação e o alvo médio do
+        // formulário enquanto o usuário não editar o simulador à mão.
+        var simQtd = document.getElementById("sim-quantidade");
+        var simCompra = document.getElementById("sim-preco-compra");
+        var simAlvo = document.getElementById("sim-preco-alvo");
+        var simResultado = document.getElementById("sim-resultado");
+        var campoPreco = document.getElementById("id_preco_registro");
+        var campoAlvoMedio = document.getElementById("id_alvo_medio");
+
+        function numero(valor) {
+            return parseFloat(String(valor || "").replace(",", "."));
+        }
+
+        function formatarPercentual(valor) {
+            return (valor > 0 ? "+" : "") + valor.toFixed(2).replace(".", ",") + "%";
+        }
+
+        function formatarReal(valor) {
+            var sinal = valor > 0 ? "+" : valor < 0 ? "-" : "";
+            return sinal + "R$ " + Math.abs(valor).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        }
+
+        function recalcularSimulador() {
+            var quantidade = parseInt(simQtd.value, 10);
+            var precoCompra = numero(simCompra.value);
+            var precoAlvo = numero(simAlvo.value);
+            if (!precoCompra || isNaN(precoAlvo)) {
+                simResultado.textContent = "—";
+                simResultado.className = "valor-neutro";
+                return;
+            }
+            var percentual = ((precoAlvo - precoCompra) / precoCompra) * 100;
+            simResultado.className = percentual > 0 ? "valor-positivo" : percentual < 0 ? "valor-negativo" : "valor-neutro";
+            simResultado.textContent = (!quantidade || quantidade <= 0)
+                ? formatarPercentual(percentual)
+                : formatarReal((precoAlvo - precoCompra) * quantidade) + " (" + formatarPercentual(percentual) + ")";
+        }
+
+        function espelhar(origemCampo, destino) {
+            if (!origemCampo) return;
+            function copiar() {
+                if (destino.dataset.editado) return;
+                destino.value = origemCampo.value ? numero(origemCampo.value) : "";
+                recalcularSimulador();
+            }
+            origemCampo.addEventListener("input", copiar);
+            origemCampo.addEventListener("change", copiar);
+            copiar();
+        }
+
+        [simQtd, simCompra, simAlvo].forEach(function (campo) {
+            campo.addEventListener("input", function () {
+                if (campo !== simQtd) campo.dataset.editado = "1";
+                recalcularSimulador();
+            });
+        });
+        espelhar(campoPreco, simCompra);
+        espelhar(campoAlvoMedio, simAlvo);
 
         // editar os alvos à mão depois da busca: o registro passa a ser manual
         ["id_alvo_medio", "id_alvo_minimo", "id_alvo_maximo", "id_recomendacao"].forEach(function (id) {

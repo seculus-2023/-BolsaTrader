@@ -331,7 +331,7 @@ coluna principal.
     <p class="desenvolvedor-contato">
         <a href="mailto:arpjunior40@gmail.com">✉️ arpjunior40@gmail.com</a>
         <span class="desenvolvedor-separador">&middot;</span>
-        <a href="https://wa.me/5565981132995" target="_blank" rel="noopener">📱 +55 65 98113-2995</a>
+        {% if whatsapp_link %}<a href="{{ whatsapp_link }}" target="_blank" rel="noopener">📱 {{ whatsapp_numero_formatado }}</a>{% endif %}
     </p>
 </div>
 

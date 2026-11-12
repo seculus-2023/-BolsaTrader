@@ -178,17 +178,26 @@
             return campoTicker.value.trim().toUpperCase();
         }
 
+        // URLs configuráveis no .env (ver core.context_processors.links_externos)
+        var URLS = {
+            tradingviewAtivo: "{{ links_externos.tradingview_ativo|escapejs }}",
+            tradingviewMercado: "{{ links_externos.tradingview_mercado|escapejs }}",
+            investingAtivo: "{{ links_externos.investing_ativo|escapejs }}",
+            investingBusca: "{{ links_externos.investing_busca|escapejs }}",
+            investingMercado: "{{ links_externos.investing_mercado|escapejs }}"
+        };
+
         function atualizarLink() {
             var ticker = tickerAtual();
             link.href = ticker
-                ? "https://br.tradingview.com/symbols/BMFBOVESPA-" + encodeURIComponent(ticker)
-                : "https://br.tradingview.com/markets/stocks-brazil/market-movers-all-stocks/";
+                ? URLS.tradingviewAtivo + encodeURIComponent(ticker)
+                : URLS.tradingviewMercado;
             var slug = INVESTING_SLUGS[ticker];
             linkInvesting.href = slug
-                ? "https://br.investing.com/equities/" + slug + "-technical"
+                ? URLS.investingAtivo + slug + "-technical"
                 : ticker
-                    ? "https://br.investing.com/search/?q=" + encodeURIComponent(ticker)
-                    : "https://br.investing.com/equities/brazil";
+                    ? URLS.investingBusca + encodeURIComponent(ticker)
+                    : URLS.investingMercado;
         }
         campoTicker.addEventListener("input", atualizarLink);
         atualizarLink();

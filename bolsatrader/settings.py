@@ -141,6 +141,7 @@ TEMPLATES = [
                 "django.contrib.messages.context_processors.messages",
                 "core.context_processors.alertas_pendentes",
                 "core.context_processors.whatsapp_link",
+                "core.context_processors.links_externos",
                 "core.context_processors.ultima_atualizacao_cotacoes",
                 "core.context_processors.horario_b3",
                 "core.context_processors.post_it",
@@ -336,6 +337,22 @@ HOME_BROKER_URL = config(
     "HOME_BROKER_URL",
     default="https://trader.clear.com.br/home-broker/new/",
 )
+
+# Links externos das telas (ver core.context_processors.links_externos). As
+# URLs terminadas em "-" / "=" / "/" são prefixos: o sistema acrescenta o
+# ticker (ou o apelido do ativo no Investing, ou a pergunta da IA) no final.
+TRADINGVIEW_URL_ATIVO = config("TRADINGVIEW_URL_ATIVO", default="https://br.tradingview.com/symbols/BMFBOVESPA-")
+TRADINGVIEW_URL_MERCADO = config(
+    "TRADINGVIEW_URL_MERCADO",
+    default="https://br.tradingview.com/markets/stocks-brazil/market-movers-all-stocks/",
+)
+INVESTING_URL_ATIVO = config("INVESTING_URL_ATIVO", default="https://br.investing.com/equities/")
+INVESTING_URL_BUSCA = config("INVESTING_URL_BUSCA", default="https://br.investing.com/search/?q=")
+INVESTING_URL_MERCADO = config("INVESTING_URL_MERCADO", default="https://br.investing.com/equities/brazil")
+IA_URL_PERPLEXITY = config("IA_URL_PERPLEXITY", default="https://www.perplexity.ai/search?q=")
+IA_URL_GEMINI = config("IA_URL_GEMINI", default="https://gemini.google.com/app?q=")
+IA_URL_CHATGPT = config("IA_URL_CHATGPT", default="https://chatgpt.com/?q=")
+IA_URL_CLAUDE = config("IA_URL_CLAUDE", default="https://claude.ai/new?q=")
 
 
 # --------------------------------------------------------------------------

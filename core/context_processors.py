@@ -24,7 +24,35 @@ def whatsapp_link(request):
     from django.conf import settings
 
     numero = settings.WHATSAPP_NUMERO
-    return {"whatsapp_link": f"https://wa.me/{numero}" if numero else ""}
+    return {
+        "whatsapp_link": f"https://wa.me/{numero}" if numero else "",
+        "whatsapp_numero_formatado": formatar_whatsapp(numero),
+    }
+
+
+def formatar_whatsapp(numero: str) -> str:
+    """Ex: "5565981132995" -> "+55 65 98113-2995"; outros formatos só ganham o "+"."""
+    digitos = "".join(c for c in numero if c.isdigit())
+    if len(digitos) == 13 and digitos.startswith("55"):
+        return f"+{digitos[:2]} {digitos[2:4]} {digitos[4:9]}-{digitos[9:]}"
+    return f"+{digitos}" if digitos else ""
+
+
+def links_externos(request):
+    """URLs de sites externos usadas nos templates, todas configuráveis no .env (ver settings)."""
+    from django.conf import settings
+
+    return {"links_externos": {
+        "tradingview_ativo": settings.TRADINGVIEW_URL_ATIVO,
+        "tradingview_mercado": settings.TRADINGVIEW_URL_MERCADO,
+        "investing_ativo": settings.INVESTING_URL_ATIVO,
+        "investing_busca": settings.INVESTING_URL_BUSCA,
+        "investing_mercado": settings.INVESTING_URL_MERCADO,
+        "ia_perplexity": settings.IA_URL_PERPLEXITY,
+        "ia_gemini": settings.IA_URL_GEMINI,
+        "ia_chatgpt": settings.IA_URL_CHATGPT,
+        "ia_claude": settings.IA_URL_CLAUDE,
+    }}
 
 
 def ultima_atualizacao_cotacoes(request):

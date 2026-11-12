@@ -149,10 +149,10 @@
 
         // IA: copia a pergunta e abre a IA escolhida já tentando preenchê-la via ?q=.
         var IAS = {
-            perplexity: { nome: "Perplexity", url: "https://www.perplexity.ai/search?q=" },
-            gemini: { nome: "Gemini", url: "https://gemini.google.com/app?q=" },
-            chatgpt: { nome: "ChatGPT", url: "https://chatgpt.com/?q=" },
-            claude: { nome: "Claude", url: "https://claude.ai/new?q=" }
+            perplexity: { nome: "Perplexity", url: "{{ links_externos.ia_perplexity|escapejs }}" },
+            gemini: { nome: "Gemini", url: "{{ links_externos.ia_gemini|escapejs }}" },
+            chatgpt: { nome: "ChatGPT", url: "{{ links_externos.ia_chatgpt|escapejs }}" },
+            claude: { nome: "Claude", url: "{{ links_externos.ia_claude|escapejs }}" }
         };
         var campoIa = document.getElementById("campo-ia");
         try {
@@ -237,7 +237,7 @@
 <h2 style="margin-top: 2rem;">Maiores altas, baixas e mais negociadas (TradingView)</h2>
 <p style="color: var(--text-dim);">
     Equivalente embutido da página
-    <a href="https://br.tradingview.com/markets/stocks-brazil/market-movers-all-stocks/" target="_blank" rel="noopener">market movers</a>
+    <a href="{{ links_externos.tradingview_mercado }}" target="_blank" rel="noopener">market movers</a>
     do TradingView para ações brasileiras (ela também não pode ser aberta dentro de um iframe) - widget oficial
     filtrado para a bolsa brasileira (BMFBOVESPA).
 </p>

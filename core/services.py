@@ -6257,6 +6257,159 @@ def noticia_cita_termos(titulo: str, termos: list[str]) -> bool:
     return any(re.search(rf"(?<![A-Z0-9]){re.escape(t)}(?![A-Z])", titulo_normalizado) for t in termos)
 
 
+# Janela usada pelo relatório PDF de notícias pra marcar uma manchete como "nova".
+HORAS_NOTICIA_NOVA_RELATORIO = 24
+
+
+def gerar_pdf_noticias(
+    nome_usuario: str, ativo_destaque: str = "", so_novas: bool = False, limite_por_fonte: int = 15,
+) -> bytes:
+    """
+    Relatório PDF das Notícias do Mercado agrupado por fonte - cada fonte ativa
+    ganha um cabeçalho em destaque (nome, site e contagens) seguido das suas
+    manchetes. Marca como NOVA a manchete capturada nas últimas
+    HORAS_NOTICIA_NOVA_RELATORIO horas e destaca as que citam o ativo em
+    destaque da tela (ver termos_destaque_noticias). Com so_novas=True, só
+    entram as novas (fontes sem nenhuma nova ficam de fora).
+    """
+    import io
+    from xml.sax.saxutils import escape
+
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+    from reportlab.lib.units import cm
+    from reportlab.platypus import KeepTogether, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+
+    agora = timezone.localtime()
+    limite_nova = timezone.now() - timedelta(hours=HORAS_NOTICIA_NOVA_RELATORIO)
+    termos = termos_destaque_noticias(ativo_destaque)
+
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(
+        buffer, pagesize=A4,
+        topMargin=1.5 * cm, bottomMargin=1.5 * cm, leftMargin=1.5 * cm, rightMargin=1.5 * cm,
+        title="Notícias do Mercado",
+    )
+    estilos = getSampleStyleSheet()
+    estilo_fonte_nome = ParagraphStyle(
+        "FonteNome", parent=estilos["Heading2"], textColor=colors.white, fontSize=13, leading=16,
+        spaceBefore=0, spaceAfter=0,
+    )
+    estilo_fonte_info = ParagraphStyle(
+        "FonteInfo", parent=estilos["Normal"], textColor=colors.HexColor("#9fe9f5"), fontSize=8, leading=10,
+    )
+    estilo_titulo = ParagraphStyle("Manchete", parent=estilos["Normal"], fontSize=9, leading=12)
+    estilo_data = ParagraphStyle("Data", parent=estilos["Normal"], fontSize=7.5, textColor=colors.HexColor("#666666"))
+
+    subtitulo = "Somente notícias novas" if so_novas else "Todas as notícias capturadas"
+    elementos = [
+        Paragraph("BolsaTrader - Notícias do Mercado", estilos["Title"]),
+        Paragraph(
+            f"{escape(nome_usuario)} - gerado em {agora.strftime('%d/%m/%Y %H:%M')} - {subtitulo}"
+            f" (nova = capturada nas últimas {HORAS_NOTICIA_NOVA_RELATORIO}h)",
+            estilos["Normal"],
+        ),
+    ]
+    if termos:
+        elementos.append(Paragraph(
+            f"Ativo em destaque: <b>{escape(ativo_destaque)}</b> - manchetes que o citam aparecem em amarelo.",
+            estilos["Normal"],
+        ))
+    elementos.append(Spacer(1, 0.4 * cm))
+
+    # Monta os blocos por fonte primeiro pra poder exibir o resumo no topo.
+    blocos, resumo = [], []
+    for fonte in FonteNoticia.objects.filter(ativa=True):
+        noticias = list(fonte.noticias.all()[:limite_por_fonte])
+        novas = {n.id for n in noticias if n.capturada_em >= limite_nova}
+        citam = {n.id for n in noticias if termos and noticia_cita_termos(n.titulo, termos)}
+        if so_novas:
+            noticias = [n for n in noticias if n.id in novas]
+            if not noticias:
+                continue
+        resumo.append([fonte.nome, str(len(noticias)), str(len(novas)), str(len(citam)) if termos else "—"])
+
+        info = f"{escape(fonte.url)} &nbsp;|&nbsp; {len(noticias)} notícia(s) &nbsp;|&nbsp; {len(novas)} nova(s)"
+        if termos:
+            info += f" &nbsp;|&nbsp; {len(citam)} citam {escape(ativo_destaque.upper())}"
+        cabecalho = Table(
+            [[Paragraph(escape(fonte.nome), estilo_fonte_nome)], [Paragraph(info, estilo_fonte_info)]],
+            colWidths=[doc.width],
+        )
+        cabecalho.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#0D1526")),
+            ("LINEBEFORE", (0, 0), (0, -1), 4, colors.HexColor("#00F0FF")),
+            ("LEFTPADDING", (0, 0), (-1, -1), 10),
+            ("TOPPADDING", (0, 0), (-1, 0), 7),
+            ("BOTTOMPADDING", (0, -1), (-1, -1), 7),
+            ("TOPPADDING", (0, 1), (-1, -1), 1),
+            ("BOTTOMPADDING", (0, 0), (-1, 0), 1),
+        ]))
+
+        if not noticias:
+            blocos.append(KeepTogether([
+                cabecalho, Spacer(1, 0.15 * cm),
+                Paragraph("Nenhuma notícia capturada dessa fonte.", estilos["Normal"]), Spacer(1, 0.5 * cm),
+            ]))
+            continue
+
+        linhas, estilo_linhas = [], [
+            ("FONTSIZE", (0, 0), (-1, -1), 8),
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ("LINEBELOW", (0, 0), (-1, -1), 0.4, colors.HexColor("#dddddd")),
+            ("TOPPADDING", (0, 0), (-1, -1), 4),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+        ]
+        for i, n in enumerate(noticias):
+            marcas = []
+            if n.id in citam:
+                marcas.append(f'<font color="#8a6d00"><b>[{escape(ativo_destaque.upper()[:12])}]</b></font>')
+            if n.id in novas:
+                marcas.append('<font color="#0a8a3a"><b>[NOVA]</b></font>')
+            titulo = (
+                f'<link href="{escape(n.url)}" color="#0b3d91">{escape(n.titulo)}</link>'
+                + (" " + " ".join(marcas) if marcas else "")
+            )
+            data = timezone.localtime(n.capturada_em).strftime("%d/%m/%Y %H:%M")
+            linhas.append([str(i + 1), Paragraph(titulo, estilo_titulo), Paragraph(data, estilo_data)])
+            if n.id in citam:
+                estilo_linhas.append(("BACKGROUND", (0, i), (-1, i), colors.HexColor("#fff4c2")))
+            elif n.id in novas:
+                estilo_linhas.append(("BACKGROUND", (0, i), (-1, i), colors.HexColor("#e6f7ec")))
+
+        tabela = Table(linhas, colWidths=[0.8 * cm, doc.width - 3.6 * cm, 2.8 * cm])
+        tabela.setStyle(TableStyle(estilo_linhas))
+        # cabeçalho da fonte nunca fica sozinho no pé da página
+        blocos.append(KeepTogether([cabecalho, Spacer(1, 0.1 * cm), tabela]))
+        blocos.append(Spacer(1, 0.5 * cm))
+
+    if not resumo:
+        elementos.append(Paragraph(
+            "Nenhuma notícia nova no período." if so_novas else "Nenhuma notícia capturada nas fontes ativas.",
+            estilos["Normal"],
+        ))
+    else:
+        tabela_resumo = Table(
+            [["Fonte", "Notícias", "Novas", "Citam o ativo"]] + resumo,
+            colWidths=[doc.width - 7.5 * cm, 2.5 * cm, 2.5 * cm, 2.5 * cm], repeatRows=1,
+        )
+        tabela_resumo.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#0D1526")),
+            ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+            ("FONTNAME", (0, 1), (0, -1), "Helvetica-Bold"),
+            ("FONTSIZE", (0, 0), (-1, -1), 8.5),
+            ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#cccccc")),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#eef2f7")]),
+            ("ALIGN", (1, 0), (-1, -1), "CENTER"),
+        ]))
+        elementos += [Paragraph("Resumo por fonte", estilos["Heading3"]), tabela_resumo, Spacer(1, 0.6 * cm)]
+        elementos += blocos
+
+    doc.build(elementos)
+    return buffer.getvalue()
+
+
 # --------------------------------------------------------------------------
 # Conta corrente (caixa das operações de bolsa)
 # --------------------------------------------------------------------------

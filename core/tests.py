@@ -33,7 +33,7 @@ from accounts.models import PerfilUsuario
 from . import services as core_services
 from .forms import OperacaoForm, VendaLoteForm, PrevisaoAnalistaForm
 from .models import (
-    Ativo, Cotacao, Operacao, Alerta, MensagemWhatsapp, FonteNoticia, CotacaoIndice, RegistroAtualizacaoCarteira,
+    Ativo, Cotacao, Operacao, Alerta, MensagemWhatsapp, FonteNoticia, Noticia, CotacaoIndice, RegistroAtualizacaoCarteira,
     ContaCorrente, LancamentoContaCorrente, PostIt,
     CriptoAtivo, OperacaoCripto, CotacaoCripto, RegistroAtualizacaoCarteiraCripto, RegistroCotacao,
     PrevisaoAnalista, VendaLote,
@@ -734,6 +734,42 @@ class FluxoAutenticacaoTests(TestCase):
     def test_cadastro_publico_ligado_mostra_link_no_login(self):
         resposta = self.client.get(reverse("accounts:login"))
         self.assertContains(resposta, reverse("accounts:cadastro"))
+
+
+class RelatorioNoticiasPdfTests(TestCase):
+    """Relatório PDF das Notícias do Mercado, agrupado por fonte."""
+
+    def setUp(self):
+        User.objects.create_user(username="leitor_pdf", password="SenhaForte123!")
+        self.client.login(username="leitor_pdf", password="SenhaForte123!")
+        self.fonte = FonteNoticia.objects.create(nome="Fonte PDF", url="https://exemplo-pdf.com/")
+        self.nova = Noticia.objects.create(fonte=self.fonte, titulo="Petrobras sobe <forte> & PETR4", url="https://exemplo-pdf.com/1")
+        self.antiga = Noticia.objects.create(fonte=self.fonte, titulo="Notícia antiga", url="https://exemplo-pdf.com/2")
+        Noticia.objects.filter(pk=self.antiga.pk).update(capturada_em=timezone.now() - timedelta(days=3))
+
+    def test_baixa_pdf_com_todas(self):
+        resposta = self.client.get(reverse("core:noticias_relatorio_pdf"))
+        self.assertEqual(resposta.status_code, 200)
+        self.assertEqual(resposta["Content-Type"], "application/pdf")
+        self.assertTrue(resposta.content.startswith(b"%PDF"))
+        self.assertIn("noticias_mercado_", resposta["Content-Disposition"])
+
+    def test_so_novas_e_ativo_em_destaque(self):
+        sessao = self.client.session
+        sessao["noticias_ativo_destaque"] = "PETR4"
+        sessao.save()
+        resposta = self.client.get(reverse("core:noticias_relatorio_pdf") + "?so_novas=1")
+        self.assertTrue(resposta.content.startswith(b"%PDF"))
+        self.assertIn("noticias_mercado_novas_", resposta["Content-Disposition"])
+
+    def test_sem_noticias_novas_gera_pdf_vazio(self):
+        Noticia.objects.filter(pk=self.nova.pk).update(capturada_em=timezone.now() - timedelta(days=3))
+        conteudo = core_services.gerar_pdf_noticias("Teste", so_novas=True)
+        self.assertTrue(conteudo.startswith(b"%PDF"))
+
+    def test_exige_login(self):
+        self.client.logout()
+        self.assertEqual(self.client.get(reverse("core:noticias_relatorio_pdf")).status_code, 302)
 
 
 class FontesNoticiasSoStaffTests(TestCase):

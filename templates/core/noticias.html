@@ -13,6 +13,8 @@
         <input type="text" name="ativo" id="campo-ativo-destaque" value="{{ ativo_destaque }}" placeholder="Ex: PETR4, Petrobras" maxlength="100">
     </div>
     <button type="submit" class="btn-futurista btn-atualizar-noticias" data-overlay-texto="Buscando notícias...">Atualizar notícias agora</button>
+    <a href="{% url 'core:noticias_relatorio_pdf' %}" class="btn-futurista btn-secundario" title="PDF com todas as notícias, agrupadas por fonte">📄 Relatório PDF</a>
+    <a href="{% url 'core:noticias_relatorio_pdf' %}?so_novas=1" class="btn-futurista btn-secundario" title="PDF só com as notícias capturadas nas últimas 24h, agrupadas por fonte">📄 Só as novas (24h)</a>
     {% if user.is_staff %}
     <button type="submit" form="form-limpar-noticias" class="btn-futurista btn-secundario" style="color: var(--neon-red); border-color: rgba(255, 56, 96, .4);">🗑️ Limpar todas as notícias</button>
     {% endif %}

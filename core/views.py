@@ -48,6 +48,7 @@ from .models import (
     PrevisaoAnalista, FundamentosAtivo, VendaLote,
 )
 from .services import (
+    gerar_pdf_noticias,
     calcular_posicoes,
     gerar_alertas_para_usuario,
     gerar_sinais_robo_para_usuario,
@@ -2050,6 +2051,25 @@ def noticias(request):
             "ativo_destaque": ativo_destaque, "noticias_ativo_ids": noticias_ativo_ids,
         },
     )
+
+
+@login_required
+def noticias_relatorio_pdf(request):
+    """
+    Relatório PDF das Notícias do Mercado agrupado por fonte (ver
+    core.services.gerar_pdf_noticias), usando o mesmo ativo em destaque da
+    tela. ?so_novas=1 traz só as manchetes capturadas nas últimas 24h.
+    """
+    nome_usuario = request.user.first_name or request.user.username
+    so_novas = request.GET.get("so_novas") == "1"
+    conteudo = gerar_pdf_noticias(
+        nome_usuario, ativo_destaque=request.session.get("noticias_ativo_destaque", ""), so_novas=so_novas,
+    )
+    resposta = HttpResponse(conteudo, content_type="application/pdf")
+    sufixo = "_novas" if so_novas else ""
+    nome_arquivo = f"noticias_mercado{sufixo}_{timezone.localdate().isoformat()}.pdf"
+    resposta["Content-Disposition"] = f'attachment; filename="{nome_arquivo}"'
+    return resposta
 
 
 @login_required

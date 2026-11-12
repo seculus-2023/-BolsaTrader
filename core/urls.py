@@ -113,6 +113,7 @@ urlpatterns = [
     ),
     path("noticias/", views.noticias, name="noticias"),
     path("noticias/atualizar/", views.noticias_atualizar, name="noticias_atualizar"),
+    path("noticias/relatorio/pdf/", views.noticias_relatorio_pdf, name="noticias_relatorio_pdf"),
     path("noticias/limpar/", views.noticias_limpar, name="noticias_limpar"),
     path("noticias/fontes/<int:fonte_id>/alternar/", views.noticia_fonte_alternar, name="noticia_fonte_alternar"),
     path("noticias/fontes/<int:fonte_id>/excluir/", views.noticia_fonte_excluir, name="noticia_fonte_excluir"),

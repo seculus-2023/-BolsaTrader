@@ -181,7 +181,7 @@
         function atualizarLink() {
             var ticker = tickerAtual();
             link.href = ticker
-                ? "https://br.tradingview.com/symbols/BMFBOVESPA-" + encodeURIComponent(ticker) + "/forecast/"
+                ? "https://br.tradingview.com/symbols/BMFBOVESPA-" + encodeURIComponent(ticker)
                 : "https://br.tradingview.com/markets/stocks-brazil/market-movers-all-stocks/";
             var slug = INVESTING_SLUGS[ticker];
             linkInvesting.href = slug

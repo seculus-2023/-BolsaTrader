@@ -41,7 +41,7 @@ from .models import (
     Ativo, Cotacao, Operacao, Alerta, FonteNoticia, Noticia, AcaoB3, CotacaoIndice,
     RegistroAtualizacaoCarteira, RegistroCotacao, ContaCorrente, LancamentoContaCorrente, PostIt,
     CriptoAtivo, OperacaoCripto, CotacaoCripto, RegistroAtualizacaoCarteiraCripto, PrevisaoAnalista,
-    FundamentosAtivo, VendaLote,
+    FundamentosAtivo, VendaLote, CotacaoMoeda,
 )
 from tributario.models import (
     AvisoLimiteIsencao, Darf, EventoCorporativo, MapeamentoTitulo, NotaCorretagem, ParametroTributario, Provento,
@@ -203,6 +203,8 @@ def projetar_consumo_mensal(qtd_ativos: int, intervalo_minutos: int | None = Non
     ciclos_dia = minutos_pregao // max(intervalo, 1) + 1
     lote = max(getattr(settings, "BRAPI_TICKERS_POR_LOTE", BRAPI_TICKERS_POR_LOTE_PADRAO), 1)
     requisicoes_por_ciclo = -(-qtd_ativos // lote) if qtd_ativos else 0  # divisão com teto
+    if pares_moedas_configurados():
+        requisicoes_por_ciclo += 1  # cotação das moedas (ver atualizar_cotacoes_moedas)
     mensal = ciclos_dia * requisicoes_por_ciclo * DIAS_UTEIS_POR_CICLO
     return {
         "ciclos_dia": ciclos_dia,
@@ -379,6 +381,120 @@ def atualizar_cotacoes_ativos(ativos) -> tuple[int, int]:
     return atualizados, falhas
 
 
+def pares_moedas_configurados() -> list[str]:
+    """Pares de BRAPI_MOEDAS (ex: ["USD-BRL", "EUR-BRL"]) - lista vazia desliga a cotação de moedas."""
+    bruto = getattr(settings, "BRAPI_MOEDAS", "") or ""
+    return [p.strip().upper() for p in bruto.split(",") if p.strip()]
+
+
+def _decimal_moeda(valor, casas: str = "0.0001") -> Decimal | None:
+    """A /v2/currency devolve números como texto ("5.3512") - converte tolerando vazio/lixo."""
+    if valor in (None, ""):
+        return None
+    try:
+        return Decimal(str(valor)).quantize(Decimal(casas), rounding=ROUND_HALF_UP)
+    except (ArithmeticError, ValueError, TypeError):
+        return None
+
+
+def _horario_cotacao_moeda(item: dict):
+    """Horário da cotação informado pela API: prefere o timestamp (sem ambiguidade de fuso), senão a data em texto."""
+    timestamp = item.get("updatedAtTimestamp")
+    if timestamp not in (None, ""):
+        try:
+            return datetime.fromtimestamp(int(float(timestamp)), tz=dt_timezone.utc)
+        except (ValueError, TypeError, OverflowError, OSError):
+            pass
+    texto = item.get("updatedAtDate")
+    if texto:
+        momento = parse_datetime(str(texto))
+        if momento is not None and timezone.is_naive(momento):
+            momento = timezone.make_aware(momento)
+        return momento
+    return None
+
+
+def buscar_cotacoes_moedas(pares: list[str]) -> dict[str, dict]:
+    """
+    Consulta vários pares de moedas (ex: USD-BRL, EUR-BRL) numa única chamada
+    ao endpoint /v2/currency da brapi.dev. Devolve {"USD-BRL": {...}}.
+
+    Não é tempo real: atraso de 5 a 15 min nos planos pagos e dados do dia
+    anterior no plano gratuito (o horário real vem em updatedAtDate).
+    """
+    if not pares:
+        return {}
+
+    url = f"{settings.BRAPI_BASE_URL}/v2/currency"
+    params = {"currency": ",".join(pares)}
+    if settings.BRAPI_TOKEN:
+        params["token"] = settings.BRAPI_TOKEN
+
+    try:
+        resposta = _get_brapi(url, params=params, timeout=10)
+        resposta.raise_for_status()
+        dados = resposta.json()
+    except requests.RequestException as exc:
+        raise BrapiError(_mensagem_falha_api(exc, "cotações de moedas")) from exc
+
+    resultado = {}
+    for item in dados.get("currency") or []:
+        origem, destino = (item.get("fromCurrency") or "").upper(), (item.get("toCurrency") or "").upper()
+        if origem and destino:
+            resultado[f"{origem}-{destino}"] = item
+    return resultado
+
+
+def atualizar_cotacoes_moedas() -> int:
+    """
+    Busca os pares de BRAPI_MOEDAS e grava a última cotação em CotacaoMoeda -
+    chamado pelo ciclo automático e pelo botão "Atualizar cotações agora".
+    Nunca levanta exceção: falha de rede/orçamento só deixa a cotação
+    anterior na tela (moeda é informativa, não pode atrapalhar as cotações
+    da carteira). Retorna quantos pares foram atualizados.
+    """
+    pares = pares_moedas_configurados()
+    if not pares:
+        return 0
+    try:
+        lote = buscar_cotacoes_moedas(pares)
+    except BrapiError as exc:
+        logger.warning("Cotação de moedas indisponível: %s", exc)
+        return 0
+
+    atualizados = 0
+    for par in pares:
+        item = lote.get(par)
+        if not item:
+            continue
+        compra = _decimal_moeda(item.get("bidPrice"))
+        if compra is None:
+            continue
+        CotacaoMoeda.objects.update_or_create(
+            par=par,
+            defaults={
+                "nome": (item.get("name") or "")[:100],
+                "compra": compra,
+                "venda": _decimal_moeda(item.get("askPrice")),
+                "variacao_pct": _decimal_moeda(item.get("percentageChange"), "0.01"),
+                "maxima": _decimal_moeda(item.get("high")),
+                "minima": _decimal_moeda(item.get("low")),
+                "cotado_em": _horario_cotacao_moeda(item),
+            },
+        )
+        atualizados += 1
+    return atualizados
+
+
+def cotacoes_moedas_para_exibir() -> list[CotacaoMoeda]:
+    """Últimas cotações salvas dos pares configurados, na ordem de BRAPI_MOEDAS."""
+    pares = pares_moedas_configurados()
+    if not pares:
+        return []
+    por_par = {c.par: c for c in CotacaoMoeda.objects.filter(par__in=pares)}
+    return [por_par[p] for p in pares if p in por_par]
+
+
 def buscar_maiores_variacoes(limite: int = 5) -> tuple[list[dict], list[dict]]:
     """
     Consulta a lista geral de ações da B3 na API brapi.dev e retorna as
@@ -547,6 +663,7 @@ def executar_ciclo_atualizacao_cotacoes() -> dict:
         Q(operacoes__isnull=False) | Q(id__in=ativos_com_previsao_em_andamento())
     ).distinct()
     atualizados, falhas = atualizar_cotacoes_ativos(ativos)
+    moedas_atualizadas = atualizar_cotacoes_moedas()
 
     total_alertas, total_sinais_robo = 0, 0
     cache_ia_diaria = {}
@@ -564,6 +681,7 @@ def executar_ciclo_atualizacao_cotacoes() -> dict:
         "ativos_total": ativos.count(),
         "ativos_atualizados": atualizados,
         "ativos_falha": falhas,
+        "moedas_atualizadas": moedas_atualizadas,
         "alertas_gerados": total_alertas,
         "sinais_robo_gerados": total_sinais_robo,
     }
@@ -7203,6 +7321,7 @@ MODELOS_LIMPOS_NA_LIMPEZA_GERAL = [
     Ativo,
     RegistroAtualizacaoCarteira,
     CotacaoIndice,
+    CotacaoMoeda,  # cache da brapi - volta a ser buscado no próximo ciclo
     Noticia,
     FonteNoticia,
     MensagemWhatsapp,
@@ -7276,6 +7395,7 @@ MODELOS_COMPARTILHADOS_NA_LIMPEZA_USUARIO = [
     Cotacao,
     Ativo,
     CotacaoIndice,
+    CotacaoMoeda,
     Noticia,
     FonteNoticia,
     MensagemWhatsapp,

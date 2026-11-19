@@ -1910,7 +1910,7 @@ class ComandoAtualizarCotacoesTests(TestCase):
 
         self.assertTrue(Cotacao.objects.filter(ativo=ativo).exists())
         self.assertIn("Cotações atualizadas: 1", saida.getvalue())
-        mock_get.assert_called_once()  # rodou só uma vez, sem --loop
+        self.assertEqual(mock_get.call_count, 2)  # cotações + moedas, uma vez só, sem --loop
 
     @patch("core.management.commands.atualizar_cotacoes.time.sleep")
     @patch("core.services.requests.get")
@@ -4966,7 +4966,7 @@ class OrcamentoApiBrapiTests(TestCase):
 
     @override_settings(
         BRAPI_LIMITE_MENSAL=150000, BRAPI_MARGEM_SEGURANCA_PCT=30, BRAPI_TICKERS_POR_LOTE=10,
-        B3_HORARIO_ABERTURA="10:00", B3_HORARIO_FECHAMENTO="17:00",
+        B3_HORARIO_ABERTURA="10:00", B3_HORARIO_FECHAMENTO="17:00", BRAPI_MOEDAS="",
     )
     def test_projecao_com_27_ativos_e_intervalo_de_10_minutos_cabe_folgado(self):
         p = core_services.projetar_consumo_mensal(27, 10)
@@ -7545,3 +7545,61 @@ class AnaliseCarteiraTests(TestCase):
     def test_ia_nao_configurada_mostra_aviso(self):
         html = self.client.post(reverse("core:posicoes_analise_ia")).json()["html"]
         self.assertIn("não está configurada", html)
+
+
+class CotacaoMoedasTests(TestCase):
+    """Cotação de moedas (/v2/currency da brapi.dev) no ciclo e no Painel de Controle."""
+
+    RESPOSTA = {"currency": [
+        {"fromCurrency": "USD", "toCurrency": "BRL", "name": "Dólar Americano/Real Brasileiro",
+         "bidPrice": "5.3512", "askPrice": "5.3530", "percentageChange": "-0.42",
+         "high": "5.40", "low": "5.33", "updatedAtTimestamp": "1763560000",
+         "updatedAtDate": "2025-11-19 10:46:40"},
+        {"fromCurrency": "EUR", "toCurrency": "BRL", "name": "Euro/Real Brasileiro",
+         "bidPrice": "6.2010", "askPrice": "", "percentageChange": "0.10"},
+    ]}
+
+    def _mock_resposta(self, mock_get):
+        mock_get.return_value.json.return_value = self.RESPOSTA
+        mock_get.return_value.raise_for_status.return_value = None
+
+    @override_settings(BRAPI_MOEDAS="USD-BRL,EUR-BRL", BRAPI_TOKEN="")
+    @patch("core.services.requests.get")
+    def test_atualiza_os_pares_numa_unica_requisicao(self, mock_get):
+        from core.models import CotacaoMoeda
+        self._mock_resposta(mock_get)
+
+        self.assertEqual(core_services.atualizar_cotacoes_moedas(), 2)
+
+        mock_get.assert_called_once()
+        self.assertEqual(mock_get.call_args.kwargs["params"]["currency"], "USD-BRL,EUR-BRL")
+        usd = CotacaoMoeda.objects.get(par="USD-BRL")
+        self.assertEqual(usd.compra, Decimal("5.3512"))
+        self.assertEqual(usd.venda, Decimal("5.3530"))
+        self.assertEqual(usd.variacao_pct, Decimal("-0.42"))
+        self.assertIsNotNone(usd.cotado_em)
+        self.assertIsNone(CotacaoMoeda.objects.get(par="EUR-BRL").venda)
+
+    @override_settings(BRAPI_MOEDAS="")
+    @patch("core.services.requests.get")
+    def test_vazio_desliga_sem_requisicao(self, mock_get):
+        self.assertEqual(core_services.atualizar_cotacoes_moedas(), 0)
+        mock_get.assert_not_called()
+
+    @override_settings(BRAPI_MOEDAS="USD-BRL")
+    @patch("core.services.requests.get")
+    def test_falha_de_rede_nao_levanta_excecao(self, mock_get):
+        import requests as _requests
+        mock_get.side_effect = _requests.ConnectionError("sem rede")
+        self.assertEqual(core_services.atualizar_cotacoes_moedas(), 0)
+
+    @override_settings(BRAPI_MOEDAS="USD-BRL,EUR-BRL", BRAPI_TOKEN="")
+    @patch("core.services.requests.get")
+    def test_painel_mostra_as_moedas(self, mock_get):
+        self._mock_resposta(mock_get)
+        core_services.atualizar_cotacoes_moedas()
+        User.objects.create_user(username="moedas_painel", password="SenhaForte123!")
+        self.client.login(username="moedas_painel", password="SenhaForte123!")
+        resposta = self.client.get(reverse("core:dashboard"))
+        self.assertContains(resposta, "USD-BRL")
+        self.assertContains(resposta, "EUR-BRL")

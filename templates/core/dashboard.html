@@ -60,6 +60,18 @@
         <small><a href="{% url 'core:atualizar_benchmarks' %}?next={{ request.path|urlencode }}">🔄 Atualizar agora</a></small>
         {% endif %}
     </div>
+    {% for moeda in cotacoes_moedas %}
+    <div class="stat-tile" style="text-align: center;" title="{{ moeda.nome }} - cotação da brapi.dev com atraso (5 a 15 min nos planos pagos; dia anterior no gratuito)">
+        <div class="label">{{ moeda.par }}</div>
+        <div class="value {% if moeda.variacao_pct > 0 %}valor-positivo{% elif moeda.variacao_pct < 0 %}valor-negativo{% else %}valor-neutro{% endif %}">
+            R$ {{ moeda.compra|floatformat:4 }}
+            {% if moeda.variacao_pct is not None %}({{ moeda.variacao_pct }}%){% endif %}
+        </div>
+        <small style="color: var(--text-dim);">
+            {% if moeda.venda is not None %}venda R$ {{ moeda.venda|floatformat:4 }} · {% endif %}{% if moeda.cotado_em %}cotado em {{ moeda.cotado_em|date:"d/m H:i" }}{% else %}consultado em {{ moeda.atualizado_em|date:"d/m H:i" }}{% endif %}
+        </small>
+    </div>
+    {% endfor %}
 </div>
 
 {% comment %}

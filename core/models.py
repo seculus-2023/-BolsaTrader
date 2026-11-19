@@ -704,6 +704,42 @@ class RegistroCotacao(models.Model):
         return f"{self.ativo.ticker} {self.data:%d/%m/%Y} {self.hora:%H:%M} R$ {self.preco}"
 
 
+class CotacaoMoeda(models.Model):
+    """
+    Última cotação conhecida de um par de moedas (ex: USD-BRL), vinda do
+    endpoint /v2/currency da brapi.dev - buscada junto com as cotações dos
+    ativos (ciclo automático e botão "Atualizar cotações agora", ver
+    core.services.atualizar_cotacoes_moedas) e mostrada no Painel de Controle.
+
+    NÃO é tempo real: a brapi entrega com atraso de 5 a 15 minutos nos planos
+    pagos e dados do dia anterior no gratuito - por isso guardamos
+    "cotado_em" (horário informado pela própria API) e a tela mostra esse
+    horário, não o da nossa consulta.
+    """
+
+    par = models.CharField("Par", max_length=15, unique=True, help_text="Ex: USD-BRL")
+    nome = models.CharField("Nome", max_length=100, blank=True)
+    compra = models.DecimalField("Compra (bid)", max_digits=14, decimal_places=4, null=True, blank=True)
+    venda = models.DecimalField("Venda (ask)", max_digits=14, decimal_places=4, null=True, blank=True)
+    variacao_pct = models.DecimalField("Variação (%)", max_digits=8, decimal_places=2, null=True, blank=True)
+    maxima = models.DecimalField("Máxima", max_digits=14, decimal_places=4, null=True, blank=True)
+    minima = models.DecimalField("Mínima", max_digits=14, decimal_places=4, null=True, blank=True)
+    cotado_em = models.DateTimeField("Cotado em (API)", null=True, blank=True)
+    atualizado_em = models.DateTimeField("Consultado em", auto_now=True)
+
+    class Meta:
+        verbose_name = "Cotação de moeda"
+        verbose_name_plural = "Cotações de moedas"
+        ordering = ["par"]
+
+    def __str__(self):
+        return f"{self.par} {self.compra}"
+
+    @property
+    def moeda_origem(self) -> str:
+        return self.par.split("-")[0]
+
+
 class ConsumoApiBrapi(models.Model):
     """
     Contador diário de requisições feitas à API brapi.dev - base do controle

@@ -257,6 +257,12 @@ BRAPI_TICKERS_POR_LOTE = config("BRAPI_TICKERS_POR_LOTE", default=10, cast=int)
 # Backtesting do Robô e os indicadores técnicos.
 BRAPI_HISTORICO_MAXIMO = config("BRAPI_HISTORICO_MAXIMO", default="3mo")
 
+# Pares de moedas cotados junto com os ativos (endpoint /v2/currency da
+# brapi.dev, UMA requisição por ciclo para todos os pares) e mostrados no
+# Painel de Controle. Não é tempo real: atraso de 5 a 15 min nos planos pagos
+# e dados do dia anterior no gratuito. Vazio desliga a cotação de moedas.
+BRAPI_MOEDAS = config("BRAPI_MOEDAS", default="USD-BRL,EUR-BRL")
+
 # Custo de uma operação completa (compra + venda), em % do valor: corretagem,
 # emolumentos e liquidação da B3 (~0,03% por ponta). Descontado dos retornos
 # no Backtesting do Robô - um sinal que "acerta" por menos que o custo, na

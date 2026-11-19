@@ -60,6 +60,8 @@ from .services import (
     mercado_b3_aberto,
     atualizar_cotacao_diaria,
     atualizar_cotacoes_ativos,
+    atualizar_cotacoes_moedas,
+    cotacoes_moedas_para_exibir,
     ativos_distintos_comprados,
     consumo_api_ultimos_30_dias,
     limite_automatico_api,
@@ -208,6 +210,7 @@ def _contexto_painel(usuario):
         "comparativo_benchmark": calcular_comparativo_benchmark(usuario, posicoes=posicoes),
         "alertas_recentes": usuario.alertas.all()[:8],
         "ibovespa": ultimo_valor_ibovespa(),
+        "cotacoes_moedas": cotacoes_moedas_para_exibir(),
         "cotacoes_cripto": _cotacoes_cripto_para_exibir(usuario, posicoes_cripto),
         # cartões de resumo da cripto ao lado dos de ações (ver
         # totais_posicoes_cripto) - chave própria pra não colidir com os
@@ -1608,6 +1611,7 @@ def atualizar_cotacoes_agora(request):
 
     ativos = Ativo.objects.filter(operacoes__usuario=request.user).distinct()
     atualizados, falhas = atualizar_cotacoes_ativos(ativos)
+    atualizar_cotacoes_moedas()
 
     if atualizados:
         messages.success(request, f"{atualizados} cotação(ões) atualizada(s) com sucesso.")

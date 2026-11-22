@@ -252,15 +252,15 @@ BRAPI_TOKEN = config("BRAPI_TOKEN", default="")  # opcional, ver manual de insta
 BRAPI_TICKERS_POR_LOTE = config("BRAPI_TICKERS_POR_LOTE", default=10, cast=int)
 
 # Maior histórico diário que o plano da brapi.dev aceita buscar de uma vez
-# (1mo, 3mo, 6mo, 1y, 2y, 5y): gratuito = 3mo; planos pagos aceitam mais.
+# (1mo, 3mo, 6mo, 1y, 2y, 5y, 10y): gratuito = 3mo, Startup = 1y, Pro = 10y.
 # Usado pelo backfill de cotações - quanto mais histórico, mais confiável o
 # Backtesting do Robô e os indicadores técnicos.
 BRAPI_HISTORICO_MAXIMO = config("BRAPI_HISTORICO_MAXIMO", default="3mo")
 
 # Pares de moedas cotados junto com os ativos (endpoint /v2/currency da
 # brapi.dev, UMA requisição por ciclo para todos os pares) e mostrados no
-# Painel de Controle. Não é tempo real: atraso de 5 a 15 min nos planos pagos
-# e dados do dia anterior no gratuito. Vazio desliga a cotação de moedas.
+# Painel de Controle. Não é tempo real: atualiza a cada 5 min no Pro, 15 min no
+# Startup e traz dados do dia anterior no gratuito. Vazio desliga a cotação de moedas.
 BRAPI_MOEDAS = config("BRAPI_MOEDAS", default="USD-BRL,EUR-BRL")
 
 # Custo de uma operação completa (compra + venda), em % do valor: corretagem,
@@ -276,7 +276,7 @@ RISCO_POR_OPERACAO_PCT = config("RISCO_POR_OPERACAO_PCT", default=1.0, cast=floa
 LIMITE_SETOR_PCT = config("LIMITE_SETOR_PCT", default=30.0, cast=float)
 
 # Orçamento de requisições à brapi.dev (ver core.services.consumo_api_*): o
-# plano tem um limite por ciclo de 30 dias (Startup = 150.000) e estourar
+# plano tem um limite por ciclo de 30 dias (Startup = 150.000, Pro = 500.000) e estourar
 # deixa o sistema sem cotações até a renovação. O sistema conta cada
 # requisição num contador diário e: (1) pausa o ciclo AUTOMÁTICO ao chegar em
 # LIMITE * (1 - MARGEM%) - a margem fica reservada para consultas manuais e

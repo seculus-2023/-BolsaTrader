@@ -2110,7 +2110,10 @@ class BuscarCotacoesEmLoteTests(TestCase):
         mock_get.return_value.raise_for_status = lambda: None
         mock_get.return_value.json = lambda: {"results": []}
 
-        buscar_cotacoes_em_lote(tickers)
+        from core.services import BRAPI_TICKERS_POR_LOTE_PADRAO
+        # usa o padrão do código, não o valor do .env local (Pro = 20)
+        with override_settings(BRAPI_TICKERS_POR_LOTE=BRAPI_TICKERS_POR_LOTE_PADRAO):
+            buscar_cotacoes_em_lote(tickers)
 
         self.assertEqual(mock_get.call_count, 2)  # 10 + 1, não 1 chamada só
 
@@ -2140,7 +2143,7 @@ class BuscarCotacoesEmLoteTests(TestCase):
     def test_falha_em_um_lote_nao_derruba_os_demais(self, mock_get):
         chamada = {"n": 0}
 
-        def _resposta(url, params=None, timeout=None):
+        def _resposta(url, params=None, timeout=None, headers=None):
             chamada["n"] += 1
             if chamada["n"] == 1:
                 raise requests.RequestException("falha de rede simulada")
@@ -3061,7 +3064,7 @@ class BackfillAoRegistrarOperacaoTests(TestCase):
         self.client.login(username="investidor_backfill", password="SenhaForte123!")
 
     def _resposta_por_endpoint(self, base_timestamp):
-        def _resposta(url, params=None, timeout=None):
+        def _resposta(url, params=None, timeout=None, headers=None):
             resposta = Mock()
             resposta.raise_for_status = lambda: None
             if params and "range" in params:
@@ -3260,6 +3263,53 @@ class RangeBrapiTests(TestCase):
             self.assertEqual(_range_brapi(365), "1y")
             self.assertEqual(_range_brapi(730), "2y")
             self.assertEqual(_range_brapi(5000), "2y")
+
+    def test_plano_pro_busca_ate_10_anos(self):
+        from core.services import _range_brapi
+        with override_settings(BRAPI_HISTORICO_MAXIMO="10y"):
+            self.assertEqual(_range_brapi(1825), "5y")
+            self.assertEqual(_range_brapi(3650), "10y")
+            self.assertEqual(_range_brapi(9000), "10y")
+
+
+class GetBrapiTests(TestCase):
+    """_get_brapi: chave no header e nova tentativa só em 429 passageiro."""
+
+    @staticmethod
+    def _http(status, retry_after=None):
+        resposta = Mock()
+        resposta.status_code = status
+        resposta.headers = {"Retry-After": retry_after} if retry_after is not None else {}
+        return resposta
+
+    @override_settings(BRAPI_TOKEN="chave-de-teste")
+    @patch("core.services.requests.get")
+    def test_chave_vai_no_header_e_nao_na_url(self, mock_get):
+        from core.services import _get_brapi
+        mock_get.return_value = self._http(200)
+        _get_brapi("https://exemplo/quote/WEGE3", params={}, timeout=5)
+        self.assertEqual(mock_get.call_args.kwargs["headers"]["Authorization"], "Bearer chave-de-teste")
+        self.assertNotIn("token", mock_get.call_args.kwargs["params"])
+
+    @patch("core.services.time.sleep")
+    @patch("core.services.requests.get")
+    def test_429_curto_tenta_de_novo_e_conta_as_duas(self, mock_get, mock_sleep):
+        from core.services import _get_brapi, consumo_api_ultimos_30_dias
+        mock_get.side_effect = [self._http(429, "2"), self._http(200)]
+        resposta = _get_brapi("https://exemplo/quote/WEGE3", params={}, timeout=5)
+        self.assertEqual(resposta.status_code, 200)
+        mock_sleep.assert_called_once_with(2.0)
+        self.assertEqual(consumo_api_ultimos_30_dias(), 2)
+
+    @patch("core.services.time.sleep")
+    @patch("core.services.requests.get")
+    def test_429_com_espera_longa_nao_tenta_de_novo(self, mock_get, mock_sleep):
+        from core.services import _get_brapi
+        mock_get.return_value = self._http(429, "86400")
+        resposta = _get_brapi("https://exemplo/quote/WEGE3", params={}, timeout=5)
+        self.assertEqual(resposta.status_code, 429)
+        self.assertEqual(mock_get.call_count, 1)
+        mock_sleep.assert_not_called()
 
 
 @override_settings(RISCO_POR_OPERACAO_PCT=1.0, LIMITE_SETOR_PCT=30.0)
@@ -3570,7 +3620,7 @@ class BenchmarkTests(TestCase):
         self.client.login(username="investidor_bench", password="SenhaForte123!")
         base = int(datetime(2026, 1, 1, tzinfo=dt_timezone.utc).timestamp())
 
-        def _resposta(url, params=None, timeout=None):
+        def _resposta(url, params=None, timeout=None, headers=None):
             resposta = Mock()
             resposta.raise_for_status = lambda: None
             if "bcb.gov.br" in url:
@@ -3593,7 +3643,7 @@ class ComandoAtualizarBenchmarksTests(TestCase):
     def test_atualiza_ibovespa_e_cdi_de_fontes_independentes(self, mock_get):
         base = int(datetime(2026, 1, 1, tzinfo=dt_timezone.utc).timestamp())
 
-        def _resposta(url, params=None, timeout=None):
+        def _resposta(url, params=None, timeout=None, headers=None):
             resposta = Mock()
             resposta.raise_for_status = lambda: None
             if "bcb.gov.br" in url:
@@ -3614,7 +3664,7 @@ class ComandoAtualizarBenchmarksTests(TestCase):
 
     @patch("core.services.requests.get")
     def test_falha_em_uma_fonte_nao_impede_a_outra(self, mock_get):
-        def _resposta(url, params=None, timeout=None):
+        def _resposta(url, params=None, timeout=None, headers=None):
             if "bcb.gov.br" in url:
                 raise requests.RequestException("Banco Central fora do ar")
             resposta = Mock()

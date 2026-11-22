@@ -48,14 +48,14 @@ Todas as configurações ficam no `.env`, explicadas uma a uma no [.env.example]
 ## Apoio à decisão de compra
 
 - **Qualidade das Empresas** (menu): nota de 0 a 10 pelos balanços (lucro consistente, ROE, margem,
-  crescimento, dívida, P/L, dividendos). Os dados vêm dos módulos que o plano Startup da brapi libera e
+  crescimento, dívida, P/L, dividendos). Os dados vêm dos módulos que os planos pagos da brapi liberam e
   ficam salvos por 7 dias.
 - **Calculadora de risco** (tela de compra): stop por ATR/suporte, quantidade para não perder mais que
   `RISCO_POR_OPERACAO_PCT` do patrimônio no stop, alvo de 2x o risco e alerta de concentração por setor
   (`LIMITE_SETOR_PCT`).
 - **Backtesting do Robô**: compara os sinais do robô com comprar em qualquer dia (referência), já
-  descontando custos. Quanto mais histórico, melhor: `BRAPI_HISTORICO_MAXIMO` (gratuito 3mo, Startup 1y)
-  e `python manage.py backfill_cotacoes --dias 365 --todos`.
+  descontando custos. Quanto mais histórico, melhor: `BRAPI_HISTORICO_MAXIMO` (gratuito 3mo, Startup 1y,
+  Pro 10y) e `python manage.py backfill_cotacoes --dias 3650 --todos`.
 
 ## Atualização automática
 

@@ -151,6 +151,10 @@ def _mensagem_falha_api(exc: requests.RequestException, contexto: str) -> str:
         if detalhe_mensal:
             return f"{detalhe_mensal} ({contexto})."
         return f"Limite de consultas da API atingido para {contexto}. Tente novamente em alguns minutos."
+    if status == 401:
+        return f"Chave da API de cotações ausente ou inválida ao consultar {contexto}. Confira o BRAPI_TOKEN."
+    if status == 403:
+        return f"O plano atual da API de cotações não inclui {contexto}."
     return f"Falha ao consultar a API para {contexto}. Tente novamente em instantes."
 
 
@@ -158,12 +162,13 @@ def _mensagem_falha_api(exc: requests.RequestException, contexto: str) -> str:
 # Orçamento de requisições à brapi.dev
 #
 # O plano contratado tem um limite por ciclo de 30 dias (BRAPI_LIMITE_MENSAL,
-# Startup = 150.000) e estourar deixa o sistema sem cotações até a renovação.
+# Startup = 150.000, Pro = 500.000) e estourar deixa o sistema sem cotações até a renovação.
 # Toda requisição à brapi.dev passa por _get_brapi, que conta num contador
 # diário (ConsumoApiBrapi, compartilhado entre os processos que usam o mesmo
 # banco) e trava antes de estourar.
 # --------------------------------------------------------------------------
 BRAPI_TETO_ABSOLUTO_PCT = 95  # acima disso NENHUMA requisição é feita (nem manual)
+BRAPI_ESPERA_MAXIMA_429_SEGUNDOS = 5  # Retry-After maior que isso não segura a tela do usuário
 DIAS_UTEIS_POR_CICLO = 22  # dias úteis médios em 30 dias corridos
 
 
@@ -216,16 +221,45 @@ def projetar_consumo_mensal(qtd_ativos: int, intervalo_minutos: int | None = Non
     }
 
 
+def _cabecalhos_brapi() -> dict:
+    """Autenticação recomendada pela brapi.dev: no header, para a chave não aparecer em URLs e logs."""
+    return {"Authorization": f"Bearer {settings.BRAPI_TOKEN}"} if settings.BRAPI_TOKEN else {}
+
+
+def _espera_retry_after(resposta) -> float | None:
+    """Segundos a aguardar num 429 passageiro (concorrência); None se não houver retry curto a fazer."""
+    if resposta.status_code != 429:
+        return None
+    valor = resposta.headers.get("Retry-After")
+    if not isinstance(valor, str):
+        return None
+    try:
+        segundos = float(valor)
+    except ValueError:
+        return None
+    return segundos if 0 <= segundos <= BRAPI_ESPERA_MAXIMA_429_SEGUNDOS else None
+
+
 def _get_brapi(url: str, params: dict, timeout: int):
-    """requests.get para a brapi.dev com controle de orçamento: bloqueia acima do teto absoluto e conta a requisição."""
-    if consumo_api_ultimos_30_dias() >= limite_absoluto_api():
-        raise BrapiError(
-            "Orçamento mensal de requisições à API de cotações quase esgotado - consultas bloqueadas por "
-            "segurança até o consumo dos últimos 30 dias baixar."
-        )
-    dia = ConsumoApiBrapi.objects.get_or_create(data=timezone.localdate())[0]
-    ConsumoApiBrapi.objects.filter(pk=dia.pk).update(requisicoes=F("requisicoes") + 1)
-    return requests.get(url, params=params, timeout=timeout)
+    """
+    requests.get para a brapi.dev com controle de orçamento: bloqueia acima
+    do teto absoluto e conta cada requisição. Num 429 com Retry-After curto
+    tenta mais uma vez; esperas longas (ex: limite mensal) voltam direto.
+    """
+    for tentativa in range(2):
+        if consumo_api_ultimos_30_dias() >= limite_absoluto_api():
+            raise BrapiError(
+                "Orçamento mensal de requisições à API de cotações quase esgotado - consultas bloqueadas por "
+                "segurança até o consumo dos últimos 30 dias baixar."
+            )
+        dia = ConsumoApiBrapi.objects.get_or_create(data=timezone.localdate())[0]
+        ConsumoApiBrapi.objects.filter(pk=dia.pk).update(requisicoes=F("requisicoes") + 1)
+        resposta = requests.get(url, params=params, headers=_cabecalhos_brapi(), timeout=timeout)
+        espera = _espera_retry_after(resposta)
+        if tentativa or espera is None:
+            return resposta
+        time.sleep(espera)
+    return resposta
 
 
 def buscar_cotacao_atual(ticker: str) -> dict:
@@ -239,8 +273,6 @@ def buscar_cotacao_atual(ticker: str) -> dict:
     """
     url = f"{settings.BRAPI_BASE_URL}/quote/{ticker.upper()}"
     params = {}
-    if settings.BRAPI_TOKEN:
-        params["token"] = settings.BRAPI_TOKEN
 
     try:
         resposta = _get_brapi(url, params=params, timeout=10)
@@ -275,8 +307,6 @@ def buscar_cotacao_atual_com_historico(ticker: str, dias_historico: int = 30) ->
     """
     url = f"{settings.BRAPI_BASE_URL}/quote/{ticker.upper()}"
     params = {"range": _range_brapi(dias_historico), "interval": "1d"}
-    if settings.BRAPI_TOKEN:
-        params["token"] = settings.BRAPI_TOKEN
 
     try:
         resposta = _get_brapi(url, params=params, timeout=15)
@@ -335,8 +365,6 @@ def buscar_cotacoes_em_lote(tickers: list[str]) -> dict[str, dict]:
         lote = tickers[inicio:inicio + tamanho_lote]
         url = f"{settings.BRAPI_BASE_URL}/quote/{','.join(t.upper() for t in lote)}"
         params = {}
-        if settings.BRAPI_TOKEN:
-            params["token"] = settings.BRAPI_TOKEN
 
         try:
             resposta = _get_brapi(url, params=params, timeout=15)
@@ -419,16 +447,14 @@ def buscar_cotacoes_moedas(pares: list[str]) -> dict[str, dict]:
     Consulta vários pares de moedas (ex: USD-BRL, EUR-BRL) numa única chamada
     ao endpoint /v2/currency da brapi.dev. Devolve {"USD-BRL": {...}}.
 
-    Não é tempo real: atraso de 5 a 15 min nos planos pagos e dados do dia
-    anterior no plano gratuito (o horário real vem em updatedAtDate).
+    Não é tempo real: atualiza a cada 5 min no Pro e 15 min no Startup, com
+    dados do dia anterior no plano gratuito (o horário real vem em updatedAtDate).
     """
     if not pares:
         return {}
 
     url = f"{settings.BRAPI_BASE_URL}/v2/currency"
     params = {"currency": ",".join(pares)}
-    if settings.BRAPI_TOKEN:
-        params["token"] = settings.BRAPI_TOKEN
 
     try:
         resposta = _get_brapi(url, params=params, timeout=10)
@@ -503,8 +529,6 @@ def buscar_maiores_variacoes(limite: int = 5) -> tuple[list[dict], list[dict]]:
     """
     url = f"{settings.BRAPI_BASE_URL}/quote/list"
     params_base = {"type": "stock", "limit": limite}
-    if settings.BRAPI_TOKEN:
-        params_base["token"] = settings.BRAPI_TOKEN
 
     def _consultar(sort_order: str) -> list[dict]:
         params = {**params_base, "sortBy": "change", "sortOrder": sort_order}
@@ -543,8 +567,6 @@ def sincronizar_acoes_b3() -> int:
     """
     url = f"{settings.BRAPI_BASE_URL}/quote/list"
     params = {"type": "stock", "limit": 1000}
-    if settings.BRAPI_TOKEN:
-        params["token"] = settings.BRAPI_TOKEN
 
     try:
         resposta = _get_brapi(url, params=params, timeout=30)
@@ -800,7 +822,7 @@ def _ciclo_agendador_embutido() -> None:
 # atualizar_benchmarks, em core.services).
 # --------------------------------------------------------------------------
 _FAIXAS_RANGE_BRAPI = [
-    (30, "1mo"), (90, "3mo"), (180, "6mo"), (365, "1y"), (730, "2y"), (1825, "5y"),
+    (30, "1mo"), (90, "3mo"), (180, "6mo"), (365, "1y"), (730, "2y"), (1825, "5y"), (3650, "10y"),
 ]
 
 
@@ -809,7 +831,7 @@ def _range_brapi(dias: int) -> str:
     Converte uma quantidade de dias no parâmetro `range` aceito pela
     brapi.dev - o menor range que cobre os dias pedidos, limitado ao
     BRAPI_HISTORICO_MAXIMO do .env: o plano gratuito só aceita até "3mo"
-    (mais que isso dá 400 Bad Request), os pagos aceitam "1y", "2y"... Um
+    (mais que isso dá 400 Bad Request), Startup "1y" e Pro até "10y". Um
     pedido acima do máximo é cortado no máximo em vez de estourar a requisição.
     """
     maximo = settings.BRAPI_HISTORICO_MAXIMO
@@ -857,8 +879,6 @@ def buscar_historico_precos(ticker: str, dias: int = 180) -> list[dict]:
     """
     url = f"{settings.BRAPI_BASE_URL}/quote/{ticker.upper()}"
     params = {"range": _range_brapi(dias), "interval": "1d"}
-    if settings.BRAPI_TOKEN:
-        params["token"] = settings.BRAPI_TOKEN
 
     try:
         resposta = _get_brapi(url, params=params, timeout=30)
@@ -6967,8 +6987,6 @@ def buscar_cotacoes_cripto(coins: list[str], moeda: str = "BRL") -> dict[str, di
 
     url = f"{settings.BRAPI_BASE_URL}/v2/crypto"
     params = {"coin": ",".join(c.upper() for c in coins), "currency": moeda}
-    if settings.BRAPI_TOKEN:
-        params["token"] = settings.BRAPI_TOKEN
 
     try:
         resposta = _get_brapi(url, params=params, timeout=10)
@@ -7452,8 +7470,6 @@ def buscar_consenso_analistas(ticker: str) -> dict:
     """
     url = f"{settings.BRAPI_BASE_URL}/quote/{ticker.upper()}"
     params = {"modules": "financialData"}
-    if settings.BRAPI_TOKEN:
-        params["token"] = settings.BRAPI_TOKEN
 
     try:
         resposta = _get_brapi(url, params=params, timeout=15)
@@ -7847,8 +7863,6 @@ def buscar_fundamentos(ticker: str) -> dict:
     """Uma requisição à brapi.dev com balanço, DRE, estatísticas, perfil e proventos do ticker."""
     url = f"{settings.BRAPI_BASE_URL}/quote/{ticker.upper()}"
     params = {"modules": FUNDAMENTOS_MODULOS, "fundamental": "true", "dividends": "true"}
-    if settings.BRAPI_TOKEN:
-        params["token"] = settings.BRAPI_TOKEN
     try:
         resposta = _get_brapi(url, params=params, timeout=30)
     except requests.RequestException as exc:

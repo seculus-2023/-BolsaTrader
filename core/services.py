@@ -7456,17 +7456,59 @@ _RECOMENDACAO_API = {
 }
 
 
+_YAHOO_COOKIE_URL = "https://fc.yahoo.com"
+_YAHOO_CRUMB_URL = "https://query2.finance.yahoo.com/v1/test/getcrumb"
+_YAHOO_QUOTE_SUMMARY_URL = "https://query2.finance.yahoo.com/v10/finance/quoteSummary/{simbolo}"
+_CAMPOS_CONSENSO = ("targetMeanPrice", "targetLowPrice", "targetHighPrice", "recommendationKey", "numberOfAnalystOpinions")
+
+
+def _buscar_consenso_yahoo(ticker: str) -> dict:
+    """
+    Consenso dos analistas no Yahoo Finance (módulo financialData do
+    quoteSummary, mesmos nomes de campo da brapi). A brapi devolve esses
+    campos sempre nulos, mesmo no plano Pro, então o Yahoo é a fonte do
+    consenso. API não oficial: exige cookie + "crumb" e pode mudar sem
+    aviso - qualquer falha devolve {} e o usuário completa à mão.
+    """
+    simbolo = ticker.upper() if "." in ticker else f"{ticker.upper()}.SA"
+    sessao = requests.Session()
+    sessao.headers["User-Agent"] = "Mozilla/5.0"
+    try:
+        try:
+            sessao.get(_YAHOO_COOKIE_URL, timeout=10)  # só para receber o cookie (a resposta costuma ser 404)
+        except requests.RequestException:
+            pass
+        crumb = sessao.get(_YAHOO_CRUMB_URL, timeout=10).text.strip()
+        resposta = sessao.get(
+            _YAHOO_QUOTE_SUMMARY_URL.format(simbolo=simbolo),
+            params={"modules": "financialData", "crumb": crumb},
+            timeout=10,
+        )
+        resposta.raise_for_status()
+        resultados = (resposta.json().get("quoteSummary") or {}).get("result") or []
+        financeiro = (resultados[0] if resultados else {}).get("financialData") or {}
+    except (requests.RequestException, ValueError, AttributeError):
+        logger.warning("Consenso dos analistas indisponível no Yahoo Finance para %s", simbolo, exc_info=True)
+        return {}
+    # o Yahoo embrulha números como {"raw": 38.2, "fmt": "38.20"}
+    return {
+        campo: (financeiro[campo].get("raw") if isinstance(financeiro.get(campo), dict) else financeiro.get(campo))
+        for campo in _CAMPOS_CONSENSO
+    }
+
+
 def buscar_consenso_analistas(ticker: str) -> dict:
     """
-    Cotação atual e consenso dos analistas (módulo financialData da
-    brapi.dev: targetMeanPrice, targetLowPrice, targetHighPrice,
-    recommendationKey, numberOfAnalystOpinions) de um ticker - usado para
-    pré-preencher o formulário de Previsões dos Analistas.
+    Cotação atual e consenso dos analistas (targetMeanPrice,
+    targetLowPrice, targetHighPrice, recommendationKey,
+    numberOfAnalystOpinions) de um ticker - usado para pré-preencher o
+    formulário de Previsões dos Analistas.
 
-    O módulo nem sempre está disponível (depende do plano contratado e da
-    cobertura do ativo): nesse caso tenta de novo só a cotação, e os campos
-    do consenso voltam None para o usuário completar com o que vê no
-    TradingView. Levanta BrapiError só quando nem a cotação vem.
+    A cotação vem da brapi.dev. O consenso vem do módulo financialData da
+    brapi quando ela o tiver; como na prática ela devolve esses campos
+    nulos (mesmo no plano Pro), cai para o Yahoo Finance. Sem consenso em
+    nenhuma das duas, os campos voltam None para o usuário completar com o
+    que vê no TradingView. Levanta BrapiError só quando nem a cotação vem.
     """
     url = f"{settings.BRAPI_BASE_URL}/quote/{ticker.upper()}"
     params = {"modules": "financialData"}
@@ -7483,8 +7525,13 @@ def buscar_consenso_analistas(ticker: str) -> dict:
         dados = buscar_cotacao_atual(ticker)
 
     financeiro = dados.get("financialData") or {}
+    fonte_consenso = "brapi"
+    if financeiro.get("targetMeanPrice") is None:
+        financeiro = _buscar_consenso_yahoo(ticker)
+        fonte_consenso = "Yahoo Finance" if financeiro.get("targetMeanPrice") is not None else ""
     return {
         "ticker": ticker.upper(),
+        "fonte_consenso": fonte_consenso,
         "preco": _para_decimal(dados.get("regularMarketPrice")),
         "alvo_medio": _para_decimal(financeiro.get("targetMeanPrice")),
         "alvo_minimo": _para_decimal(financeiro.get("targetLowPrice")),

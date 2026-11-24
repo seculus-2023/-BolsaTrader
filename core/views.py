@@ -2248,6 +2248,7 @@ def previsoes_analistas_consenso(request):
         "recomendacao": consenso["recomendacao"],
         "numero_analistas": consenso["numero_analistas"],
         "tem_consenso": consenso["alvo_medio"] is not None,
+        "fonte_consenso": consenso["fonte_consenso"],
     })
 
 

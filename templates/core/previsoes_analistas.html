@@ -23,8 +23,8 @@
 <div class="card-glass" style="margin-top: 1.4rem;">
     <h2 style="margin-top: 0;">Registrar previsão</h2>
     <p style="color: var(--text-dim); font-size: .85rem; margin-top: -.4rem;">
-        Informe o ticker e clique em <strong>Buscar na API</strong> para preencher a cotação de hoje (e o consenso,
-        quando a API de cotações tiver o dado). Confira os valores na página de previsão do TradingView e ajuste o
+        Informe o ticker e clique em <strong>Buscar na API</strong> para preencher a cotação de hoje (brapi) e o consenso
+        dos analistas (Yahoo Finance, quando o ativo tiver cobertura). Confira os valores na página de previsão do TradingView e ajuste o
         que for preciso antes de salvar.
     </p>
     <form method="post" class="form-futurista" id="form-previsao-analista">
@@ -233,9 +233,10 @@
                         preencher("id_recomendacao", dados.recomendacao);
                         preencher("id_numero_analistas", dados.numero_analistas);
                         origem.value = "API";
-                        aviso.textContent = "Cotação e consenso preenchidos pela API - confira com o TradingView antes de salvar.";
+                        aviso.textContent = "Cotação (brapi) e consenso dos analistas (" + (dados.fonte_consenso || "API") +
+                            ") preenchidos - confira com o TradingView antes de salvar.";
                     } else {
-                        aviso.textContent = "Cotação preenchida. A API não trouxe o consenso dos analistas - copie os alvos da página de previsão do TradingView.";
+                        aviso.textContent = "Cotação preenchida. Nem a brapi nem o Yahoo Finance trouxeram o consenso dos analistas deste ativo - copie os alvos da página de previsão do TradingView.";
                     }
                 })
                 .catch(function () { aviso.textContent = "Falha de conexão ao consultar a API."; })

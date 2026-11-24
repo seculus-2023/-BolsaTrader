@@ -7473,9 +7473,55 @@ class PrevisoesAnalistasTests(TestCase):
         self.assertEqual(dados["recomendacao"], "COMPRA")
         self.assertEqual(dados["numero_analistas"], 14)
         self.assertEqual(mock_get.call_args.kwargs["params"]["modules"], "financialData")
+        self.assertEqual(dados["fonte_consenso"], "brapi")
 
+    @patch("core.services.requests.Session")
     @patch("core.services.requests.get")
-    def test_consenso_indisponivel_no_plano_cai_para_so_cotacao(self, mock_get):
+    def test_consenso_nulo_na_brapi_vem_do_yahoo(self, mock_get, mock_sessao):
+        mock_get.return_value.raise_for_status = lambda: None
+        mock_get.return_value.json = lambda: {"results": [{
+            "symbol": "PETR4", "regularMarketPrice": 30.5,
+            "financialData": {"targetMeanPrice": None, "totalCash": 1000},
+        }]}
+        resumo_yahoo = Mock()
+        resumo_yahoo.raise_for_status = lambda: None
+        resumo_yahoo.json = lambda: {"quoteSummary": {"result": [{"financialData": {
+            "targetMeanPrice": {"raw": 59.44167, "fmt": "59.44"}, "targetLowPrice": {"raw": 48.0},
+            "targetHighPrice": {"raw": 72.0}, "recommendationKey": "strong_buy",
+            "numberOfAnalystOpinions": {"raw": 12},
+        }}]}}
+        sessao = mock_sessao.return_value
+        sessao.get.side_effect = [Mock(), Mock(text="crumb123"), resumo_yahoo]
+
+        consenso = buscar_consenso_analistas("PETR4")
+
+        self.assertEqual(consenso["fonte_consenso"], "Yahoo Finance")
+        self.assertEqual(consenso["preco"], Decimal("30.50"))
+        self.assertEqual(consenso["alvo_medio"], Decimal("59.44"))
+        self.assertEqual(consenso["alvo_minimo"], Decimal("48.00"))
+        self.assertEqual(consenso["alvo_maximo"], Decimal("72.00"))
+        self.assertEqual(consenso["recomendacao"], "COMPRA_FORTE")
+        self.assertEqual(consenso["numero_analistas"], 12)
+        url_resumo = sessao.get.call_args_list[2]
+        self.assertIn("PETR4.SA", url_resumo.args[0])
+        self.assertEqual(url_resumo.kwargs["params"]["crumb"], "crumb123")
+
+    @patch("core.services.requests.Session")
+    @patch("core.services.requests.get")
+    def test_falha_no_yahoo_devolve_so_a_cotacao(self, mock_get, mock_sessao):
+        mock_get.return_value.raise_for_status = lambda: None
+        mock_get.return_value.json = lambda: {"results": [{"symbol": "PETR4", "regularMarketPrice": 30.5}]}
+        mock_sessao.return_value.get.side_effect = requests.ConnectionError("fora do ar")
+
+        consenso = buscar_consenso_analistas("PETR4")
+
+        self.assertEqual(consenso["preco"], Decimal("30.50"))
+        self.assertIsNone(consenso["alvo_medio"])
+        self.assertEqual(consenso["fonte_consenso"], "")
+
+    @patch("core.services._buscar_consenso_yahoo", return_value={})
+    @patch("core.services.requests.get")
+    def test_consenso_indisponivel_no_plano_cai_para_so_cotacao(self, mock_get, _mock_yahoo):
         recusada = Mock(status_code=400)
         recusada.raise_for_status.side_effect = requests.HTTPError(response=recusada)
         cotacao = Mock()
